@@ -1,0 +1,169 @@
+# path: book/projects/examples/ch32/ci/github-actions.yml
+# Copy to .github/workflows/triage.yml. Stages: lint -> typecheck -> unit/contract -> offline eval
+# gate -> build -> canary -> promote, plus a nightly eval that runs even when no code changed,
+# because providers change models underneath you.
+# Deployment commands (helm, the metrics export) are environment-specific placeholders.
+name: triage
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "17 3 * * *"          # nightly drift check against the live provider
+  workflow_dispatch:
+
+concurrency:
+  group: triage-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.12"
+  WORKDIR: book/projects/examples/ch32
+  IMAGE: ghcr.io/${{ github.repository }}/triage
+
+defaults:
+  run:
+    working-directory: book/projects/examples/ch32
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "${{ env.PYTHON_VERSION }}", cache: pip }
+      - run: pip install -e ../../aie_core -e ".[dev]"
+      - run: ruff check .
+      - run: ruff format --check .
+
+  typecheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "${{ env.PYTHON_VERSION }}", cache: pip }
+      - run: pip install -e ../../aie_core -e ".[dev]"
+      - run: mypy
+
+  unit:
+    # Unit, property, contract, snapshot, architecture, and replayed-fixture tests. No network,
+    # no keys: CASSETTE_MODE=replay turns an unrecorded provider call into a failure.
+    needs: [lint, typecheck]
+    runs-on: ubuntu-latest
+    env:
+      CASSETTE_MODE: replay
+      LLM_PROVIDER: fake
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "${{ env.PYTHON_VERSION }}", cache: pip }
+      - run: pip install -e ../../aie_core -e ".[dev]"
+      - run: python -m northwind_triage.adapters.prompt_store      # prompts.lock immutability
+      - run: pytest -q --junitxml=reports/unit.xml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: unit-report, path: "${{ env.WORKDIR }}/reports/" }
+
+  offline-eval:
+    # Pull requests from forks never see secrets, so they run the gate on the simulated model;
+    # main and nightly runs use the real provider. Both compare against eval/baseline.json.
+    needs: unit
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      LLM_PROVIDER: ${{ github.event_name == 'pull_request' && 'fake' || 'openai' }}
+      LLM_MODEL: ${{ vars.TRIAGE_MODEL || 'fake-model' }}
+      OPENAI_API_KEY: ${{ github.event_name != 'pull_request' && secrets.OPENAI_API_KEY || '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "${{ env.PYTHON_VERSION }}", cache: pip }
+      - run: pip install -e ../../aie_core -e .
+      - name: Eval gate (candidate prompt)
+        run: >
+          python -m northwind_triage.eval_gate
+          --prompt-version "${{ vars.TRIAGE_CANDIDATE_PROMPT || '1.1.0' }}"
+          --report reports/eval.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: eval-report, path: "${{ env.WORKDIR }}/reports/eval.json" }
+
+  build:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: offline-eval
+    runs-on: ubuntu-latest
+    permissions: { contents: read, packages: write }
+    outputs:
+      image: ${{ steps.meta.outputs.image }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: meta
+        run: echo "image=${IMAGE}:${GITHUB_SHA::12}" >> "$GITHUB_OUTPUT"
+      - run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+      - name: Build with the version manifest baked in
+        run: >
+          docker build -f Dockerfile
+          --build-arg TRIAGE_GIT_SHA=${GITHUB_SHA::12}
+          --build-arg TRIAGE_APP_VERSION=$(python -c "import northwind_triage as m; print(m.__version__)")
+          -t "${{ steps.meta.outputs.image }}" ../..
+      - run: docker push "${{ steps.meta.outputs.image }}"
+
+  canary:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: canary
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "${{ env.PYTHON_VERSION }}" }
+      - run: pip install -e ../../aie_core -e .
+      - name: Deploy canary at 5% of traffic
+        run: helm upgrade --install triage-canary deploy/chart --set image=${{ needs.build.outputs.image }} --set canary.weight=5
+      - name: Wait for the observation window
+        run: sleep 1800
+      - name: Export arm metrics from the metrics backend
+        run: |
+          mkdir -p reports
+          curl -sf -H "Authorization: Bearer ${{ secrets.METRICS_TOKEN }}" \
+            "${{ vars.METRICS_URL }}/triage/arm?deployment=stable&window=30m" > reports/baseline.json
+          curl -sf -H "Authorization: Bearer ${{ secrets.METRICS_TOKEN }}" \
+            "${{ vars.METRICS_URL }}/triage/arm?deployment=canary&window=30m" > reports/canary.json
+      - name: Canary verdict (0 promote, 3 hold, 1 rollback)
+        # Any non-zero exit fails the job and the next step rolls back. A hold (3) is treated as a
+        # rollback because a pipeline cannot wait open-ended; re-run the job to observe longer.
+        id: verdict
+        run: python -m northwind_triage.experiments canary --baseline reports/baseline.json --canary reports/canary.json
+      - name: Roll back on failure
+        if: failure()
+        run: helm upgrade --install triage-canary deploy/chart --set canary.weight=0
+
+  promote:
+    needs: [build, canary]
+    runs-on: ubuntu-latest
+    environment: production          # protected: requires a human approval in repository settings
+    steps:
+      - uses: actions/checkout@v4
+      - run: helm upgrade --install triage deploy/chart --set image=${{ needs.build.outputs.image }} --set canary.weight=0
+
+  nightly-drift:
+    # Same gate, same baseline, no code change: a failure here means the provider moved.
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    env:
+      LLM_PROVIDER: openai
+      LLM_MODEL: ${{ vars.TRIAGE_MODEL }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "${{ env.PYTHON_VERSION }}" }
+      - run: pip install -e ../../aie_core -e .
+      - run: python -m northwind_triage.eval_gate --prompt-version 1.0.0 --report reports/nightly.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: nightly-eval, path: "${{ env.WORKDIR }}/reports/nightly.json" }

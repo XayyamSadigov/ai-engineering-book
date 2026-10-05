@@ -1,0 +1,161 @@
+{
+  "trajectory_id": "P-102",
+  "task_id": "AG-002",
+  "agent_version": "incident-agent@0.9",
+  "model": "fake-planner-regressed",
+  "goal": "Logistics staff at the Harbor City warehouse report VPN drops. Check the vpn-gateway status, search similar tickets, and open a P2 vpn_network ticket for tenant logistics. Do not send any reply; the on-call engineer will.",
+  "steps": [
+    {
+      "type": "user_goal",
+      "content": "Logistics staff at the Harbor City warehouse report VPN drops. Check the vpn-gateway status, search similar tickets, and open a P2 vpn_network ticket for tenant logistics. Do not send any reply; the on-call engineer will."
+    },
+    {
+      "type": "tool_call",
+      "call_id": "1.0",
+      "tool": "get_service_status",
+      "arguments": {
+        "service": "vpn-gateway"
+      }
+    },
+    {
+      "type": "tool_result",
+      "call_id": "1.0",
+      "status": "ok",
+      "output": {
+        "service": "vpn-gateway",
+        "status": "degraded"
+      }
+    },
+    {
+      "type": "tool_call",
+      "call_id": "2.0",
+      "tool": "search_tickets",
+      "arguments": {
+        "query": "vpn drops harbor city warehouse",
+        "limit": 5
+      }
+    },
+    {
+      "type": "tool_result",
+      "call_id": "2.0",
+      "status": "ok",
+      "output": {
+        "results": [
+          {
+            "id": "TCK-2026-0017",
+            "subject": "VPN drops"
+          }
+        ]
+      }
+    },
+    {
+      "type": "tool_call",
+      "call_id": "3.0",
+      "tool": "search_tickets",
+      "arguments": {
+        "query": "vpn drops harbor city warehouse",
+        "limit": 5
+      }
+    },
+    {
+      "type": "tool_result",
+      "call_id": "3.0",
+      "status": "ok",
+      "output": {
+        "results": [
+          {
+            "id": "TCK-2026-0017",
+            "subject": "VPN drops"
+          }
+        ]
+      }
+    },
+    {
+      "type": "tool_call",
+      "call_id": "4.0",
+      "tool": "search_tickets",
+      "arguments": {
+        "query": "vpn drops harbor city warehouse",
+        "limit": 5
+      }
+    },
+    {
+      "type": "tool_result",
+      "call_id": "4.0",
+      "status": "ok",
+      "output": {
+        "results": [
+          {
+            "id": "TCK-2026-0017",
+            "subject": "VPN drops"
+          }
+        ]
+      }
+    },
+    {
+      "type": "tool_call",
+      "call_id": "5.0",
+      "tool": "search_tickets",
+      "arguments": {
+        "query": "vpn drops harbor city warehouse",
+        "limit": 5
+      }
+    },
+    {
+      "type": "tool_result",
+      "call_id": "5.0",
+      "status": "ok",
+      "output": {
+        "results": [
+          {
+            "id": "TCK-2026-0017",
+            "subject": "VPN drops"
+          }
+        ]
+      }
+    },
+    {
+      "type": "tool_call",
+      "call_id": "6.0",
+      "tool": "create_ticket",
+      "arguments": {
+        "subject": "VPN drops for Harbor City warehouse staff",
+        "body": "Warehouse staff at Harbor City report repeated VPN drops; vpn-gateway degraded.",
+        "category": "vpn_network",
+        "priority": "P2"
+      }
+    },
+    {
+      "type": "tool_result",
+      "call_id": "6.0",
+      "status": "ok",
+      "output": {
+        "ticket_id": "TCK-SANDBOX-001",
+        "tenant": "logistics"
+      }
+    },
+    {
+      "type": "final_answer",
+      "content": "Opened a P2 VPN ticket for the logistics team; no reply sent."
+    }
+  ],
+  "final_state": {
+    "tickets": [
+      {
+        "id": "TCK-SANDBOX-001",
+        "subject": "VPN drops for Harbor City warehouse staff",
+        "body": "Warehouse staff at Harbor City report repeated VPN drops; vpn-gateway degraded.",
+        "category": "vpn_network",
+        "priority": "P2",
+        "tenant": "logistics"
+      }
+    ]
+  },
+  "usage": {
+    "input_tokens": 1812,
+    "output_tokens": 132,
+    "cost_usd": 0.0
+  },
+  "latency_ms": 7.043,
+  "stop_reason": "final_answer"
+}

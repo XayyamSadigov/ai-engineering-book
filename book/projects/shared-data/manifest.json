@@ -1,0 +1,529 @@
+{
+  "generated_at": "2026-10-04",
+  "doc_count": 24,
+  "docs": [
+    {
+      "id": "sec-access-control-policy",
+      "title": "Access Control Policy",
+      "version": "3.1",
+      "updated_at": "2026-02-02",
+      "owner": "Security Office",
+      "tenant": "shared",
+      "acl_groups": [
+        "security",
+        "it-oncall",
+        "managers"
+      ],
+      "tags": [
+        "security",
+        "access",
+        "iam",
+        "policy",
+        "privileged-access",
+        "reviews"
+      ],
+      "path": "docs/access-control-policy.md",
+      "sha256": "11a541fe82a74292fef3e67c317ff2ed5d511ddb8ae7b3a766d5f83e265643e5",
+      "bytes": 5203
+    },
+    {
+      "id": "hr-code-of-conduct",
+      "title": "Code of Conduct",
+      "version": "5.0",
+      "updated_at": "2025-02-14",
+      "owner": "Legal and Compliance",
+      "tenant": "shared",
+      "acl_groups": [
+        "all"
+      ],
+      "tags": [
+        "hr",
+        "compliance",
+        "ethics",
+        "conduct",
+        "policy"
+      ],
+      "path": "docs/code-of-conduct.md",
+      "sha256": "197c692de0bfbaf3c990048f987b8063de7eb932404ecdf97b923e3fbd194319",
+      "bytes": 4446
+    },
+    {
+      "id": "sec-data-classification-policy",
+      "title": "Data Classification and Handling Policy",
+      "version": "2.5",
+      "updated_at": "2025-10-30",
+      "owner": "Security Office",
+      "tenant": "shared",
+      "acl_groups": [
+        "all"
+      ],
+      "tags": [
+        "security",
+        "data",
+        "classification",
+        "policy",
+        "retention",
+        "encryption"
+      ],
+      "path": "docs/data-classification-policy.md",
+      "sha256": "7acc4de10277967759fb0604f8de7f83e79e0c50cb28ff286994f71c50a6356b",
+      "bytes": 5008
+    },
+    {
+      "id": "it-database-failover-runbook",
+      "title": "PostgreSQL Failover Runbook",
+      "version": "3.3",
+      "updated_at": "2026-02-20",
+      "owner": "Platform Engineering",
+      "tenant": "shared",
+      "acl_groups": [
+        "it-oncall"
+      ],
+      "tags": [
+        "it",
+        "database",
+        "postgresql",
+        "failover",
+        "runbook",
+        "patroni"
+      ],
+      "path": "docs/database-failover-runbook.md",
+      "sha256": "ccb6ea16f19a6f7265023019b34b91e57f5185f2b42da35c5f66e2bc204f5b9a",
+      "bytes": 4942
+    },
+    {
+      "id": "hr-expense-policy",
+      "title": "Business Expense and Reimbursement Policy",
+      "version": "4.3",
+      "updated_at": "2025-11-20",
+      "owner": "Finance Operations",
+      "tenant": "shared",
+      "acl_groups": [
+        "all"
+      ],
+      "tags": [
+        "finance",
+        "expenses",
+        "reimbursement",
+        "policy",
+        "per-diem"
+      ],
+      "path": "docs/expense-policy.md",
+      "sha256": "203bb6264efc46121112273a9e5ef48e3a04f5056bf41b9575b18749a2bbccc2",
+      "bytes": 4513
+    },
+    {
+      "id": "hr-faq",
+      "title": "HR Frequently Asked Questions",
+      "version": "1.4",
+      "updated_at": "2025-06-10",
+      "owner": "People Operations",
+      "tenant": "shared",
+      "acl_groups": [
+        "all"
+      ],
+      "tags": [
+        "hr",
+        "faq",
+        "pto",
+        "benefits",
+        "leave",
+        "payroll"
+      ],
+      "path": "docs/hr-faq.md",
+      "sha256": "a51bf1b80d90f53de30495d0f874fae04c6e8800fe6ab7510b55fc24db14f7d5",
+      "bytes": 4104
+    },
+    {
+      "id": "inc-2025-11-pos-outage",
+      "title": "Incident Report INC-2025-1142: Card Payment Outage in Retail Stores",
+      "version": "1.2",
+      "updated_at": "2025-11-26",
+      "owner": "Retail Systems",
+      "tenant": "retail",
+      "acl_groups": [
+        "it-oncall",
+        "managers"
+      ],
+      "tags": [
+        "incident",
+        "postmortem",
+        "retail",
+        "pos",
+        "paybridge",
+        "certificate",
+        "sev1"
+      ],
+      "path": "docs/incident-2025-11-pos-outage.md",
+      "sha256": "93a91b65ffcc29b9e7c3eeea0e2ca4bff1724139dfbb9088773d099c011a74c2",
+      "bytes": 5373
+    },
+    {
+      "id": "inc-2026-02-tracking-latency",
+      "title": "Incident Report INC-2026-0217: Trackline API Latency Degradation",
+      "version": "1.1",
+      "updated_at": "2026-02-18",
+      "owner": "Logistics Platform",
+      "tenant": "logistics",
+      "acl_groups": [
+        "it-oncall",
+        "managers"
+      ],
+      "tags": [
+        "incident",
+        "postmortem",
+        "logistics",
+        "tracking",
+        "latency",
+        "database",
+        "webhooks",
+        "sev2"
+      ],
+      "path": "docs/incident-2026-02-tracking-latency.md",
+      "sha256": "e5b0d15675847d789db314082504ebc9b18e1f203627983e7786fd5137390310",
+      "bytes": 5039
+    },
+    {
+      "id": "it-incident-response-runbook",
+      "title": "Production Incident Response Runbook",
+      "version": "4.1",
+      "updated_at": "2026-03-12",
+      "owner": "Platform Engineering",
+      "tenant": "shared",
+      "acl_groups": [
+        "it-oncall"
+      ],
+      "tags": [
+        "it",
+        "incident",
+        "runbook",
+        "on-call",
+        "sev1",
+        "postmortem"
+      ],
+      "path": "docs/incident-response-runbook.md",
+      "sha256": "cd870fb0f9b6f73a85f00d65f9ac3cb09e16a8423bc99b4e933be7d26e8dea5e",
+      "bytes": 4380
+    },
+    {
+      "id": "it-faq",
+      "title": "IT Service Desk FAQ",
+      "version": "6.2",
+      "updated_at": "2026-05-05",
+      "owner": "IT Service Desk",
+      "tenant": "shared",
+      "acl_groups": [
+        "all"
+      ],
+      "tags": [
+        "it",
+        "faq",
+        "service-desk",
+        "support"
+      ],
+      "path": "docs/it-faq.md",
+      "sha256": "fd67ae600bed86825a0ea08db1b2a6d1d95fabfa8ff56040bc72da5cb6749380",
+      "bytes": 5124
+    },
+    {
+      "id": "it-laptop-replacement-runbook",
+      "title": "Laptop Replacement and Repair Runbook",
+      "version": "1.9",
+      "updated_at": "2025-10-06",
+      "owner": "IT Service Desk",
+      "tenant": "shared",
+      "acl_groups": [
+        "all"
+      ],
+      "tags": [
+        "it",
+        "hardware",
+        "laptop",
+        "runbook",
+        "lifecycle"
+      ],
+      "path": "docs/laptop-replacement-runbook.md",
+      "sha256": "23726fd6156cef1c03ffbc34e5a8d36a0fab504c46d8c94ab0ad9af38c40850d",
+      "bytes": 4434
+    },
+    {
+      "id": "prod-logistics-route-planner",
+      "title": "RoutePilot Route Planner Guide",
+      "version": "2.8",
+      "updated_at": "2025-08-19",
+      "owner": "Logistics Platform",
+      "tenant": "logistics",
+      "acl_groups": [
+        "all"
+      ],
+      "tags": [
+        "logistics",
+        "routing",
+        "product",
+        "operations",
+        "depots"
+      ],
+      "path": "docs/logistics-route-planner.md",
+      "sha256": "10fe1d18a5736f3714f8fe095e3656dca95cc4185344bc37843622cc0f585595",
+      "bytes": 4118
+    },
+    {
+      "id": "prod-logistics-tracking-api",
+      "title": "Trackline Shipment Tracking API v3",
+      "version": "3.4",
+      "updated_at": "2026-03-30",
+      "owner": "Logistics Platform",
+      "tenant": "logistics",
+      "acl_groups": [
+        "all"
+      ],
+      "tags": [
+        "logistics",
+        "api",
+        "tracking",
+        "product",
+        "reference",
+        "webhooks"
+      ],
+      "path": "docs/logistics-tracking-api.md",
+      "sha256": "6af7596394a6f07953501a4c3e1a39dbcccb4c109976cd9814fd5f08074c95a3",
+      "bytes": 4246
+    },
+    {
+      "id": "it-onboarding-accounts-runbook",
+      "title": "New Hire Account Provisioning Runbook",
+      "version": "2.2",
+      "updated_at": "2025-12-01",
+      "owner": "IT Service Desk",
+      "tenant": "shared",
+      "acl_groups": [
+        "it-oncall",
+        "hr"
+      ],
+      "tags": [
+        "it",
+        "onboarding",
+        "accounts",
+        "runbook",
+        "identity",
+        "hr"
+      ],
+      "path": "docs/onboarding-accounts-runbook.md",
+      "sha256": "df0f1d21ee0da62abc62317e00aae8ab6ed7bd006909964d4de96556075d7887",
+      "bytes": 5146
+    },
+    {
+      "id": "hr-parental-leave-policy",
+      "title": "Parental Leave Policy",
+      "version": "1.6",
+      "updated_at": "2025-04-08",
+      "owner": "People Operations",
+      "tenant": "shared",
+      "acl_groups": [
+        "all"
+      ],
+      "tags": [
+        "hr",
+        "leave",
+        "parental",
+        "policy",
+        "benefits"
+      ],
+      "path": "docs/parental-leave-policy.md",
+      "sha256": "a329bbf7389ecc1219c3e445b7794eb898be4d3989718fafbdc3af8a72b9adec",
+      "bytes": 4034
+    },
+    {
+      "id": "it-password-reset-runbook",
+      "title": "Password Reset and Account Lockout Runbook",
+      "version": "3.0",
+      "updated_at": "2026-04-14",
+      "owner": "IT Service Desk",
+      "tenant": "shared",
+      "acl_groups": [
+        "all"
+      ],
+      "tags": [
+        "it",
+        "password",
+        "identity",
+        "runbook",
+        "lockout",
+        "mfa"
+      ],
+      "path": "docs/password-reset-runbook.md",
+      "sha256": "e306605e1f4e05d098dedbe0f99ef18e83a864558437fa330e4d5fb88dd7b0ef",
+      "bytes": 4668
+    },
+    {
+      "id": "hr-pto-policy",
+      "title": "Paid Time Off (PTO) Policy",
+      "version": "3.0",
+      "updated_at": "2026-01-15",
+      "owner": "People Operations",
+      "tenant": "shared",
+      "acl_groups": [
+        "all"
+      ],
+      "tags": [
+        "hr",
+        "pto",
+        "leave",
+        "carryover",
+        "policy"
+      ],
+      "path": "docs/pto-policy.md",
+      "sha256": "d78709f6de9f53652006eb7685a42eb82ca2af5edf56499ad5c96a4ea68f9fdb",
+      "bytes": 4139
+    },
+    {
+      "id": "hr-remote-work-policy",
+      "title": "Remote and Hybrid Work Policy",
+      "version": "2.1",
+      "updated_at": "2025-09-02",
+      "owner": "People Operations",
+      "tenant": "shared",
+      "acl_groups": [
+        "all"
+      ],
+      "tags": [
+        "hr",
+        "remote",
+        "hybrid",
+        "policy",
+        "equipment"
+      ],
+      "path": "docs/remote-work-policy.md",
+      "sha256": "a9c29dd7210320f15278996c50dfd1dabc768980f321e96406ffc4f390d9950a",
+      "bytes": 4317
+    },
+    {
+      "id": "prod-retail-pos-overview",
+      "title": "Lumen POS Platform Overview",
+      "version": "4.7",
+      "updated_at": "2026-01-09",
+      "owner": "Retail Systems",
+      "tenant": "retail",
+      "acl_groups": [
+        "all"
+      ],
+      "tags": [
+        "retail",
+        "pos",
+        "product",
+        "architecture",
+        "payments"
+      ],
+      "path": "docs/retail-pos-overview.md",
+      "sha256": "dededb61962a8434933b9d27cda53f23aa52561e90275f76e3fa58726983b30c",
+      "bytes": 4513
+    },
+    {
+      "id": "prod-retail-returns-api",
+      "title": "Retail Returns API v2 Reference",
+      "version": "2.3",
+      "updated_at": "2025-12-15",
+      "owner": "Retail Systems",
+      "tenant": "retail",
+      "acl_groups": [
+        "all"
+      ],
+      "tags": [
+        "retail",
+        "api",
+        "returns",
+        "product",
+        "reference"
+      ],
+      "path": "docs/retail-returns-api.md",
+      "sha256": "8fe190ce7397797ef9d38f14d39a1e9f3857b122ccf9be129fb8530b5b8b856f",
+      "bytes": 4082
+    },
+    {
+      "id": "hr-travel-policy",
+      "title": "Business Travel Policy",
+      "version": "3.2",
+      "updated_at": "2026-03-03",
+      "owner": "Finance Operations",
+      "tenant": "shared",
+      "acl_groups": [
+        "all"
+      ],
+      "tags": [
+        "finance",
+        "travel",
+        "policy",
+        "booking",
+        "hotels"
+      ],
+      "path": "docs/travel-policy.md",
+      "sha256": "7ad4b5d9abe2243fa5cc18e4b940fa9c8ebfdb821e91cc1fe18b9114b758791c",
+      "bytes": 4006
+    },
+    {
+      "id": "ext-vendor-newsletter-brightline",
+      "title": "Brightline Supply Co. Partner Newsletter, Spring 2026",
+      "version": "2026-04",
+      "updated_at": "2026-04-22",
+      "owner": "Procurement (external content, unreviewed)",
+      "tenant": "logistics",
+      "acl_groups": [
+        "all"
+      ],
+      "tags": [
+        "vendor",
+        "newsletter",
+        "external",
+        "procurement",
+        "packaging",
+        "security-test"
+      ],
+      "path": "docs/vendor-newsletter.md",
+      "sha256": "05b4c9cd4eedfe0b067ca36593a3bcc91b634fe7b54dd376532dcffcd62b302e",
+      "bytes": 4532
+    },
+    {
+      "id": "it-vpn-access-runbook",
+      "title": "NorthGate VPN Access Runbook",
+      "version": "2.4",
+      "updated_at": "2026-01-28",
+      "owner": "IT Service Desk",
+      "tenant": "shared",
+      "acl_groups": [
+        "all"
+      ],
+      "tags": [
+        "it",
+        "vpn",
+        "runbook",
+        "networking",
+        "remote-access"
+      ],
+      "path": "docs/vpn-access-runbook.md",
+      "sha256": "11526c3cebfe4b2075140322289a4c8b1fa067d2ddc621050a5fccedc51d76f0",
+      "bytes": 4604
+    },
+    {
+      "id": "prod-warehouse-scanner-guide",
+      "title": "ScanHub Warehouse Scanner Guide",
+      "version": "2.3",
+      "updated_at": "2025-07-22",
+      "owner": "Logistics Platform",
+      "tenant": "logistics",
+      "acl_groups": [
+        "all"
+      ],
+      "tags": [
+        "logistics",
+        "warehouse",
+        "scanner",
+        "product",
+        "operations",
+        "hardware"
+      ],
+      "path": "docs/warehouse-scanner-guide.md",
+      "sha256": "72891f73c8ffb169f77c38a7a5b97911734328ed6fe8434faaeb6fa0f518468f",
+      "bytes": 4557
+    }
+  ]
+}

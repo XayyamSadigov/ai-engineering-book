@@ -1,0 +1,78 @@
+# path: book/projects/p3-rag-assistant/docker-compose.yml
+# Run from book/projects/p3-rag-assistant:
+#   cp .env.example .env                 # then edit; defaults run fully offline with fakes
+#   docker compose up -d postgres redis
+#   docker compose up -d worker api
+#   docker compose run --rm sync         # enqueue a full sync of shared-data/docs
+#   docker compose run --rm eval         # CI gate against the running stack's configuration
+x-app: &app
+  build: { context: .., dockerfile: p3-rag-assistant/Dockerfile }
+  env_file: [.env]
+  environment: &app-env
+    DATABASE_URL: postgresql://northwind:northwind@postgres:5432/northwind
+    REDIS_URL: redis://redis:6379/0
+    RAG_VECTOR_BACKEND: pgvector
+    RAG_REGISTRY_BACKEND: sql
+    RAG_QUEUE_BACKEND: redis
+    RAG_CACHE_BACKEND: redis
+    RAG_ALLOW_DEV_AUTH_SECRET: "true"   # local development only; set RAG_AUTH_SECRET and drop this anywhere else
+  volumes: [ragdata:/data]          # blobs and BM25 snapshots shared by worker and API
+  depends_on:
+    postgres: { condition: service_healthy }
+    redis: { condition: service_healthy }
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: northwind
+      POSTGRES_PASSWORD: northwind   # local development only
+      POSTGRES_DB: northwind
+    ports: ["5432:5432"]
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U northwind -d northwind"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]   # the job queue must survive a restart
+    ports: ["6379:6379"]
+    volumes: [redisdata:/data]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  api:
+    <<: *app
+    ports: ["8000:8000"]
+
+  worker:
+    <<: *app
+    command: ["rag-assistant-worker"]
+    stop_grace_period: 60s           # SIGTERM drains the current job before exit
+
+  sync:
+    <<: *app
+    command: ["rag-assistant-sync"]
+    profiles: ["jobs"]
+
+  eval:
+    <<: *app
+    command: ["rag-assistant-eval", "--out", "/data/eval"]
+    environment:
+      <<: *app-env
+      RAG_VECTOR_BACKEND: numpy      # the gate builds its own in-process index from the same code
+      RAG_REGISTRY_BACKEND: memory
+      RAG_QUEUE_BACKEND: memory
+      RAG_CACHE_BACKEND: memory
+    profiles: ["jobs"]
+
+volumes:
+  pgdata:
+  redisdata:
+  ragdata:

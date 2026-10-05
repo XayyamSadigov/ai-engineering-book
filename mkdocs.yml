@@ -1,0 +1,206 @@
+site_name: AI Engineering
+site_description: A complete textbook and field guide for building production LLM applications.
+site_url: https://xayyamsadigov.github.io/ai-engineering-book/
+repo_url: https://github.com/XayyamSadigov/ai-engineering-book
+repo_name: XayyamSadigov/ai-engineering-book
+edit_uri: edit/main/book/
+docs_dir: book
+copyright: Text CC BY 4.0 · Code MIT
+
+exclude_docs: |
+  # only Markdown pages are published; code is browsed on GitHub
+  /projects/**
+  /capstone/**
+  /analysis/**
+  !/projects/**/*.md
+  !/capstone/**/*.md
+  !/analysis/*.md
+  projects/shared-data/docs/
+  AI_ENGINEERING_BOOK.md
+  analysis/reviews/
+  tools/
+  **/.pytest_cache/
+
+theme:
+  name: material
+  features:
+    - navigation.sections
+    - navigation.footer
+    - navigation.top
+    - navigation.indexes
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - toc.follow
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: deep orange
+      toggle: {icon: material/weather-night, name: Dark mode}
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: deep orange
+      toggle: {icon: material/weather-sunny, name: Light mode}
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - tables
+  - toc: {permalink: true}
+  - pymdownx.details
+  - pymdownx.highlight: {anchor_linenums: true}
+  - pymdownx.inlinehilite
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+
+validation:
+  links:
+    not_found: info
+    unrecognized_links: info
+
+nav:
+  - Home: README.md
+  - Learning roadmap: 00-learning-roadmap.md
+  - "I. AI Engineering Foundations":
+      - "Chapter 1 — What AI Engineering Is": chapters/01-what-ai-engineering-is.md
+      - "Chapter 2 — How LLMs Work, for Engineers": chapters/02-how-llms-work-for-engineers.md
+      - "Chapter 3 — Working with LLM APIs": chapters/03-working-with-llm-apis.md
+  - "II. LLM Application Development":
+      - "Chapter 4 — Prompt Engineering as Engineering": chapters/04-prompt-engineering.md
+      - "Chapter 5 — Context Engineering": chapters/05-context-engineering.md
+      - "Chapter 6 — Structured Output and Extraction": chapters/06-structured-output-and-extraction.md
+      - "Chapter 7 — Model Selection and Routing": chapters/07-model-selection-and-routing.md
+  - "III. Embeddings and Retrieval":
+      - "Chapter 8 — Embeddings": chapters/08-embeddings.md
+      - "Chapter 9 — Vector Search and Vector Databases": chapters/09-vector-search-and-vector-databases.md
+  - "IV. Production RAG":
+      - "Chapter 10 — RAG Fundamentals": chapters/10-rag-fundamentals.md
+      - "Chapter 11 — Ingestion and Chunking": chapters/11-ingestion-and-chunking.md
+      - "Chapter 12 — Retrieval Engineering": chapters/12-retrieval-engineering.md
+      - "Chapter 13 — Grounded Generation and Citations": chapters/13-grounded-generation-and-citations.md
+      - "Chapter 14 — RAG Evaluation": chapters/14-rag-evaluation.md
+      - "Chapter 15 — Production RAG": chapters/15-production-rag.md
+  - "V. Tools and Workflows":
+      - "Chapter 16 — Tool Calling": chapters/16-tool-calling.md
+      - "Chapter 17 — AI Workflows and Orchestration": chapters/17-ai-workflows-and-orchestration.md
+      - "Chapter 18 — MCP and Tool Ecosystems": chapters/18-mcp-and-tool-ecosystems.md
+  - "VI. Agents":
+      - "Chapter 19 — The Agent Loop": chapters/19-the-agent-loop.md
+      - "Chapter 20 — Agent Architectures": chapters/20-agent-architectures.md
+      - "Chapter 21 — Memory Systems": chapters/21-memory-systems.md
+      - "Chapter 22 — Multi-Agent Systems": chapters/22-multi-agent-systems.md
+      - "Chapter 23 — Frameworks": chapters/23-frameworks.md
+  - "VII. Evaluation":
+      - "Chapter 24 — Evaluation Fundamentals": chapters/24-evaluation-fundamentals.md
+      - "Chapter 25 — Evaluating AI Systems in Practice": chapters/25-evaluating-ai-systems-in-practice.md
+  - "VIII. Security and Guardrails":
+      - "Chapter 26 — Threat Modeling and Prompt Injection": chapters/26-threat-modeling-and-prompt-injection.md
+      - "Chapter 27 — Guardrails and Safe Tooling": chapters/27-guardrails-and-safe-tooling.md
+  - "IX. Production AI Engineering":
+      - "Chapter 28 — AI Application Architecture": chapters/28-ai-application-architecture.md
+      - "Chapter 29 — Reliability and Scalability": chapters/29-reliability-and-scalability.md
+      - "Chapter 30 — Performance and Cost Engineering": chapters/30-performance-and-cost-engineering.md
+      - "Chapter 31 — Observability for AI Systems": chapters/31-observability.md
+      - "Chapter 32 — Engineering Practices for AI Systems": chapters/32-engineering-practices.md
+      - "Chapter 33 — Fine-Tuning for Engineers": chapters/33-fine-tuning-for-engineers.md
+      - "Chapter 34 — Inference and Serving Essentials": chapters/34-inference-and-serving-essentials.md
+  - "X. AI System Design":
+      - "Chapter 35 — System Design Method and Cases I": chapters/35-system-design-method-and-cases-1.md
+      - "Chapter 36 — System Design Cases II": chapters/36-system-design-cases-2.md
+  - "XI. Advanced Patterns":
+      - "Chapter 37 — Advanced Retrieval Patterns": chapters/37-advanced-retrieval-patterns.md
+      - "Chapter 38 — Durable and Long-Running Agents": chapters/38-durable-and-long-running-agents.md
+  - "XII. Capstone":
+      - "Chapter 39 — Capstone: Northwind Assist": chapters/39-capstone.md
+  - Exercises:
+      - "Chapter 1": exercises/ch01-exercises.md
+      - "Chapter 2": exercises/ch02-exercises.md
+      - "Chapter 3": exercises/ch03-exercises.md
+      - "Chapter 4": exercises/ch04-exercises.md
+      - "Chapter 5": exercises/ch05-exercises.md
+      - "Chapter 6": exercises/ch06-exercises.md
+      - "Chapter 7": exercises/ch07-exercises.md
+      - "Chapter 8": exercises/ch08-exercises.md
+      - "Chapter 9": exercises/ch09-exercises.md
+      - "Chapter 10": exercises/ch10-exercises.md
+      - "Chapter 11": exercises/ch11-exercises.md
+      - "Chapter 12": exercises/ch12-exercises.md
+      - "Chapter 13": exercises/ch13-exercises.md
+      - "Chapter 14": exercises/ch14-exercises.md
+      - "Chapter 15": exercises/ch15-exercises.md
+      - "Chapter 16": exercises/ch16-exercises.md
+      - "Chapter 17": exercises/ch17-exercises.md
+      - "Chapter 18": exercises/ch18-exercises.md
+      - "Chapter 19": exercises/ch19-exercises.md
+      - "Chapter 20": exercises/ch20-exercises.md
+      - "Chapter 21": exercises/ch21-exercises.md
+      - "Chapter 22": exercises/ch22-exercises.md
+      - "Chapter 23": exercises/ch23-exercises.md
+      - "Chapter 24": exercises/ch24-exercises.md
+      - "Chapter 25": exercises/ch25-exercises.md
+      - "Chapter 26": exercises/ch26-exercises.md
+      - "Chapter 27": exercises/ch27-exercises.md
+      - "Chapter 28": exercises/ch28-exercises.md
+      - "Chapter 29": exercises/ch29-exercises.md
+      - "Chapter 30": exercises/ch30-exercises.md
+      - "Chapter 31": exercises/ch31-exercises.md
+      - "Chapter 32": exercises/ch32-exercises.md
+      - "Chapter 33": exercises/ch33-exercises.md
+      - "Chapter 34": exercises/ch34-exercises.md
+      - "Chapter 35": exercises/ch35-exercises.md
+      - "Chapter 36": exercises/ch36-exercises.md
+      - "Chapter 37": exercises/ch37-exercises.md
+      - "Chapter 38": exercises/ch38-exercises.md
+      - "Chapter 39": exercises/ch39-exercises.md
+  - Solutions:
+      - "Chapter 1": solutions/ch01-solutions.md
+      - "Chapter 2": solutions/ch02-solutions.md
+      - "Chapter 3": solutions/ch03-solutions.md
+      - "Chapter 4": solutions/ch04-solutions.md
+      - "Chapter 5": solutions/ch05-solutions.md
+      - "Chapter 6": solutions/ch06-solutions.md
+      - "Chapter 7": solutions/ch07-solutions.md
+      - "Chapter 8": solutions/ch08-solutions.md
+      - "Chapter 9": solutions/ch09-solutions.md
+      - "Chapter 10": solutions/ch10-solutions.md
+      - "Chapter 11": solutions/ch11-solutions.md
+      - "Chapter 12": solutions/ch12-solutions.md
+      - "Chapter 13": solutions/ch13-solutions.md
+      - "Chapter 14": solutions/ch14-solutions.md
+      - "Chapter 15": solutions/ch15-solutions.md
+      - "Chapter 16": solutions/ch16-solutions.md
+      - "Chapter 17": solutions/ch17-solutions.md
+      - "Chapter 18": solutions/ch18-solutions.md
+      - "Chapter 19": solutions/ch19-solutions.md
+      - "Chapter 20": solutions/ch20-solutions.md
+      - "Chapter 21": solutions/ch21-solutions.md
+      - "Chapter 22": solutions/ch22-solutions.md
+      - "Chapter 23": solutions/ch23-solutions.md
+      - "Chapter 24": solutions/ch24-solutions.md
+      - "Chapter 25": solutions/ch25-solutions.md
+      - "Chapter 26": solutions/ch26-solutions.md
+      - "Chapter 27": solutions/ch27-solutions.md
+      - "Chapter 28": solutions/ch28-solutions.md
+      - "Chapter 29": solutions/ch29-solutions.md
+      - "Chapter 30": solutions/ch30-solutions.md
+      - "Chapter 31": solutions/ch31-solutions.md
+      - "Chapter 32": solutions/ch32-solutions.md
+      - "Chapter 33": solutions/ch33-solutions.md
+      - "Chapter 34": solutions/ch34-solutions.md
+      - "Chapter 35": solutions/ch35-solutions.md
+      - "Chapter 36": solutions/ch36-solutions.md
+      - "Chapter 37": solutions/ch37-solutions.md
+      - "Chapter 38": solutions/ch38-solutions.md
+      - "Chapter 39": solutions/ch39-solutions.md
+  - Appendix:
+      - "Appendix C — Interview preparation": appendix-c-interview-preparation.md
+      - "Glossary": glossary.md
+      - "References": references.md
+      - "Coverage matrix": coverage-matrix.md

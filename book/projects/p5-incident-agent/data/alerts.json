@@ -1,0 +1,6 @@
+[
+  {"id": "ALR-2026-0914-01", "rule": "trackline-p95-latency", "service": "trackline", "tenant": "logistics",
+   "fired_at": "2026-09-14T06:10:00Z", "summary": "Trackline GET /v3/shipments p95 above 1 s for 10 minutes"},
+  {"id": "ALR-2026-0914-02", "rule": "routepilot-p95-latency", "service": "routepilot", "tenant": "logistics",
+   "fired_at": "2026-09-14T06:20:00Z", "summary": "RoutePilot route computation p95 above 1 s for 10 minutes"}
+]

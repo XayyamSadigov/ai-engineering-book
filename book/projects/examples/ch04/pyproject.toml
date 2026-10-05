@@ -1,0 +1,23 @@
+[project]
+name = "aie-ch04-prompts"
+version = "0.1.0"
+description = "Chapter 4: prompt templates, versioned registry, and prompt regression harness"
+requires-python = ">=3.11"
+dependencies = [
+    "aie-core",
+    "jinja2>=3.1",
+    "pydantic>=2.6",
+]
+
+[project.optional-dependencies]
+yaml = ["pyyaml>=6"]
+dev = ["pytest>=8"]
+
+[tool.uv.sources]
+aie-core = { path = "../../aie_core", editable = true }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+markers = ["integration: needs a real LLM provider (skipped by default)"]
+addopts = "-m 'not integration'"

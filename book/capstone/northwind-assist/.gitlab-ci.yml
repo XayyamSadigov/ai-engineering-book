@@ -1,0 +1,86 @@
+# path: book/capstone/northwind-assist/.gitlab-ci.yml
+# Copy to the repository root as .gitlab-ci.yml (or include it). Same pipeline as the GitHub one:
+# lint -> typecheck -> test -> eval gate -> build -> canary -> promote (manual), plus a scheduled
+# nightly gate run. Deployment commands are environment-specific placeholders.
+stages: [lint, test, gate, build, deploy]
+
+variables:
+  APP_DIR: book/capstone/northwind-assist
+  LLM_PROVIDER: fake
+  EMBEDDING_PROVIDER: fake
+  PIP_CACHE_DIR: "$CI_PROJECT_DIR/.pip-cache"
+
+default:
+  image: python:3.12-slim
+  cache: { key: pip, paths: [.pip-cache] }
+
+.install: &install
+  - pip install -e book/projects/aie_core -e book/projects/evalkit -e book/projects/p2-semantic-search
+      -e book/projects/ragkit -e book/projects/toolkit -e book/projects/agentkit -e book/projects/memorykit
+      -e book/projects/guardrails -e "book/projects/reliability[redis]" -e book/projects/p1-extraction-api
+      -e book/projects/p3-rag-assistant -e book/projects/p4-support-assistant -e "$APP_DIR[dev]"
+
+lint:
+  stage: lint
+  script:
+    - pip install "ruff>=0.4"
+    - cd "$APP_DIR" && ruff check northwind_assist tests
+
+typecheck:
+  stage: test
+  script:
+    - *install
+    - cd "$APP_DIR" && mypy northwind_assist
+
+unit:
+  stage: test
+  script:
+    - *install
+    - cd "$APP_DIR" && pytest -q --junitxml=junit.xml
+  artifacts:
+    when: always
+    reports: { junit: "$APP_DIR/junit.xml" }
+
+eval-gate:
+  stage: gate
+  script:
+    - *install
+    - cd "$APP_DIR" && northwind-assist-eval --out eval-out     # exit 1 blocks the merge, 2 = pipeline problem
+  artifacts:
+    when: always
+    paths: ["$APP_DIR/eval-out/"]
+    expire_in: 30 days
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - if: $CI_PIPELINE_SOURCE == "schedule"          # nightly drift check
+
+build-image:
+  stage: build
+  image: docker:27
+  services: [docker:27-dind]
+  script:
+    - docker build -f "$APP_DIR/Dockerfile" -t "$CI_REGISTRY_IMAGE/northwind-assist:$CI_COMMIT_SHA" book
+    - docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" "$CI_REGISTRY"
+    - docker push "$CI_REGISTRY_IMAGE/northwind-assist:$CI_COMMIT_SHA"
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+canary:
+  stage: deploy
+  environment: { name: production-canary }
+  script:
+    - echo "helm upgrade northwind-assist-canary ... --set image.tag=$CI_COMMIT_SHA --set weight=5 (placeholder)"
+    - echo "compare arms for 30 min: errors, p95, abstention, guardrail blocks, cost per answer (Chapter 32)"
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+promote:
+  stage: deploy
+  environment: { name: production }
+  needs: [canary]
+  when: manual
+  script:
+    - echo "helm upgrade northwind-assist ... --set image.tag=$CI_COMMIT_SHA (placeholder)"
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH

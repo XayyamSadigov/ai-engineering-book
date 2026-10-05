@@ -1,0 +1,17 @@
+{
+  "rag.rerank": {
+    "allocations": [{"variant": "off", "percent": 0}, {"variant": "on", "percent": 100}],
+    "safe_variant": "on",
+    "kill_switch": false
+  },
+  "agent.actions": {
+    "allocations": [{"variant": "off", "percent": 0}, {"variant": "on", "percent": 100}],
+    "safe_variant": "off",
+    "kill_switch": false
+  },
+  "rag.answer_cache": {
+    "allocations": [{"variant": "off", "percent": 0}, {"variant": "on", "percent": 100}],
+    "safe_variant": "off",
+    "kill_switch": false
+  }
+}

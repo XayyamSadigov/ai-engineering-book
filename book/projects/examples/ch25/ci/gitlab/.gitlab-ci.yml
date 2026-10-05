@@ -1,0 +1,55 @@
+# path: book/projects/examples/ch25/ci/gitlab/.gitlab-ci.yml
+# Include from the root .gitlab-ci.yml:   include: { local: book/projects/examples/ch25/ci/gitlab/.gitlab-ci.yml }
+# Merge request pipelines run unit tests, the fast eval suite, and the gate; scheduled pipelines
+# run the full suite. The report is attached to every pipeline, pass or fail.
+stages:
+  - test
+  - eval
+
+variables:
+  PROJECT_DIR: book/projects/examples/ch25
+  PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
+  LLM_PROVIDER: fake
+  EVAL_SYSTEM: candidate
+
+default:
+  image: python:3.12-slim
+  cache:
+    key: pip-$CI_JOB_NAME
+    paths: [.cache/pip]
+  before_script:
+    - pip install -e book/projects/aie_core -e book/projects/evalkit -e book/projects/agentkit
+    - pip install "pytest>=8" "pyyaml>=6" "numpy>=1.26"
+
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+unit-tests:
+  stage: test
+  script:
+    - cd "$PROJECT_DIR"
+    - python -m pytest -q --junitxml=junit.xml
+  artifacts:
+    when: always
+    reports:
+      junit: $PROJECT_DIR/junit.xml
+
+eval-gate:
+  stage: eval
+  needs: [unit-tests]
+  timeout: 30m
+  script:
+    - cd "$PROJECT_DIR"
+    - SUITE=fast; if [ "$CI_PIPELINE_SOURCE" = "schedule" ]; then SUITE=full; fi
+    # --eval-suite fast on merge requests; full on schedules
+    - python -m pytest -q --eval-suite "$SUITE" --eval-out eval-out/runs -m "eval_fast or eval_full"
+    - python ci/release_gate.py --config ci/gates.toml --runs eval-out/runs --baselines ci/baselines --out eval-out
+  artifacts:
+    when: always
+    expire_in: 90 days
+    expose_as: eval report
+    paths:
+      - $PROJECT_DIR/eval-out/

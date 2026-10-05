@@ -1,0 +1,55 @@
+{
+  "dataset": "golden-60#3fcfa03ffe43",
+  "manifest": {
+    "app": "northwind-triage",
+    "app_version": "0.0.0-dev",
+    "config": {
+      "classifier_timeout_s": "8.0",
+      "flags_snapshot": "44136fa355b3"
+    },
+    "datasets": {
+      "triage_golden": "golden-60#3fcfa03ffe43"
+    },
+    "embedding_model": null,
+    "environment": "test",
+    "evaluators": {
+      "triage_accuracy": "1.0.0#961100d3a8c8"
+    },
+    "flags": {
+      "triage.model": "control",
+      "triage.prompt": "control"
+    },
+    "git_sha": "unknown",
+    "index_version": null,
+    "models": {
+      "classifier": "fake-model",
+      "provider": "fake"
+    },
+    "prompts": {
+      "triage.classify": "1.0.0#730eccab8abb"
+    },
+    "schema_version": 1,
+    "tool_schemas": {
+      "create_ticket": "2.0.0#1e2b99f774d4"
+    }
+  },
+  "metrics": {
+    "category_accuracy": 0.7333333333333333,
+    "error_rate": 0.0,
+    "n": 60.0,
+    "p1_recall": 0.6,
+    "priority_accuracy": 0.5,
+    "recall.account_access": 0.375,
+    "recall.benefits_leave": 0.3333333333333333,
+    "recall.expenses_travel": 0.8333333333333334,
+    "recall.hardware": 0.25,
+    "recall.password_mfa": 1.0,
+    "recall.pos_payments": 1.0,
+    "recall.returns": 1.0,
+    "recall.security_report": 0.8333333333333334,
+    "recall.shipment_tracking": 1.0,
+    "recall.time_off": 0.75,
+    "recall.vpn_network": 1.0,
+    "recall.warehouse_scanner": 0.25
+  }
+}

@@ -1,0 +1,576 @@
+{
+  "run_id": "1705d2bde230",
+  "created_at": "2026-10-05T08:49:27.320797Z",
+  "versions": {
+    "target": "northwind-tools",
+    "prompt": "tools@baseline",
+    "model": "fake-baseline",
+    "dataset": "northwind-tool-selection@1#5785c798ec86",
+    "evaluators": {
+      "tool_use": "1"
+    },
+    "extra": {
+      "system": "baseline"
+    }
+  },
+  "dataset_name": "northwind-tool-selection",
+  "dataset_version": "1",
+  "dataset_hash": "5785c798ec8626fe02e8d9f032cb8c969d81dc16a4a1d4de3443bb87faa1f59d",
+  "concurrency": 4,
+  "repeats": 1,
+  "wall_time_s": 0.07580220799718518,
+  "results": [
+    {
+      "case_id": "TU-001",
+      "repeat": 0,
+      "output": "I can answer that directly.",
+      "error": null,
+      "error_type": null,
+      "latency_ms": 74.83683299506083,
+      "cost_usd": 0.0,
+      "input_tokens": 29,
+      "output_tokens": 6,
+      "trace_id": "e33a7ec556b640ba",
+      "scores": {
+        "tool_selected_correctly": 0.0,
+        "tool_known": 1.0,
+        "tool_args_valid": 1.0,
+        "tool_args_correct": 0.0
+      },
+      "passed": {
+        "tool_selected_correctly": false,
+        "tool_known": true,
+        "tool_args_valid": true,
+        "tool_args_correct": false
+      },
+      "details": {
+        "tool_selected_correctly": {
+          "gold": "get_service_status",
+          "pred": "<none>"
+        }
+      },
+      "evaluator_errors": {},
+      "tags": [
+        "tool:get_service_status"
+      ],
+      "metadata": {
+        "model": "fake-tools-baseline",
+        "provider": "fake",
+        "finish_reason": "stop"
+      }
+    },
+    {
+      "case_id": "TU-002",
+      "repeat": 0,
+      "output": [
+        {
+          "id": "t1",
+          "name": "get_service_status",
+          "arguments": {
+            "service": "paybridge-adapter"
+          }
+        }
+      ],
+      "error": null,
+      "error_type": null,
+      "latency_ms": 74.73475000006147,
+      "cost_usd": 0.0,
+      "input_tokens": 30,
+      "output_tokens": 9,
+      "trace_id": "74ad2f7371b74793",
+      "scores": {
+        "tool_selected_correctly": 1.0,
+        "tool_known": 1.0,
+        "tool_args_valid": 1.0,
+        "tool_args_correct": 1.0
+      },
+      "passed": {
+        "tool_selected_correctly": true,
+        "tool_known": true,
+        "tool_args_valid": true,
+        "tool_args_correct": true
+      },
+      "details": {
+        "tool_selected_correctly": {
+          "gold": "get_service_status",
+          "pred": "get_service_status"
+        }
+      },
+      "evaluator_errors": {},
+      "tags": [
+        "tool:get_service_status"
+      ],
+      "metadata": {
+        "model": "fake-tools-baseline",
+        "provider": "fake",
+        "finish_reason": "tool_calls"
+      }
+    },
+    {
+      "case_id": "TU-003",
+      "repeat": 0,
+      "output": [
+        {
+          "id": "t1",
+          "name": "create_ticket",
+          "arguments": {
+            "subject": "please open a ticket: my laptop screen flickers, urgent",
+            "body": "please open a ticket: my laptop screen flickers, urgent",
+            "priority": "P1",
+            "category": "hardware"
+          }
+        }
+      ],
+      "error": null,
+      "error_type": null,
+      "latency_ms": 74.18608400621451,
+      "cost_usd": 0.0,
+      "input_tokens": 32,
+      "output_tokens": 47,
+      "trace_id": "83d503aa5abb4bee",
+      "scores": {
+        "tool_selected_correctly": 1.0,
+        "tool_known": 1.0,
+        "tool_args_valid": 1.0,
+        "tool_args_correct": 1.0
+      },
+      "passed": {
+        "tool_selected_correctly": true,
+        "tool_known": true,
+        "tool_args_valid": true,
+        "tool_args_correct": true
+      },
+      "details": {
+        "tool_selected_correctly": {
+          "gold": "create_ticket",
+          "pred": "create_ticket"
+        }
+      },
+      "evaluator_errors": {},
+      "tags": [
+        "tool:create_ticket",
+        "side-effect"
+      ],
+      "metadata": {
+        "model": "fake-tools-baseline",
+        "provider": "fake",
+        "finish_reason": "tool_calls"
+      }
+    },
+    {
+      "case_id": "TU-004",
+      "repeat": 0,
+      "output": [
+        {
+          "id": "t1",
+          "name": "create_ticket",
+          "arguments": {
+            "subject": "file a ticket for the warehouse badge reader, it rejects my ",
+            "body": "file a ticket for the warehouse badge reader, it rejects my card",
+            "priority": "P3",
+            "category": "account_access"
+          }
+        }
+      ],
+      "error": null,
+      "error_type": null,
+      "latency_ms": 73.86158400186105,
+      "cost_usd": 0.0,
+      "input_tokens": 33,
+      "output_tokens": 49,
+      "trace_id": "d4407969273b40e9",
+      "scores": {
+        "tool_selected_correctly": 1.0,
+        "tool_known": 1.0,
+        "tool_args_valid": 1.0,
+        "tool_args_correct": 1.0
+      },
+      "passed": {
+        "tool_selected_correctly": true,
+        "tool_known": true,
+        "tool_args_valid": true,
+        "tool_args_correct": true
+      },
+      "details": {
+        "tool_selected_correctly": {
+          "gold": "create_ticket",
+          "pred": "create_ticket"
+        }
+      },
+      "evaluator_errors": {},
+      "tags": [
+        "tool:create_ticket",
+        "side-effect"
+      ],
+      "metadata": {
+        "model": "fake-tools-baseline",
+        "provider": "fake",
+        "finish_reason": "tool_calls"
+      }
+    },
+    {
+      "case_id": "TU-005",
+      "repeat": 0,
+      "output": [
+        {
+          "id": "t1",
+          "name": "search_tickets",
+          "arguments": {
+            "query": "has anyone reported similar tickets about scanner pairing?"
+          }
+        }
+      ],
+      "error": null,
+      "error_type": null,
+      "latency_ms": 0.3264999977545813,
+      "cost_usd": 0.0,
+      "input_tokens": 29,
+      "output_tokens": 14,
+      "trace_id": "9cf9932f2acd48b5",
+      "scores": {
+        "tool_selected_correctly": 1.0,
+        "tool_known": 1.0,
+        "tool_args_valid": 1.0,
+        "tool_args_correct": 1.0
+      },
+      "passed": {
+        "tool_selected_correctly": true,
+        "tool_known": true,
+        "tool_args_valid": true,
+        "tool_args_correct": true
+      },
+      "details": {
+        "tool_selected_correctly": {
+          "gold": "search_tickets",
+          "pred": "search_tickets"
+        }
+      },
+      "evaluator_errors": {},
+      "tags": [
+        "tool:search_tickets"
+      ],
+      "metadata": {
+        "model": "fake-tools-baseline",
+        "provider": "fake",
+        "finish_reason": "tool_calls"
+      }
+    },
+    {
+      "case_id": "TU-006",
+      "repeat": 0,
+      "output": [
+        {
+          "id": "t1",
+          "name": "search_tickets",
+          "arguments": {
+            "query": "show me past tickets about gift cards"
+          }
+        }
+      ],
+      "error": null,
+      "error_type": null,
+      "latency_ms": 0.06541699985973537,
+      "cost_usd": 0.0,
+      "input_tokens": 27,
+      "output_tokens": 12,
+      "trace_id": "dfaf7aea69b342b7",
+      "scores": {
+        "tool_selected_correctly": 1.0,
+        "tool_known": 1.0,
+        "tool_args_valid": 1.0,
+        "tool_args_correct": 1.0
+      },
+      "passed": {
+        "tool_selected_correctly": true,
+        "tool_known": true,
+        "tool_args_valid": true,
+        "tool_args_correct": true
+      },
+      "details": {
+        "tool_selected_correctly": {
+          "gold": "search_tickets",
+          "pred": "search_tickets"
+        }
+      },
+      "evaluator_errors": {},
+      "tags": [
+        "tool:search_tickets"
+      ],
+      "metadata": {
+        "model": "fake-tools-baseline",
+        "provider": "fake",
+        "finish_reason": "tool_calls"
+      }
+    },
+    {
+      "case_id": "TU-007",
+      "repeat": 0,
+      "output": [
+        {
+          "id": "t1",
+          "name": "lookup_employee",
+          "arguments": {
+            "query": "e-2201"
+          }
+        }
+      ],
+      "error": null,
+      "error_type": null,
+      "latency_ms": 0.3555410003173165,
+      "cost_usd": 0.0,
+      "input_tokens": 30,
+      "output_tokens": 9,
+      "trace_id": "98bb7f1e575d45a8",
+      "scores": {
+        "tool_selected_correctly": 1.0,
+        "tool_known": 1.0,
+        "tool_args_valid": 1.0,
+        "tool_args_correct": 1.0
+      },
+      "passed": {
+        "tool_selected_correctly": true,
+        "tool_known": true,
+        "tool_args_valid": true,
+        "tool_args_correct": true
+      },
+      "details": {
+        "tool_selected_correctly": {
+          "gold": "lookup_employee",
+          "pred": "lookup_employee"
+        }
+      },
+      "evaluator_errors": {},
+      "tags": [
+        "tool:lookup_employee"
+      ],
+      "metadata": {
+        "model": "fake-tools-baseline",
+        "provider": "fake",
+        "finish_reason": "tool_calls"
+      }
+    },
+    {
+      "case_id": "TU-008",
+      "repeat": 0,
+      "output": [
+        {
+          "id": "t1",
+          "name": "query_metrics",
+          "arguments": {
+            "sql": "how many p1 tickets did retail open per week last month?"
+          }
+        }
+      ],
+      "error": null,
+      "error_type": null,
+      "latency_ms": 0.377791999198962,
+      "cost_usd": 0.0,
+      "input_tokens": 33,
+      "output_tokens": 18,
+      "trace_id": "bba9a3659d374831",
+      "scores": {
+        "tool_selected_correctly": 1.0,
+        "tool_known": 1.0,
+        "tool_args_valid": 1.0,
+        "tool_args_correct": 1.0
+      },
+      "passed": {
+        "tool_selected_correctly": true,
+        "tool_known": true,
+        "tool_args_valid": true,
+        "tool_args_correct": true
+      },
+      "details": {
+        "tool_selected_correctly": {
+          "gold": "query_metrics",
+          "pred": "query_metrics"
+        }
+      },
+      "evaluator_errors": {},
+      "tags": [
+        "tool:query_metrics"
+      ],
+      "metadata": {
+        "model": "fake-tools-baseline",
+        "provider": "fake",
+        "finish_reason": "tool_calls"
+      }
+    },
+    {
+      "case_id": "TU-009",
+      "repeat": 0,
+      "output": "I can answer that directly.",
+      "error": null,
+      "error_type": null,
+      "latency_ms": 0.15449999773409218,
+      "cost_usd": 0.0,
+      "input_tokens": 26,
+      "output_tokens": 6,
+      "trace_id": "32a6c5f002b24912",
+      "scores": {
+        "tool_selected_correctly": 1.0,
+        "tool_known": 1.0,
+        "tool_args_valid": 1.0,
+        "tool_args_correct": 1.0
+      },
+      "passed": {
+        "tool_selected_correctly": true,
+        "tool_known": true,
+        "tool_args_valid": true,
+        "tool_args_correct": true
+      },
+      "details": {
+        "tool_selected_correctly": {
+          "gold": "<none>",
+          "pred": "<none>"
+        }
+      },
+      "evaluator_errors": {},
+      "tags": [
+        "tool:none"
+      ],
+      "metadata": {
+        "model": "fake-tools-baseline",
+        "provider": "fake",
+        "finish_reason": "stop"
+      }
+    },
+    {
+      "case_id": "TU-010",
+      "repeat": 0,
+      "output": "I can answer that directly.",
+      "error": null,
+      "error_type": null,
+      "latency_ms": 0.2873330013244413,
+      "cost_usd": 0.0,
+      "input_tokens": 27,
+      "output_tokens": 6,
+      "trace_id": "c300ff5a8ecc41b5",
+      "scores": {
+        "tool_selected_correctly": 1.0,
+        "tool_known": 1.0,
+        "tool_args_valid": 1.0,
+        "tool_args_correct": 1.0
+      },
+      "passed": {
+        "tool_selected_correctly": true,
+        "tool_known": true,
+        "tool_args_valid": true,
+        "tool_args_correct": true
+      },
+      "details": {
+        "tool_selected_correctly": {
+          "gold": "<none>",
+          "pred": "<none>"
+        }
+      },
+      "evaluator_errors": {},
+      "tags": [
+        "tool:none"
+      ],
+      "metadata": {
+        "model": "fake-tools-baseline",
+        "provider": "fake",
+        "finish_reason": "stop"
+      }
+    },
+    {
+      "case_id": "TU-011",
+      "repeat": 0,
+      "output": [
+        {
+          "id": "t1",
+          "name": "get_service_status",
+          "arguments": {
+            "service": "store-server"
+          }
+        }
+      ],
+      "error": null,
+      "error_type": null,
+      "latency_ms": 0.12341700494289398,
+      "cost_usd": 0.0,
+      "input_tokens": 28,
+      "output_tokens": 7,
+      "trace_id": "35f16495174c4485",
+      "scores": {
+        "tool_selected_correctly": 1.0,
+        "tool_known": 1.0,
+        "tool_args_valid": 1.0,
+        "tool_args_correct": 1.0
+      },
+      "passed": {
+        "tool_selected_correctly": true,
+        "tool_known": true,
+        "tool_args_valid": true,
+        "tool_args_correct": true
+      },
+      "details": {
+        "tool_selected_correctly": {
+          "gold": "get_service_status",
+          "pred": "get_service_status"
+        }
+      },
+      "evaluator_errors": {},
+      "tags": [
+        "tool:get_service_status"
+      ],
+      "metadata": {
+        "model": "fake-tools-baseline",
+        "provider": "fake",
+        "finish_reason": "tool_calls"
+      }
+    },
+    {
+      "case_id": "TU-012",
+      "repeat": 0,
+      "output": [
+        {
+          "id": "t1",
+          "name": "create_ticket",
+          "arguments": {
+            "subject": "create a ticket: urgent, warehouse conveyor belt sensor offl",
+            "body": "create a ticket: urgent, warehouse conveyor belt sensor offline",
+            "priority": "P1",
+            "category": "account_access"
+          }
+        }
+      ],
+      "error": null,
+      "error_type": null,
+      "latency_ms": 0.12399999832268804,
+      "cost_usd": 0.0,
+      "input_tokens": 31,
+      "output_tokens": 47,
+      "trace_id": "871d83eaa40744b1",
+      "scores": {
+        "tool_selected_correctly": 1.0,
+        "tool_known": 1.0,
+        "tool_args_valid": 1.0,
+        "tool_args_correct": 1.0
+      },
+      "passed": {
+        "tool_selected_correctly": true,
+        "tool_known": true,
+        "tool_args_valid": true,
+        "tool_args_correct": true
+      },
+      "details": {
+        "tool_selected_correctly": {
+          "gold": "create_ticket",
+          "pred": "create_ticket"
+        }
+      },
+      "evaluator_errors": {},
+      "tags": [
+        "tool:create_ticket",
+        "side-effect"
+      ],
+      "metadata": {
+        "model": "fake-tools-baseline",
+        "provider": "fake",
+        "finish_reason": "tool_calls"
+      }
+    }
+  ]
+}

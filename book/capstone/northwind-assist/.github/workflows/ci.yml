@@ -1,0 +1,130 @@
+# path: book/capstone/northwind-assist/.github/workflows/ci.yml
+# Copy to the repository's .github/workflows/. Stages: lint -> typecheck -> unit tests -> eval gate
+# -> image build -> canary (placeholder) -> promote (manual), plus a nightly gate run that catches
+# provider-side model changes when no code changed. Deployment commands are placeholders.
+name: northwind-assist
+
+on:
+  pull_request:
+    paths: ["book/**"]
+  push:
+    branches: [main]
+  schedule:
+    - cron: "17 2 * * *"
+  workflow_dispatch: {}
+
+concurrency:
+  group: northwind-assist-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  APP_DIR: book/capstone/northwind-assist
+  LLM_PROVIDER: fake
+  EMBEDDING_PROVIDER: fake
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "${{ env.PYTHON_VERSION }}" }
+      - run: pip install "ruff>=0.4"
+      - run: ruff check northwind_assist tests
+        working-directory: ${{ env.APP_DIR }}
+
+  setup-test:
+    runs-on: ubuntu-latest
+    needs: lint
+    strategy:
+      matrix:
+        step: [typecheck, unit]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "${{ env.PYTHON_VERSION }}", cache: pip }
+      - name: Install the book's packages and the capstone
+        run: |
+          pip install -e book/projects/aie_core -e book/projects/evalkit -e book/projects/p2-semantic-search \
+            -e book/projects/ragkit -e book/projects/toolkit -e book/projects/agentkit -e book/projects/memorykit \
+            -e book/projects/guardrails -e "book/projects/reliability[redis]" -e book/projects/p1-extraction-api \
+            -e book/projects/p3-rag-assistant -e book/projects/p4-support-assistant -e "$APP_DIR[dev]"
+      - name: Type check
+        if: matrix.step == 'typecheck'
+        run: mypy northwind_assist
+        working-directory: ${{ env.APP_DIR }}
+      - name: Unit, contract, security and gate tests (offline)
+        if: matrix.step == 'unit'
+        run: pytest -q --junitxml=junit.xml
+        working-directory: ${{ env.APP_DIR }}
+      - uses: actions/upload-artifact@v4
+        if: always() && matrix.step == 'unit'
+        with: { name: junit, path: "${{ env.APP_DIR }}/junit.xml" }
+
+  eval-gate:
+    runs-on: ubuntu-latest
+    needs: setup-test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "${{ env.PYTHON_VERSION }}", cache: pip }
+      - name: Install
+        run: |
+          pip install -e book/projects/aie_core -e book/projects/evalkit -e book/projects/p2-semantic-search \
+            -e book/projects/ragkit -e book/projects/toolkit -e book/projects/agentkit -e book/projects/memorykit \
+            -e book/projects/guardrails -e "book/projects/reliability[redis]" -e book/projects/p1-extraction-api \
+            -e book/projects/p3-rag-assistant -e book/projects/p4-support-assistant -e "$APP_DIR[dev]"
+      - name: Offline evaluation and release gate (exit 1 = threshold failed, 2 = could not evaluate)
+        run: northwind-assist-eval --out eval-out
+        working-directory: ${{ env.APP_DIR }}
+      - name: Prompt lock (a published prompt changed without a version bump)
+        run: |
+          python - <<'PY'
+          import json, sys, northwind_assist
+          from prompts import PromptRegistry
+          reg = PromptRegistry.from_directory("northwind_assist/prompt_files")
+          problems = reg.verify_lock(json.load(open("prompts.lock")))
+          print("\n".join(problems) or "prompt lock ok"); sys.exit(1 if problems else 0)
+          PY
+        working-directory: ${{ env.APP_DIR }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: eval-report, path: "${{ env.APP_DIR }}/eval-out" }
+
+  image:
+    runs-on: ubuntu-latest
+    needs: eval-gate
+    if: github.event_name == 'push'
+    permissions: { contents: read, packages: write }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with: { registry: ghcr.io, username: "${{ github.actor }}", password: "${{ secrets.GITHUB_TOKEN }}" }
+      - uses: docker/build-push-action@v6
+        with:
+          context: book
+          file: book/capstone/northwind-assist/Dockerfile
+          push: true
+          tags: ghcr.io/${{ github.repository }}/northwind-assist:${{ github.sha }}
+          build-args: NA_GIT_SHA=${{ github.sha }}
+
+  canary:
+    runs-on: ubuntu-latest
+    needs: image
+    environment: production-canary
+    steps:
+      - name: Deploy canary at 5% (placeholder)
+        run: echo "helm upgrade northwind-assist-canary ... --set image.tag=${{ github.sha }} --set weight=5"
+      - name: Watch the canary against the stable arm (placeholder)
+        run: |
+          echo "Compare per-arm error rate, p95 completion, abstention rate, guardrail block rate and cost per answer"
+          echo "for 30 min (Chapter 32 canary_decision). Exit non-zero to roll back."
+
+  promote:
+    runs-on: ubuntu-latest
+    needs: canary
+    environment: production        # manual approval in the environment's protection rules
+    steps:
+      - run: echo "helm upgrade northwind-assist ... --set image.tag=${{ github.sha }} (placeholder)"

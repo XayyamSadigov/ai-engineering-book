@@ -1,0 +1,7 @@
+# Which version each environment serves. Changing a line here is a deploy; the files are immutable.
+["ticket.classify"]
+prod = "1.0.0"
+canary = "1.1.0"
+
+["assist.answer"]
+prod = "1.0.0"

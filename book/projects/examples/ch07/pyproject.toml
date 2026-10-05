@@ -1,0 +1,12 @@
+[project]
+name = "ch07-model-routing"
+version = "0.1.0"
+description = "Chapter 7: model catalog, selection harness, router, cascade evaluation"
+requires-python = ">=3.11"
+dependencies = ["aie-core", "pydantic>=2.6", "pydantic-settings>=2.2", "numpy>=1.26"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[tool.uv.sources]
+aie-core = { path = "../../aie_core", editable = true }

@@ -1,0 +1,89 @@
+# path: book/capstone/northwind-assist/ops/alerts.yaml
+# Alert rules for Northwind Assist in Chapter 31's format (examples/ch31/metrics.py: load_rules,
+# evaluate). Every metric is computed from request traces, so the rules can be tested offline
+# against real capstone traces (tests/test_alerts.py). Thresholds are illustrative; derive yours
+# from the SLOs in Chapter 39 and from baseline variance.
+#
+# Page on what users feel; ticket on drift. Two alerts in Chapter 39's list are not trace metrics
+# and live in the metrics backend instead: the `llm:primary` breaker open for more than 5 minutes
+# (scrape `/readyz` breaker states as a gauge) and the nightly gate failing (the CI job's status).
+rules:
+  # ---------------------------------------------------------------- page
+  - name: request_p95_slo
+    metric: latency.request_p95_ms
+    window: 10m
+    condition: {op: ">", threshold: 8000}       # p95 completion under 8 s
+    min_samples: 50
+    severity: page
+    runbook: "README runbook: provider outage first (breakers, /v1/admin/status), then stage p95 from spans"
+
+  - name: availability_fast_burn
+    metric: slo.availability_burn_rate
+    window: 1h
+    confirm_window: 5m
+    condition: {op: ">", threshold: 14.4}       # 2% of a 30-day 99.5% budget in one hour
+    min_samples: 50
+    severity: page
+    runbook: "Breaker states, admission rejections, provider errors; degraded plan share"
+
+  - name: cross_tenant_retrieval
+    metric: errors.class_rate:retrieval_contamination
+    window: 1h
+    condition: {op: ">", threshold: 0.0}
+    min_samples: 1                              # one event is an incident
+    severity: page
+    runbook: "Security incident: the final ACL check dropped hits. Freeze reindexing, pull the traces (acl.violations), compare index ACLs with the source documents"
+
+  - name: trace_error_rate
+    metric: errors.trace_error_rate
+    window: 1h
+    condition: {op: ">", threshold: 0.05}
+    min_samples: 50
+    severity: page
+    runbook: "Error distribution by error.class; provider errors -> breaker and fallback section of the runbook"
+
+  # ---------------------------------------------------------------- ticket
+  - name: abstention_rate_shift
+    metric: quality.abstention_rate
+    window: 24h
+    baseline_window: 7d
+    condition: {op: ">", baseline_ratio: 1.25}
+    min_samples: 200
+    group_by: tenant.id
+    severity: ticket
+    runbook: "Stage isolation on a fresh eval run; check index_version and answer.withheld on llm.generate"
+
+  - name: cost_per_request_jump
+    metric: cost.per_request_usd
+    window: 6h
+    baseline_window: 24h
+    condition: {op: ">", baseline_ratio: 1.25}
+    min_samples: 50
+    group_by: tenant.id
+    severity: ticket
+    runbook: "GET /v1/cost/daily: cache_hit_rate collapse, retry storm, or a routing change to a pricier model"
+
+  - name: agent_loops
+    metric: errors.class_rate:loop
+    window: 6h
+    condition: {op: ">", threshold: 0.02}
+    min_samples: 20
+    severity: ticket
+    runbook: "Replay the looping runs from NA_EVENT_DIR with agentkit.replay"
+
+  - name: completion_slow_burn
+    metric: slo.completion_burn_rate
+    window: 6h
+    confirm_window: 30m
+    condition: {op: ">", threshold: 6.0}
+    min_samples: 100
+    severity: ticket
+    runbook: "Latency by route and stage; input-token growth per request"
+
+  - name: telemetry_gaps
+    metric: telemetry.incomplete_rate
+    window: 1h
+    condition: {op: ">", threshold: 0.01}
+    min_samples: 50
+    severity: ticket
+    runbook: "A deploy stopped stamping tenant, route, prompt.version or index.version, or broke context propagation"

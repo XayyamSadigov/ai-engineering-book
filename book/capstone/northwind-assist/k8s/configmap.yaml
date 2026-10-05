@@ -1,0 +1,32 @@
+# path: book/capstone/northwind-assist/k8s/configmap.yaml
+# Non-secret configuration. A change here is a deploy: roll it out like code (canary, then promote).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: northwind-assist-config
+  labels: { app: northwind-assist }
+data:
+  NA_ENVIRONMENT: prod
+  NA_AUTH_MODE: jwks
+  NA_JWKS_URL: https://sso.northwind.example/.well-known/jwks.json
+  NA_JWT_ISSUER: https://sso.northwind.example
+  NA_JWT_AUDIENCE: northwind-assist
+  NA_DEV_LOGIN: "false"
+  NA_KNOWLEDGE_BACKEND: p3
+  NA_KNOWLEDGE_SYNC_ON_START: "false"
+  NA_REQUEST_DEADLINE_S: "8"
+  NA_ADMISSION_CAPACITY: "32"
+  NA_TENANT_REQUESTS_PER_MINUTE: "600"
+  NA_TENANT_DAILY_BUDGET_USD: '{"retail": 250.0, "logistics": 250.0}'
+  RAG_VECTOR_BACKEND: pgvector
+  RAG_REGISTRY_BACKEND: sql
+  RAG_QUEUE_BACKEND: redis
+  RAG_CACHE_BACKEND: redis
+  RAG_DOCS_DIR: /book/projects/shared-data/docs
+  RAG_SNAPSHOT_DIR: /data/snapshots
+  TRACE_SINK: otel
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector.observability:4318/v1/traces
+  OTEL_SERVICE_NAME: northwind-assist
+  CAPTURE_MODE: hashed
+  LLM_PROVIDER: openai
+  EMBEDDING_PROVIDER: openai

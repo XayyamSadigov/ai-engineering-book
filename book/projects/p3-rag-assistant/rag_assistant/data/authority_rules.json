@@ -1,0 +1,20 @@
+{
+  "comment": "Owned by the content owners, reviewed like code. Levels: higher wins when sources disagree.",
+  "levels": [
+    {"match": {"tags_any": ["external", "newsletter"]}, "level": 0, "kind": "external"},
+    {"match": {"tags_any": ["faq"]}, "level": 1, "kind": "faq"},
+    {"match": {"tags_any": ["incident", "postmortem"]}, "level": 2, "kind": "incident"},
+    {"match": {"tags_any": ["runbook"]}, "level": 2, "kind": "runbook"},
+    {"match": {"id_prefix": ["prod-"]}, "level": 2, "kind": "product"},
+    {"match": {"tags_any": ["policy"]}, "level": 3, "kind": "policy"}
+  ],
+  "default_level": 1,
+  "supersessions": [
+    {
+      "newer": "hr-pto-policy",
+      "older": "hr-faq",
+      "older_sections": ["Time off"],
+      "reason": "PTO Policy 3.0 (effective 2026-01-01) supersedes HR FAQ time-off entries published before 2026"
+    }
+  ]
+}

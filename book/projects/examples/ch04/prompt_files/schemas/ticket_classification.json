@@ -1,0 +1,14 @@
+{
+  "type": "object",
+  "required": ["category", "evidence"],
+  "additionalProperties": false,
+  "properties": {
+    "category": {
+      "type": "string",
+      "enum": ["account_access", "password_mfa", "vpn_network", "hardware", "pos_payments", "returns",
+               "shipment_tracking", "warehouse_scanner", "expenses_travel", "time_off", "benefits_leave",
+               "security_report", "other"]
+    },
+    "evidence": {"type": "string", "maxLength": 200}
+  }
+}

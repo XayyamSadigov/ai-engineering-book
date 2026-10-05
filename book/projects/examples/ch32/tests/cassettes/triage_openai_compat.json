@@ -1,0 +1,21 @@
+{
+  "interactions": {
+    "0792194b53cb501c877b": [
+      {
+        "request": {
+          "body": "{\"max_tokens\":300,\"messages\":[{\"content\":\"You are the ticket triage component.\",\"role\":\"system\"},{\"content\":\"Register 3 declines every card\",\"role\":\"user\"}],\"model\":\"model-a\",\"response_format\":{\"json_schema\":{\"name\":\"TriageDecision\",\"schema\":{\"$defs\":{\"Category\":{\"enum\":[\"account_access\",\"benefits_leave\",\"expenses_travel\",\"hardware\",\"password_mfa\",\"pos_payments\",\"returns\",\"security_report\",\"shipment_tracking\",\"time_off\",\"vpn_network\",\"warehouse_scanner\"],\"title\":\"Category\",\"type\":\"string\"},\"Priority\":{\"enum\":[\"P1\",\"P2\",\"P3\",\"P4\"],\"title\":\"Priority\",\"type\":\"string\"}},\"description\":\"What the classifier proposes. Validated, but not yet trusted for routing.\",\"properties\":{\"category\":{\"$ref\":\"#/$defs/Category\"},\"confidence\":{\"maximum\":1.0,\"minimum\":0.0,\"title\":\"Confidence\",\"type\":\"number\"},\"priority\":{\"$ref\":\"#/$defs/Priority\"},\"rationale\":{\"default\":\"\",\"maxLength\":500,\"title\":\"Rationale\",\"type\":\"string\"}},\"required\":[\"category\",\"priority\",\"confidence\"],\"title\":\"TriageDecision\",\"type\":\"object\"},\"strict\":false},\"type\":\"json_schema\"},\"temperature\":0.0}",
+          "method": "POST",
+          "path": "/v1/chat/completions"
+        },
+        "response": {
+          "body": "{\"id\":\"chatcmpl-1\",\"object\":\"chat.completion\",\"model\":\"model-a-2026-01-15\",\"choices\":[{\"index\":0,\"finish_reason\":\"stop\",\"message\":{\"role\":\"assistant\",\"content\":\"{\\\"category\\\": \\\"pos_payments\\\", \\\"priority\\\": \\\"P1\\\", \\\"confidence\\\": 0.9, \\\"rationale\\\": \\\"all cards\\\"}\"}}],\"usage\":{\"prompt_tokens\":180,\"completion_tokens\":30,\"total_tokens\":210}}",
+          "headers": {
+            "content-type": "application/json"
+          },
+          "status": 200
+        }
+      }
+    ]
+  },
+  "version": 1
+}

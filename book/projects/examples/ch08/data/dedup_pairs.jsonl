@@ -1,0 +1,28 @@
+{"a": "Register 3 declines every card since opening, cash works", "b": "Card payments declined on register 3 since we opened, cash is fine", "dup": true, "kind": "reworded"}
+{"a": "VPN connects but I cannot reach the database bastion", "b": "Connected to VPN, still no route to the database bastion host", "dup": true, "kind": "reworded"}
+{"a": "Locked out of my account after too many password attempts", "b": "Account locked after several wrong password attempts", "dup": true, "kind": "reworded"}
+{"a": "Scanner keeps showing error SH-305 when receiving", "b": "Error SH-305 on the scanner during receiving again", "dup": true, "kind": "reworded"}
+{"a": "Expense claim rejected because the hotel was over the cap", "b": "Hotel over the nightly cap, my expense claim got rejected", "dup": true, "kind": "reworded"}
+{"a": "Laptop stolen from my car last night", "b": "My laptop was stolen from the car yesterday evening", "dup": true, "kind": "reworded"}
+{"a": "Returns API returning 429 too many requests constantly", "b": "Constant 429 responses from the returns API", "dup": true, "kind": "reworded"}
+{"a": "Webhook deliveries paused for client account 7731", "b": "Client account 7731 webhook deliveries are paused", "dup": true, "kind": "reworded"}
+{"a": "New phone, need to move my MFA", "b": "Got a new phone and need to set up multi factor authentication again", "dup": true, "kind": "reworded"}
+{"a": "Tracking lookups extremely slow this morning", "b": "Shipment tracking lookups are very slow today", "dup": true, "kind": "reworded"}
+{"a": "Price change not showing in store", "b": "Updated prices did not reach the register at the shop", "dup": true, "kind": "paraphrase"}
+{"a": "Cannot log in after holidays", "b": "Back from vacation and my credentials are refused", "dup": true, "kind": "paraphrase"}
+{"a": "Register 3 declines every card since opening", "b": "Register 3 printer driver crashed after the update", "dup": false, "kind": "hard_negative"}
+{"a": "VPN connects but I cannot reach the database bastion", "b": "VPN access ending while my contract is extended", "dup": false, "kind": "hard_negative"}
+{"a": "Locked out of my account after too many password attempts", "b": "Access removed after moving teams", "dup": false, "kind": "hard_negative"}
+{"a": "Scanner keeps showing error SH-305 when receiving", "b": "Scanner PIN rejected, cannot sign in", "dup": false, "kind": "hard_negative"}
+{"a": "Expense claim rejected because the hotel was over the cap", "b": "Expense submitted 35 days late, will it be paid", "dup": false, "kind": "hard_negative"}
+{"a": "Laptop stolen from my car last night", "b": "New hire laptop has not arrived, start is tomorrow", "dup": false, "kind": "hard_negative"}
+{"a": "Returns API returning 429 too many requests constantly", "b": "Returns API RET-002 error for a rewards member", "dup": false, "kind": "hard_negative"}
+{"a": "Webhook deliveries paused for client account 7731", "b": "Client wants 24 months of tracking history for account 7731", "dup": false, "kind": "hard_negative"}
+{"a": "PTO carryover shows 5 days but I thought it was 10", "b": "Can I take PTO during the quarter end blackout", "dup": false, "kind": "hard_negative"}
+{"a": "Tracking lookups extremely slow this morning", "b": "Invalid tracking ID for a label printed today", "dup": false, "kind": "hard_negative"}
+{"a": "Gift card not accepted at register", "b": "Refund went to gift card instead of original card", "dup": false, "kind": "hard_negative"}
+{"a": "Register 3 declines every card since opening", "b": "How many PTO days do I have left", "dup": false, "kind": "easy_negative"}
+{"a": "Laptop stolen from my car last night", "b": "Per diem for a day with a client dinner", "dup": false, "kind": "easy_negative"}
+{"a": "Webhook deliveries paused for client account 7731", "b": "Parental leave second block of 10 days", "dup": false, "kind": "easy_negative"}
+{"a": "Scanner keeps showing error SH-305 when receiving", "b": "Suspicious email asking me to approve a payment", "dup": false, "kind": "easy_negative"}
+{"a": "New phone, need to move my MFA", "b": "External monitor request for home office", "dup": false, "kind": "easy_negative"}

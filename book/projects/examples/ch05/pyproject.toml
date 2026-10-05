@@ -1,0 +1,20 @@
+[project]
+name = "ch05-context"
+version = "0.1.0"
+description = "Chapter 5: ContextBuilder, conversation compaction, cache-friendly layout, position experiment"
+requires-python = ">=3.11"
+dependencies = ["aie-core", "pydantic>=2.6"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[tool.uv.sources]
+aie-core = { path = "../../aie_core", editable = true }
+
+[tool.setuptools]
+packages = ["context", "context.experiments"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["integration: needs a real provider; skipped by default"]
+addopts = "-m 'not integration'"

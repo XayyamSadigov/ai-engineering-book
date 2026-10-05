@@ -1,0 +1,17 @@
+[project]
+name = "ch38-durable-agents"
+version = "0.1.0"
+description = "Chapter 38 examples: durable execution, interrupts, ledgers, coding harness, skills, voice gate"
+requires-python = ">=3.11"
+dependencies = ["aie-core", "agentkit", "toolkit", "pydantic>=2.6"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[tool.uv.sources]
+aie-core = { path = "../../aie_core", editable = true }
+agentkit = { path = "../../agentkit", editable = true }
+toolkit = { path = "../../toolkit", editable = true }
+
+[tool.pytest.ini_options]
+testpaths = ["."]

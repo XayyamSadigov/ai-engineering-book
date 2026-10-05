@@ -1,0 +1,2355 @@
+{
+  "run_id": "d87d81186316",
+  "created_at": "2026-10-05T06:30:47.961362Z",
+  "versions": {
+    "target": "northwind-classification",
+    "prompt": "classification@baseline",
+    "model": "fake-baseline",
+    "dataset": "northwind-classification@1#a126152c63ff",
+    "evaluators": {
+      "label_correct": "1"
+    },
+    "extra": {
+      "system": "baseline"
+    }
+  },
+  "dataset_name": "northwind-classification",
+  "dataset_version": "1",
+  "dataset_hash": "a126152c63ffe47b92019fe257e57c42b98463faf7bfc0a2ac8c34c70dc36b99",
+  "concurrency": 4,
+  "repeats": 1,
+  "wall_time_s": 0.11295845799759263,
+  "results": [
+    {
+      "case_id": "TCK-2026-0001",
+      "repeat": 0,
+      "output": {
+        "category": "pos_payments",
+        "confidence": 0.75
+      },
+      "error": null,
+      "error_type": null,
+      "latency_ms": 85.70120800141012,
+      "cost_usd": 0.0000925,
+      "input_tokens": 140,
+      "output_tokens": 15,
+      "trace_id": "05ddbeee81194dcf",
+      "scores": {
+        "label_correct": 1.0,
+        "label_valid": 1.0
+      },
+      "passed": {
+        "label_correct": true,
+        "label_valid": true
+      },
+      "details": {
+        "label_correct": {
+          "gold": "pos_payments",
+          "pred": "pos_payments",
+          "confidence": 0.75
+        }
+      },
+      "evaluator_errors": {},
+      "tags": [
+        "cat:pos_payments",
+        "tenant:retail",
+        "golden"
+      ],
+      "metadata": {}
+    },
+    {
+      "case_id": "TCK-2026-0002",
+      "repeat": 0,
+      "output": {
+        "category": "password_mfa",
+        "confidence": 0.95
+      },
+      "error": null,
+      "error_type": null,
+      "latency_ms": 84.49804100382607,
+      "cost_usd": 0.00008999999999999999,
+      "input_tokens": 132,
+      "output_tokens": 16,
+      "trace_id": "440d73b306744a38",
+      "scores": {
+        "label_correct": 1.0,
+        "label_valid": 1.0
+      },
+      "passed": {
+        "label_correct": true,
+        "label_valid": true
+      },
+      "details": {
+        "label_correct": {
+          "gold": "password_mfa",
+          "pred": "password_mfa",
+          "confidence": 0.95
+        }
+      },
+      "evaluator_errors": {},
+      "tags": [
+        "cat:password_mfa",
+        "tenant:shared",
+        "golden"
+      ],
+      "metadata": {}
+    },
+    {
+      "case_id": "TCK-2026-0003",
+      "repeat": 0,
+      "output": {
+        "category": "shipment_tracking",
+        "confidence": 0.75
+      },
+      "error": null,
+      "error_type": null,
+      "latency_ms": 83.88154199928977,
+      "cost_usd": 0.00008950000000000001,
+      "input_tokens": 134,
+      "output_tokens": 15,
+      "trace_id": "73cc2f4762114e48",
+      "scores": {
+        "label_correct": 0.0,
+        "label_valid": 1.0
+      },
+      "passed": {
+        "label_correct": false,
+        "label_valid": true
+      },
+      "details": {
+        "label_correct": {
+          "gold": "account_access",
+          "pred": "shipment_tracking",
+          "confidence": 0.75
+        }
+      },
+      "evaluator_errors": {},
+      "tags": [
+        "cat:account_access",
+        "tenant:logistics",
+        "golden"
+      ],
+      "metadata": {}
+    },
+    {
+      "case_id": "TCK-2026-0004",
+      "repeat": 0,
+      "output": {
+        "category": "vpn_network",
+        "confidence": 0.75
+      },
+      "error": null,
+      "error_type": null,
+      "latency_ms": 81.60133400087943,
+      "cost_usd": 0.0000705,
+      "input_tokens": 96,
+      "output_tokens": 15,
+      "trace_id": "c573f7a27b524e77",
+      "scores": {
+        "label_correct": 1.0,
+        "label_valid": 1.0
+      },
+      "passed": {
+        "label_correct": true,
+        "label_valid": true
+      },
+      "details": {
+        "label_correct": {
+          "gold": "vpn_network",
+          "pred": "vpn_network",
+          "confidence": 0.75
+        }
+      },
+      "evaluator_errors": {},
+      "tags": [
+        "cat:vpn_network",
+        "tenant:shared",
+        "golden"
+      ],
+      "metadata": {}
+    },
+    {
+      "case_id": "TCK-2026-0005",
+      "repeat": 0,
+      "output": {
+        "category": "time_off",
+        "confidence": 0.75
+      },
+      "error": null,
+      "error_type": null,
+      "latency_ms": 1.695332997769583,
+      "cost_usd": 0.0000945,
+      "input_tokens": 144,
+      "output_tokens": 15,
+      "trace_id": "f1f769d6d95345fe",
+      "scores": {
+        "label_correct": 1.0,
+        "label_valid": 1.0
+      },
+      "passed": {
+        "label_correct": true,
+        "label_valid": true
+      },
+      "details": {
+        "label_correct": {
+          "gold": "time_off",
+          "pred": "time_off",
+          "confidence": 0.75
+        }
+      },
+      "evaluator_errors": {},
+      "tags": [
+        "cat:time_off",
+        "tenant:shared",
+        "golden"
+      ],
+      "metadata": {}
+    },
+    {
+      "case_id": "TCK-2026-0006",
+      "repeat": 0,
+      "output": {
+        "category": "expenses_travel",
+        "confidence": 0.95
+      },
+      "error": null,
+      "error_type": null,
+      "latency_ms": 1.2954589983564802,
+      "cost_usd": 0.0000935,
+      "input_tokens": 142,
+      "output_tokens": 15,
+      "trace_id": "5d0dcbc1d5344c51",
+      "scores": {
+        "label_correct": 1.0,
+        "label_valid": 1.0
+      },
+      "passed": {
+        "label_correct": true,
+        "label_valid": true
+      },
+      "details": {
+        "label_correct": {
+          "gold": "expenses_travel",
+          "pred": "expenses_travel",
+          "confidence": 0.95
+        }
+      },
+      "evaluator_errors": {},
+      "tags": [
+        "cat:expenses_travel",
+        "tenant:shared",
+        "golden"
+      ],
+      "metadata": {}
+    },
+    {
+      "case_id": "TCK-2026-0007",
+      "repeat": 0,
+      "output": {
+        "category": "warehouse_scanner",
+        "confidence": 0.95
+      },
+      "error": null,
+      "error_type": null,
+      "latency_ms": 1.9025000001420267,
+      "cost_usd": 0.00008549999999999999,
+      "input_tokens": 123,
+      "output_tokens": 16,
+      "trace_id": "82ea4830123542ee",
+      "scores": {
+        "label_correct": 1.0,
+        "label_valid": 1.0
+      },
+      "passed": {
+        "label_correct": true,
+        "label_valid": true
+      },
+      "details": {
+        "label_correct": {
+          "gold": "warehouse_scanner",
+          "pred": "warehouse_scanner",
+          "confidence": 0.95
+        }
+      },
+      "evaluator_errors": {},
+      "tags": [
+        "cat:warehouse_scanner",
+        "tenant:logistics",
+        "golden"
+      ],
+      "metadata": {}
+    },
+    {
+      "case_id": "TCK-2026-0008",
+      "repeat": 0,
+      "output": {
+        "category": "returns",
+        "confidence": 0.95
+      },
+      "error": null,
+      "error_type": null,
+      "latency_ms": 1.2420829953043722,
+      "cost_usd": 0.0001015,
+      "input_tokens": 161,
+      "output_tokens": 14,
+      "trace_id": "73b9773706e94542",
+      "scores": {
+        "label_correct": 1.0,
+        "label_valid": 1.0
+      },
+      "passed": {
+        "label_correct": true,
+        "label_valid": true
+      },
+      "details": {
+        "label_correct": {
+          "gold": "returns",
+          "pred": "returns",
+          "confidence": 0.95
+        }
+      },
+      "evaluator_errors": {},
+      "tags": [
+        "cat:returns",
+        "tenant:retail",
+        "golden"
+      ],
+      "metadata": {}
+    },
+    {
+      "case_id": "TCK-2026-0009",
+      "repeat": 0,
+      "output": {
+        "category": "account_access",
+        "confidence": 0.75
+      },
+      "error": null,
+      "error_type": null,
+      "latency_ms": 1.4974169971537776,
+      "cost_usd": 0.0000865,
+      "input_tokens": 128,
+      "output_tokens": 15,
+      "trace_id": "e4dc1f55f97c4cb5",
+      "scores": {
+        "label_correct": 1.0,
+        "label_valid": 1.0
+      },
+      "passed": {
+        "label_correct": true,
+        "label_valid": true
+      },
+      "details": {
+        "label_correct": {
+          "gold": "account_access",
+          "pred": "account_access",
+          "confidence": 0.75
+        }
+      },
+      "evaluator_errors": {},
+      "tags": [
+        "cat:account_access",
+        "tenant:shared",
+        "golden"
+      ],
+      "metadata": {}
+    },
+    {
+      "case_id": "TCK-2026-0010",
+      "repeat": 0,
+      "output": {
+        "category": "shipment_tracking",
+        "confidence": 0.95
+      },
+      "error": null,
+      "error_type": null,
+      "latency_ms": 1.814750001358334,
+      "cost_usd": 0.000096,
+      "input_tokens": 147,
+      "output_tokens": 15,
+      "trace_id": "c1d3ad77aa26417c",
+      "scores": {
+        "label_correct": 1.0,
+        "label_valid": 1.0
+      },
+      "passed": {
+        "label_correct": true,
+        "label_valid": true
+      },
+      "details": {
+        "label_correct": {
+          "gold": "shipment_tracking",
+          "pred": "shipment_tracking",
+          "confidence": 0.95
+        }
+      },
+      "evaluator_errors": {},
+      "tags": [
+        "cat:shipment_tracking",
+        "tenant:logistics",
+        "golden"
+      ],
+      "metadata": {}
+    },
+    {
+      "case_id": "TCK-2026-0011",
+      "repeat": 0,
+      "output": {
+        "category": "hardware",
+        "confidence": 0.95
+      },
+      "error": null,
+      "error_type": null,
+      "latency_ms": 1.3849160022800788,
+      "cost_usd": 0.0000825,
+      "input_tokens": 123,
+      "output_tokens": 14,
+      "trace_id": "0627b6ded5764f0b",
+      "scores": {
+        "label_correct": 1.0,
+        "label_valid": 1.0
+      },
+      "passed": {
+        "label_correct": true,
+        "label_valid": true
+      },
+      "details": {
+        "label_correct": {
+          "gold": "hardware",
+          "pred": "hardware",
+          "confidence": 0.95
+        }
+      },
+      "evaluator_errors": {},
+      "tags": [
+        "cat:hardware",
+        "tenant:shared",
+        "golden"
+      ],
+      "metadata": {}
+    },
+    {
+      "case_id": "TCK-2026-0012",
+      "repeat": 0,
+      "output": {
+        "category": "security_report",
+        "confidence": 0.75
+      },
+      "error": null,
+      "error_type": null,
+      "latency_ms": 0.7748329953756183,
+      "cost_usd": 0.0000945,
+      "input_tokens": 144,
+      "output_tokens": 15,
+      "trace_id": "5d84c1b44d694fc5",
+      "scores": {
+        "label_correct": 1.0,
+        "label_valid": 1.0
+      },
+      "passed": {
+        "label_correct": true,
+        "label_valid": true
+      },
+      "details": {
+        "label_correct": {
+          "gold": "security_report",
+          "pred": "security_report",
+          "confidence": 0.75
+        }
+      },
+      "evaluator_errors": {},
+      "tags": [
+        "cat:security_report",
+        "tenant:shared",
+        "golden"
+      ],
+      "metadata": {}
+    },
+    {
+      "case_id": "TCK-2026-0013",
+      "repeat": 0,
+      "output": {
+        "category": "benefits_leave",
+        "confidence": 0.75
+      },
+      "error": null,
+      "error_type": null,
+      "latency_ms": 1.0469999979250133,
+      "cost_usd": 0.0000915,
+      "input_tokens": 135,
+      "output_tokens": 16,
+      "trace_id": "b8196c946655435a",
+      "scores": {
+        "label_correct": 1.0,
+        "label_valid": 1.0
+      },
+      "passed": {
+        "label_correct": true,
+        "label_valid": true
+      },
+      "details": {
+        "label_correct": {
+          "gold": "benefits_leave",
+          "pred": "benefits_leave",
+          "confidence": 0.75
+        }
+      },
+      "evaluator_errors": {},
+      "tags": [
+        "cat:benefits_leave",
+        "tenant:shared",
+        "golden"
+      ],
+      "metadata": {}
+    },
+    {
+      "case_id": "TCK-2026-0014",
+      "repeat": 0,
+      "output": {
+        "category": "pos_payments",
+        "confidence": 0.95
+      },
+      "error": null,
+      "error_type": null,
+      "latency_ms": 0.6809170008637011,
+      "cost_usd": 0.00008900000000000001,
+      "input_tokens": 133,
+      "output_tokens": 15,
+      "trace_id": "8d29747bd5924e92",
+      "scores": {
+        "label_correct": 1.0,
+        "label_valid": 1.0
+      },
+      "passed": {
+        "label_correct": true,
+        "label_valid": true
+      },
+      "details": {
+        "label_correct": {
+          "gold": "pos_payments",
+          "pred": "pos_payments",
+          "confidence": 0.95
+        }
+      },
+      "evaluator_errors": {},
+      "tags": [
+        "cat:pos_payments",
+        "tenant:retail",
+        "golden"
+      ],
+      "metadata": {}
+    },
+    {
+      "case_id": "TCK-2026-0015",
+      "repeat": 0,
+      "output": {
+        "category": "expenses_travel",
+        "confidence": 0.75
+      },
+      "error": null,
+      "error_type": null,
+      "latency_ms": 0.8853330000420101,
+      "cost_usd": 0.0000775,
+      "input_tokens": 110,
+      "output_tokens": 15,
+      "trace_id": "1a7ff91f04804ecc",
+      "scores": {
+        "label_correct": 1.0,
+        "label_valid": 1.0
+      },
+      "passed": {
+        "label_correct": true,
+        "label_valid": true
+      },
+      "details": {
+        "label_correct": {
+          "gold": "expenses_travel",
+          "pred": "expenses_travel",
+          "confidence": 0.75
+        }
+      },
+      "evaluator_errors": {},
+      "tags": [
+        "cat:expenses_travel",
+        "tenant:shared",
+        "golden"
+      ],
+      "metadata": {}
+    },
+    {
+      "case_id": "TCK-2026-0016",
+      "repeat": 0,
+      "output": {
+        "category": "shipment_tracking",
+        "confidence": 0.75
+      },
+      "error": null,
+      "error_type": null,
+      "latency_ms": 1.1369999992894009,
+      "cost_usd": 0.000086,
+      "input_tokens": 127,
+      "output_tokens": 15,
+      "trace_id": "7340e578443d4e81",
+      "scores": {
+        "label_correct": 1.0,
+        "label_valid": 1.0
+      },
+      "passed": {
+        "label_correct": true,
+        "label_valid": true
+      },
+      "details": {
+        "label_correct": {
+          "gold": "shipment_tracking",
+          "pred": "shipment_tracking",
+          "confidence": 0.75
+        }
+      },
+      "evaluator_errors": {},
+      "tags": [
+        "cat:shipment_tracking",
+        "tenant:logistics",
+        "golden"
+      ],
+      "metadata": {}
+    },
+    {
+      "case_id": "TCK-2026-0017",
+      "repeat": 0,
+      "output": {
+        "category": "account_access",
+        "confidence": 0.75
+      },
+      "error": null,
+      "error_type": null,
+      "latency_ms": 0.6531660037580878,
+      "cost_usd": 0.00008450000000000001,
+      "input_tokens": 124,
+      "output_tokens": 15,
+      "trace_id": "4022c60cdf514997",
+      "scores": {
+        "label_correct": 1.0,
+        "label_valid": 1.0
+      },
+      "passed": {
+        "label_correct": true,
+        "label_valid": true
+      },
+      "details": {
+        "label_correct": {
+          "gold": "account_access",
+          "pred": "account_access",
+          "confidence": 0.75
+        }
+      },
+      "evaluator_errors": {},
+      "tags": [
+        "cat:account_access",
+        "tenant:shared",
+        "golden"
+      ],
+      "metadata": {}
+    },
+    {
+      "case_id": "TCK-2026-0018",
+      "repeat": 0,
+      "output": {
+        "category": "password_mfa",
+        "confidence": 0.95
+      },
+      "error": null,
+      "error_type": null,
+      "latency_ms": 0.8299999972223304,
+      "cost_usd": 0.00007950000000000001,
+      "input_tokens": 111,
+      "output_tokens": 16,
+      "trace_id": "e27f397320284a0a",
+      "scores": {
+        "label_correct": 1.0,
+        "label_valid": 1.0
+      },
+      "passed": {
+        "label_correct": true,
+        "label_valid": true
+      },
+      "details": {
+        "label_correct": {
+          "gold": "password_mfa",
+          "pred": "password_mfa",
+          "confidence": 0.95
+        }
+      },
+      "evaluator_errors": {},
+      "tags": [
+        "cat:password_mfa",
+        "tenant:shared",
+        "golden"
+      ],
+      "metadata": {}
+    },
+    {
+      "case_id": "TCK-2026-0019",
+      "repeat": 0,
+      "output": {
+        "category": "returns",
+        "confidence": 0.95
+      },
+      "error": null,
+      "error_type": null,
+      "latency_ms": 1.4102909990469925,
+      "cost_usd": 0.0000805,
+      "input_tokens": 119,
+      "output_tokens": 14,
+      "trace_id": "00ebf856ade24838",
+      "scores": {
+        "label_correct": 1.0,
+        "label_valid": 1.0
+      },
+      "passed": {
+        "label_correct": true,
+        "label_valid": true
+      },
+      "details": {
+        "label_correct": {
+          "gold": "returns",
+          "pred": "returns",
+          "confidence": 0.95
+        }
+      },
+      "evaluator_errors": {},
+      "tags": [
+        "cat:returns",
+        "tenant:retail",
+        "golden"
+      ],
+      "metadata": {}
+    },
+    {
+      "case_id": "TCK-2026-0020",
+      "repeat": 0,
+      "output": {
+        "category": "warehouse_scanner",
+        "confidence": 0.75
+      },
+      "error": null,
+      "error_type": null,
+      "latency_ms": 1.1224169938941486,
+      "cost_usd": 0.00008999999999999999,
+      "input_tokens": 132,
+      "output_tokens": 16,
+      "trace_id": "b2ad8179e8f747f0",
+      "scores": {
+        "label_correct": 1.0,
+        "label_valid": 1.0
+      },
+      "passed": {
+        "label_correct": true,
+        "label_valid": true
+      },
+      "details": {
+        "label_correct": {
+          "gold": "warehouse_scanner",
+          "pred": "warehouse_scanner",
+          "confidence": 0.75
+        }
+      },
+      "evaluator_errors": {},
+      "tags": [
+        "cat:warehouse_scanner",
+        "tenant:logistics",
+        "golden"
+      ],
+      "metadata": {}
+    },
+    {
+      "case_id": "TCK-2026-0021",
+      "repeat": 0,
+      "output": {
+        "category": "account_access",
+        "confidence": 0.75
+      },
+      "error": null,
+      "error_type": null,
+      "latency_ms": 2.4407919991062954,
+      "cost_usd": 0.0000785,
+      "input_tokens": 112,
+      "output_tokens": 15,
+      "trace_id": "5dc3cfcfc50840e6",
+      "scores": {
+        "label_correct": 1.0,
+        "label_valid": 1.0
+      },
+      "passed": {
+        "label_correct": true,
+        "label_valid": true
+      },
+      "details": {
+        "label_correct": {
+          "gold": "account_access",
+          "pred": "account_access",
+          "confidence": 0.75
+        }
+      },
+      "evaluator_errors": {},
+      "tags": [
+        "cat:account_access",
+        "tenant:shared",
+        "golden"
+      ],
+      "metadata": {}
+    },
+    {
+      "case_id": "TCK-2026-0022",
+      "repeat": 0,
+      "output": {
+        "category": "expenses_travel",
+        "confidence": 0.75
+      },
+      "error": null,
+      "error_type": null,
+      "latency_ms": 1.2296669956413098,
+      "cost_usd": 0.000085,
+      "input_tokens": 125,
+      "output_tokens": 15,
+      "trace_id": "1ee9a5d05d414eab",
+      "scores": {
+        "label_correct": 1.0,
+        "label_valid": 1.0
+      },
+      "passed": {
+        "label_correct": true,
+        "label_valid": true
+      },
+      "details": {
+        "label_correct": {
+          "gold": "expenses_travel",
+          "pred": "expenses_travel",
+          "confidence": 0.75
+        }
+      },
+      "evaluator_errors": {},
+      "tags": [
+        "cat:expenses_travel",
+        "tenant:shared",
+        "golden"
+      ],
+      "metadata": {}
+    },
+    {
+      "case_id": "TCK-2026-0023",
+      "repeat": 0,
+      "output": {
+        "category": "password_mfa",
+        "confidence": 0.75
+      },
+      "error": null,
+      "error_type": null,
+      "latency_ms": 1.0134159965673462,
+      "cost_usd": 0.0000825,
+      "input_tokens": 117,
+      "output_tokens": 16,
+      "trace_id": "fa648f425cfc4c6b",
+      "scores": {
+        "label_correct": 0.0,
+        "label_valid": 1.0
+      },
+      "passed": {
+        "label_correct": false,
+        "label_valid": true
+      },
+      "details": {
+        "label_correct": {
+          "gold": "hardware",
+          "pred": "password_mfa",
+          "confidence": 0.75
+        }
+      },
+      "evaluator_errors": {},
+      "tags": [
+        "cat:hardware",
+        "tenant:shared",
+        "golden"
+      ],
+      "metadata": {}
+    },
+    {
+      "case_id": "TCK-2026-0024",
+      "repeat": 0,
+      "output": {
+        "category": "shipment_tracking",
+        "confidence": 0.75
+      },
+      "error": null,
+      "error_type": null,
+      "latency_ms": 1.643167001020629,
+      "cost_usd": 0.000088,
+      "input_tokens": 131,
+      "output_tokens": 15,
+      "trace_id": "a8c4abcbc66c4825",
+      "scores": {
+        "label_correct": 1.0,
+        "label_valid": 1.0
+      },
+      "passed": {
+        "label_correct": true,
+        "label_valid": true
+      },
+      "details": {
+        "label_correct": {
+          "gold": "shipment_tracking",
+          "pred": "shipment_tracking",
+          "confidence": 0.75
+        }
+      },
+      "evaluator_errors": {},
+      "tags": [
+        "cat:shipment_tracking",
+        "tenant:logistics",
+        "golden"
+      ],
+      "metadata": {}
+    },
+    {
+      "case_id": "TCK-2026-0025",
+      "repeat": 0,
+      "output": {
+        "category": "vpn_network",
+        "confidence": 0.75
+      },
+      "error": null,
+      "error_type": null,
+      "latency_ms": 1.000750002276618,
+      "cost_usd": 0.0000835,
+      "input_tokens": 122,
+      "output_tokens": 15,
+      "trace_id": "1a8a397c9b624a14",
+      "scores": {
+        "label_correct": 1.0,
+        "label_valid": 1.0
+      },
+      "passed": {
+        "label_correct": true,
+        "label_valid": true
+      },
+      "details": {
+        "label_correct": {
+          "gold": "vpn_network",
+          "pred": "vpn_network",
+          "confidence": 0.75
+        }
+      },
+      "evaluator_errors": {},
+      "tags": [
+        "cat:vpn_network",
+        "tenant:shared",
+        "golden"
+      ],
+      "metadata": {}
+    },
+    {
+      "case_id": "TCK-2026-0026",
+      "repeat": 0,
+      "output": {
+        "category": "security_report",
+        "confidence": 0.75
+      },
+      "error": null,
+      "error_type": null,
+      "latency_ms": 0.6482499957201071,
+      "cost_usd": 0.000085,
+      "input_tokens": 125,
+      "output_tokens": 15,
+      "trace_id": "e28b59c11c274a33",
+      "scores": {
+        "label_correct": 1.0,
+        "label_valid": 1.0
+      },
+      "passed": {
+        "label_correct": true,
+        "label_valid": true
+      },
+      "details": {
+        "label_correct": {
+          "gold": "security_report",
+          "pred": "security_report",
+          "confidence": 0.75
+        }
+      },
+      "evaluator_errors": {},
+      "tags": [
+        "cat:security_report",
+        "tenant:shared",
+        "golden"
+      ],
+      "metadata": {}
+    },
+    {
+      "case_id": "TCK-2026-0027",
+      "repeat": 0,
+      "output": {
+        "category": "time_off",
+        "confidence": 0.75
+      },
+      "error": null,
+      "error_type": null,
+      "latency_ms": 9.776832994248252,
+      "cost_usd": 0.0000815,
+      "input_tokens": 118,
+      "output_tokens": 15,
+      "trace_id": "997f0110fe4b44f0",
+      "scores": {
+        "label_correct": 1.0,
+        "label_valid": 1.0
+      },
+      "passed": {
+        "label_correct": true,
+        "label_valid": true
+      },
+      "details": {
+        "label_correct": {
+          "gold": "time_off",
+          "pred": "time_off",
+          "confidence": 0.75
+        }
+      },
+      "evaluator_errors": {},
+      "tags": [
+        "cat:time_off",
+        "tenant:shared",
+        "golden"
+      ],
+      "metadata": {}
+    },
+    {
+      "case_id": "TCK-2026-0028",
+      "repeat": 0,
+      "output": {
+        "category": "shipment_tracking",
+        "confidence": 0.75
+      },
+      "error": null,
+      "error_type": null,
+      "latency_ms": 10.294457999407314,
+      "cost_usd": 0.0000795,
+      "input_tokens": 114,
+      "output_tokens": 15,
+      "trace_id": "8c45cf16f1714cb6",
+      "scores": {
+        "label_correct": 1.0,
+        "label_valid": 1.0
+      },
+      "passed": {
+        "label_correct": true,
+        "label_valid": true
+      },
+      "details": {
+        "label_correct": {
+          "gold": "shipment_tracking",
+          "pred": "shipment_tracking",
+          "confidence": 0.75
+        }
+      },
+      "evaluator_errors": {},
+      "tags": [
+        "cat:shipment_tracking",
+        "tenant:logistics",
+        "golden"
+      ],
+      "metadata": {}
+    },
+    {
+      "case_id": "TCK-2026-0029",
+      "repeat": 0,
+      "output": {
+        "category": "pos_payments",
+        "confidence": 0.75
+      },
+      "error": null,
+      "error_type": null,
+      "latency_ms": 9.827540998230688,
+      "cost_usd": 0.000082,
+      "input_tokens": 119,
+      "output_tokens": 15,
+      "trace_id": "3074e0399a69484e",
+      "scores": {
+        "label_correct": 1.0,
+        "label_valid": 1.0
+      },
+      "passed": {
+        "label_correct": true,
+        "label_valid": true
+      },
+      "details": {
+        "label_correct": {
+          "gold": "pos_payments",
+          "pred": "pos_payments",
+          "confidence": 0.75
+        }
+      },
+      "evaluator_errors": {},
+      "tags": [
+        "cat:pos_payments",
+        "tenant:retail",
+        "golden"
+      ],
+      "metadata": {}
+    },
+    {
+      "case_id": "TCK-2026-0030",
+      "repeat": 0,
+      "output": {
+        "category": "password_mfa",
+        "confidence": 0.75
+      },
+      "error": null,
+      "error_type": null,
+      "latency_ms": 10.186082996369805,
+      "cost_usd": 0.0000735,
+      "input_tokens": 99,
+      "output_tokens": 16,
+      "trace_id": "49f4bc3ff6154783",
+      "scores": {
+        "label_correct": 1.0,
+        "label_valid": 1.0
+      },
+      "passed": {
+        "label_correct": true,
+        "label_valid": true
+      },
+      "details": {
+        "label_correct": {
+          "gold": "password_mfa",
+          "pred": "password_mfa",
+          "confidence": 0.75
+        }
+      },
+      "evaluator_errors": {},
+      "tags": [
+        "cat:password_mfa",
+        "tenant:shared",
+        "golden"
+      ],
+      "metadata": {}
+    },
+    {
+      "case_id": "TCK-2026-0031",
+      "repeat": 0,
+      "output": {
+        "category": "expenses_travel",
+        "confidence": 0.95
+      },
+      "error": null,
+      "error_type": null,
+      "latency_ms": 1.4939160028006881,
+      "cost_usd": 0.0000835,
+      "input_tokens": 122,
+      "output_tokens": 15,
+      "trace_id": "daa567dec27844fe",
+      "scores": {
+        "label_correct": 1.0,
+        "label_valid": 1.0
+      },
+      "passed": {
+        "label_correct": true,
+        "label_valid": true
+      },
+      "details": {
+        "label_correct": {
+          "gold": "expenses_travel",
+          "pred": "expenses_travel",
+          "confidence": 0.95
+        }
+      },
+      "evaluator_errors": {},
+      "tags": [
+        "cat:expenses_travel",
+        "tenant:shared",
+        "golden"
+      ],
+      "metadata": {}
+    },
+    {
+      "case_id": "TCK-2026-0032",
+      "repeat": 0,
+      "output": {
+        "category": "warehouse_scanner",
+        "confidence": 0.75
+      },
+      "error": null,
+      "error_type": null,
+      "latency_ms": 1.253292000910733,
+      "cost_usd": 0.00007950000000000001,
+      "input_tokens": 111,
+      "output_tokens": 16,
+      "trace_id": "a97bfcad7c804d4b",
+      "scores": {
+        "label_correct": 1.0,
+        "label_valid": 1.0
+      },
+      "passed": {
+        "label_correct": true,
+        "label_valid": true
+      },
+      "details": {
+        "label_correct": {
+          "gold": "warehouse_scanner",
+          "pred": "warehouse_scanner",
+          "confidence": 0.75
+        }
+      },
+      "evaluator_errors": {},
+      "tags": [
+        "cat:warehouse_scanner",
+        "tenant:logistics",
+        "golden"
+      ],
+      "metadata": {}
+    },
+    {
+      "case_id": "TCK-2026-0033",
+      "repeat": 0,
+      "output": {
+        "category": "hardware",
+        "confidence": 0.75
+      },
+      "error": null,
+      "error_type": null,
+      "latency_ms": 1.6899580004974268,
+      "cost_usd": 0.0000825,
+      "input_tokens": 123,
+      "output_tokens": 14,
+      "trace_id": "f8d76618e1f546be",
+      "scores": {
+        "label_correct": 1.0,
+        "label_valid": 1.0
+      },
+      "passed": {
+        "label_correct": true,
+        "label_valid": true
+      },
+      "details": {
+        "label_correct": {
+          "gold": "hardware",
+          "pred": "hardware",
+          "confidence": 0.75
+        }
+      },
+      "evaluator_errors": {},
+      "tags": [
+        "cat:hardware",
+        "tenant:shared",
+        "golden"
+      ],
+      "metadata": {}
+    },
+    {
+      "case_id": "TCK-2026-0034",
+      "repeat": 0,
+      "output": {
+        "category": "returns",
+        "confidence": 0.95
+      },
+      "error": null,
+      "error_type": null,
+      "latency_ms": 0.7816670040483586,
+      "cost_usd": 0.0000815,
+      "input_tokens": 121,
+      "output_tokens": 14,
+      "trace_id": "f17ff15f30424090",
+      "scores": {
+        "label_correct": 1.0,
+        "label_valid": 1.0
+      },
+      "passed": {
+        "label_correct": true,
+        "label_valid": true
+      },
+      "details": {
+        "label_correct": {
+          "gold": "returns",
+          "pred": "returns",
+          "confidence": 0.95
+        }
+      },
+      "evaluator_errors": {},
+      "tags": [
+        "cat:returns",
+        "tenant:retail",
+        "golden"
+      ],
+      "metadata": {}
+    },
+    {
+      "case_id": "TCK-2026-0035",
+      "repeat": 0,
+      "output": {
+        "category": "time_off",
+        "confidence": 0.75
+      },
+      "error": null,
+      "error_type": null,
+      "latency_ms": 1.3899169935029931,
+      "cost_usd": 0.0000765,
+      "input_tokens": 108,
+      "output_tokens": 15,
+      "trace_id": "6c42f99475d0473f",
+      "scores": {
+        "label_correct": 1.0,
+        "label_valid": 1.0
+      },
+      "passed": {
+        "label_correct": true,
+        "label_valid": true
+      },
+      "details": {
+        "label_correct": {
+          "gold": "time_off",
+          "pred": "time_off",
+          "confidence": 0.75
+        }
+      },
+      "evaluator_errors": {},
+      "tags": [
+        "cat:time_off",
+        "tenant:shared",
+        "golden"
+      ],
+      "metadata": {}
+    },
+    {
+      "case_id": "TCK-2026-0036",
+      "repeat": 0,
+      "output": {
+        "category": "security_report",
+        "confidence": 0.75
+      },
+      "error": null,
+      "error_type": null,
+      "latency_ms": 1.254707996849902,
+      "cost_usd": 0.000091,
+      "input_tokens": 137,
+      "output_tokens": 15,
+      "trace_id": "f81ba3a9ff294982",
+      "scores": {
+        "label_correct": 1.0,
+        "label_valid": 1.0
+      },
+      "passed": {
+        "label_correct": true,
+        "label_valid": true
+      },
+      "details": {
+        "label_correct": {
+          "gold": "security_report",
+          "pred": "security_report",
+          "confidence": 0.75
+        }
+      },
+      "evaluator_errors": {},
+      "tags": [
+        "cat:security_report",
+        "tenant:shared",
+        "golden"
+      ],
+      "metadata": {}
+    },
+    {
+      "case_id": "TCK-2026-0037",
+      "repeat": 0,
+      "output": {
+        "category": "returns",
+        "confidence": 0.75
+      },
+      "error": null,
+      "error_type": null,
+      "latency_ms": 0.8634590049041435,
+      "cost_usd": 0.000078,
+      "input_tokens": 114,
+      "output_tokens": 14,
+      "trace_id": "3ab608738df44527",
+      "scores": {
+        "label_correct": 0.0,
+        "label_valid": 1.0
+      },
+      "passed": {
+        "label_correct": false,
+        "label_valid": true
+      },
+      "details": {
+        "label_correct": {
+          "gold": "shipment_tracking",
+          "pred": "returns",
+          "confidence": 0.75
+        }
+      },
+      "evaluator_errors": {},
+      "tags": [
+        "cat:shipment_tracking",
+        "tenant:logistics",
+        "golden"
+      ],
+      "metadata": {}
+    },
+    {
+      "case_id": "TCK-2026-0038",
+      "repeat": 0,
+      "output": {
+        "category": "account_access",
+        "confidence": 0.75
+      },
+      "error": null,
+      "error_type": null,
+      "latency_ms": 1.4963749999878928,
+      "cost_usd": 0.0000755,
+      "input_tokens": 106,
+      "output_tokens": 15,
+      "trace_id": "9f70c3d0cc5444a9",
+      "scores": {
+        "label_correct": 1.0,
+        "label_valid": 1.0
+      },
+      "passed": {
+        "label_correct": true,
+        "label_valid": true
+      },
+      "details": {
+        "label_correct": {
+          "gold": "account_access",
+          "pred": "account_access",
+          "confidence": 0.75
+        }
+      },
+      "evaluator_errors": {},
+      "tags": [
+        "cat:account_access",
+        "tenant:shared",
+        "golden"
+      ],
+      "metadata": {}
+    },
+    {
+      "case_id": "TCK-2026-0039",
+      "repeat": 0,
+      "output": {
+        "category": "vpn_network",
+        "confidence": 0.75
+      },
+      "error": null,
+      "error_type": null,
+      "latency_ms": 0.8261670009233057,
+      "cost_usd": 0.0000705,
+      "input_tokens": 96,
+      "output_tokens": 15,
+      "trace_id": "c2cbab3cde414161",
+      "scores": {
+        "label_correct": 1.0,
+        "label_valid": 1.0
+      },
+      "passed": {
+        "label_correct": true,
+        "label_valid": true
+      },
+      "details": {
+        "label_correct": {
+          "gold": "vpn_network",
+          "pred": "vpn_network",
+          "confidence": 0.75
+        }
+      },
+      "evaluator_errors": {},
+      "tags": [
+        "cat:vpn_network",
+        "tenant:shared",
+        "golden"
+      ],
+      "metadata": {}
+    },
+    {
+      "case_id": "TCK-2026-0040",
+      "repeat": 0,
+      "output": {
+        "category": "expenses_travel",
+        "confidence": 0.95
+      },
+      "error": null,
+      "error_type": null,
+      "latency_ms": 1.3684170044143684,
+      "cost_usd": 0.000081,
+      "input_tokens": 117,
+      "output_tokens": 15,
+      "trace_id": "8f48e1ab42454784",
+      "scores": {
+        "label_correct": 1.0,
+        "label_valid": 1.0
+      },
+      "passed": {
+        "label_correct": true,
+        "label_valid": true
+      },
+      "details": {
+        "label_correct": {
+          "gold": "expenses_travel",
+          "pred": "expenses_travel",
+          "confidence": 0.95
+        }
+      },
+      "evaluator_errors": {},
+      "tags": [
+        "cat:expenses_travel",
+        "tenant:shared",
+        "golden"
+      ],
+      "metadata": {}
+    },
+    {
+      "case_id": "TCK-2026-0041",
+      "repeat": 0,
+      "output": {
+        "category": "pos_payments",
+        "confidence": 0.75
+      },
+      "error": null,
+      "error_type": null,
+      "latency_ms": 1.0352499957662076,
+      "cost_usd": 0.0000735,
+      "input_tokens": 102,
+      "output_tokens": 15,
+      "trace_id": "e1011aa594094578",
+      "scores": {
+        "label_correct": 1.0,
+        "label_valid": 1.0
+      },
+      "passed": {
+        "label_correct": true,
+        "label_valid": true
+      },
+      "details": {
+        "label_correct": {
+          "gold": "pos_payments",
+          "pred": "pos_payments",
+          "confidence": 0.75
+        }
+      },
+      "evaluator_errors": {},
+      "tags": [
+        "cat:pos_payments",
+        "tenant:retail",
+        "golden"
+      ],
+      "metadata": {}
+    },
+    {
+      "case_id": "TCK-2026-0042",
+      "repeat": 0,
+      "output": {
+        "category": "benefits_leave",
+        "confidence": 0.75
+      },
+      "error": null,
+      "error_type": null,
+      "latency_ms": 1.596334004716482,
+      "cost_usd": 0.0000885,
+      "input_tokens": 129,
+      "output_tokens": 16,
+      "trace_id": "472633a23fd54eb5",
+      "scores": {
+        "label_correct": 1.0,
+        "label_valid": 1.0
+      },
+      "passed": {
+        "label_correct": true,
+        "label_valid": true
+      },
+      "details": {
+        "label_correct": {
+          "gold": "benefits_leave",
+          "pred": "benefits_leave",
+          "confidence": 0.75
+        }
+      },
+      "evaluator_errors": {},
+      "tags": [
+        "cat:benefits_leave",
+        "tenant:shared",
+        "golden"
+      ],
+      "metadata": {}
+    },
+    {
+      "case_id": "TCK-2026-0043",
+      "repeat": 0,
+      "output": {
+        "category": "account_access",
+        "confidence": 0.3
+      },
+      "error": null,
+      "error_type": null,
+      "latency_ms": 0.6892500023241155,
+      "cost_usd": 0.0000885,
+      "input_tokens": 132,
+      "output_tokens": 15,
+      "trace_id": "64243dcb19f94262",
+      "scores": {
+        "label_correct": 1.0,
+        "label_valid": 1.0
+      },
+      "passed": {
+        "label_correct": true,
+        "label_valid": true
+      },
+      "details": {
+        "label_correct": {
+          "gold": "account_access",
+          "pred": "account_access",
+          "confidence": 0.3
+        }
+      },
+      "evaluator_errors": {},
+      "tags": [
+        "cat:account_access",
+        "tenant:shared",
+        "golden"
+      ],
+      "metadata": {}
+    },
+    {
+      "case_id": "TCK-2026-0044",
+      "repeat": 0,
+      "output": {
+        "category": "warehouse_scanner",
+        "confidence": 0.95
+      },
+      "error": null,
+      "error_type": null,
+      "latency_ms": 1.0050839991890825,
+      "cost_usd": 0.0000825,
+      "input_tokens": 117,
+      "output_tokens": 16,
+      "trace_id": "9a9343fc9d444131",
+      "scores": {
+        "label_correct": 1.0,
+        "label_valid": 1.0
+      },
+      "passed": {
+        "label_correct": true,
+        "label_valid": true
+      },
+      "details": {
+        "label_correct": {
+          "gold": "warehouse_scanner",
+          "pred": "warehouse_scanner",
+          "confidence": 0.95
+        }
+      },
+      "evaluator_errors": {},
+      "tags": [
+        "cat:warehouse_scanner",
+        "tenant:logistics",
+        "golden"
+      ],
+      "metadata": {}
+    },
+    {
+      "case_id": "TCK-2026-0045",
+      "repeat": 0,
+      "output": {
+        "category": "account_access",
+        "confidence": 0.3
+      },
+      "error": null,
+      "error_type": null,
+      "latency_ms": 0.6358340033330023,
+      "cost_usd": 0.00007999999999999999,
+      "input_tokens": 115,
+      "output_tokens": 15,
+      "trace_id": "07f94d530be44424",
+      "scores": {
+        "label_correct": 0.0,
+        "label_valid": 1.0
+      },
+      "passed": {
+        "label_correct": false,
+        "label_valid": true
+      },
+      "details": {
+        "label_correct": {
+          "gold": "security_report",
+          "pred": "account_access",
+          "confidence": 0.3
+        }
+      },
+      "evaluator_errors": {},
+      "tags": [
+        "cat:security_report",
+        "tenant:shared",
+        "golden"
+      ],
+      "metadata": {}
+    },
+    {
+      "case_id": "TCK-2026-0046",
+      "repeat": 0,
+      "output": {
+        "category": "hardware",
+        "confidence": 0.75
+      },
+      "error": null,
+      "error_type": null,
+      "latency_ms": 1.3245419977465644,
+      "cost_usd": 0.00007400000000000001,
+      "input_tokens": 106,
+      "output_tokens": 14,
+      "trace_id": "fcfb94111c824780",
+      "scores": {
+        "label_correct": 1.0,
+        "label_valid": 1.0
+      },
+      "passed": {
+        "label_correct": true,
+        "label_valid": true
+      },
+      "details": {
+        "label_correct": {
+          "gold": "hardware",
+          "pred": "hardware",
+          "confidence": 0.75
+        }
+      },
+      "evaluator_errors": {},
+      "tags": [
+        "cat:hardware",
+        "tenant:shared",
+        "golden"
+      ],
+      "metadata": {}
+    },
+    {
+      "case_id": "TCK-2026-0047",
+      "repeat": 0,
+      "output": {
+        "category": "returns",
+        "confidence": 0.75
+      },
+      "error": null,
+      "error_type": null,
+      "latency_ms": 1.4656659986940213,
+      "cost_usd": 0.00007400000000000001,
+      "input_tokens": 106,
+      "output_tokens": 14,
+      "trace_id": "9ac899c781614164",
+      "scores": {
+        "label_correct": 1.0,
+        "label_valid": 1.0
+      },
+      "passed": {
+        "label_correct": true,
+        "label_valid": true
+      },
+      "details": {
+        "label_correct": {
+          "gold": "returns",
+          "pred": "returns",
+          "confidence": 0.75
+        }
+      },
+      "evaluator_errors": {},
+      "tags": [
+        "cat:returns",
+        "tenant:retail",
+        "golden"
+      ],
+      "metadata": {}
+    },
+    {
+      "case_id": "TCK-2026-0048",
+      "repeat": 0,
+      "output": {
+        "category": "time_off",
+        "confidence": 0.95
+      },
+      "error": null,
+      "error_type": null,
+      "latency_ms": 0.7602500045322813,
+      "cost_usd": 0.0000785,
+      "input_tokens": 112,
+      "output_tokens": 15,
+      "trace_id": "dd43708f179741f2",
+      "scores": {
+        "label_correct": 1.0,
+        "label_valid": 1.0
+      },
+      "passed": {
+        "label_correct": true,
+        "label_valid": true
+      },
+      "details": {
+        "label_correct": {
+          "gold": "time_off",
+          "pred": "time_off",
+          "confidence": 0.95
+        }
+      },
+      "evaluator_errors": {},
+      "tags": [
+        "cat:time_off",
+        "tenant:shared",
+        "golden"
+      ],
+      "metadata": {}
+    },
+    {
+      "case_id": "TCK-2026-0049",
+      "repeat": 0,
+      "output": {
+        "category": "password_mfa",
+        "confidence": 0.95
+      },
+      "error": null,
+      "error_type": null,
+      "latency_ms": 0.8600410001236014,
+      "cost_usd": 0.00007500000000000001,
+      "input_tokens": 102,
+      "output_tokens": 16,
+      "trace_id": "7cbb358fc59b4a32",
+      "scores": {
+        "label_correct": 1.0,
+        "label_valid": 1.0
+      },
+      "passed": {
+        "label_correct": true,
+        "label_valid": true
+      },
+      "details": {
+        "label_correct": {
+          "gold": "password_mfa",
+          "pred": "password_mfa",
+          "confidence": 0.95
+        }
+      },
+      "evaluator_errors": {},
+      "tags": [
+        "cat:password_mfa",
+        "tenant:shared",
+        "golden"
+      ],
+      "metadata": {}
+    },
+    {
+      "case_id": "TCK-2026-0050",
+      "repeat": 0,
+      "output": {
+        "category": "shipment_tracking",
+        "confidence": 0.75
+      },
+      "error": null,
+      "error_type": null,
+      "latency_ms": 0.6056249985704198,
+      "cost_usd": 0.000084,
+      "input_tokens": 123,
+      "output_tokens": 15,
+      "trace_id": "65795b5924ec455e",
+      "scores": {
+        "label_correct": 1.0,
+        "label_valid": 1.0
+      },
+      "passed": {
+        "label_correct": true,
+        "label_valid": true
+      },
+      "details": {
+        "label_correct": {
+          "gold": "shipment_tracking",
+          "pred": "shipment_tracking",
+          "confidence": 0.75
+        }
+      },
+      "evaluator_errors": {},
+      "tags": [
+        "cat:shipment_tracking",
+        "tenant:logistics",
+        "golden"
+      ],
+      "metadata": {}
+    },
+    {
+      "case_id": "TCK-2026-0051",
+      "repeat": 0,
+      "output": {
+        "category": "security_report",
+        "confidence": 0.75
+      },
+      "error": null,
+      "error_type": null,
+      "latency_ms": 1.1787500043283217,
+      "cost_usd": 0.0000815,
+      "input_tokens": 118,
+      "output_tokens": 15,
+      "trace_id": "013121b369b0461d",
+      "scores": {
+        "label_correct": 1.0,
+        "label_valid": 1.0
+      },
+      "passed": {
+        "label_correct": true,
+        "label_valid": true
+      },
+      "details": {
+        "label_correct": {
+          "gold": "security_report",
+          "pred": "security_report",
+          "confidence": 0.75
+        }
+      },
+      "evaluator_errors": {},
+      "tags": [
+        "cat:security_report",
+        "tenant:shared",
+        "golden"
+      ],
+      "metadata": {}
+    },
+    {
+      "case_id": "TCK-2026-0052",
+      "repeat": 0,
+      "output": {
+        "category": "pos_payments",
+        "confidence": 0.95
+      },
+      "error": null,
+      "error_type": null,
+      "latency_ms": 1.313458000367973,
+      "cost_usd": 0.0000765,
+      "input_tokens": 108,
+      "output_tokens": 15,
+      "trace_id": "25b8c2b920ff452f",
+      "scores": {
+        "label_correct": 1.0,
+        "label_valid": 1.0
+      },
+      "passed": {
+        "label_correct": true,
+        "label_valid": true
+      },
+      "details": {
+        "label_correct": {
+          "gold": "pos_payments",
+          "pred": "pos_payments",
+          "confidence": 0.95
+        }
+      },
+      "evaluator_errors": {},
+      "tags": [
+        "cat:pos_payments",
+        "tenant:retail",
+        "golden"
+      ],
+      "metadata": {}
+    },
+    {
+      "case_id": "TCK-2026-0053",
+      "repeat": 0,
+      "output": {
+        "category": "expenses_travel",
+        "confidence": 0.75
+      },
+      "error": null,
+      "error_type": null,
+      "latency_ms": 0.8716250013094395,
+      "cost_usd": 0.000082,
+      "input_tokens": 119,
+      "output_tokens": 15,
+      "trace_id": "b186cf11fb5f4001",
+      "scores": {
+        "label_correct": 1.0,
+        "label_valid": 1.0
+      },
+      "passed": {
+        "label_correct": true,
+        "label_valid": true
+      },
+      "details": {
+        "label_correct": {
+          "gold": "expenses_travel",
+          "pred": "expenses_travel",
+          "confidence": 0.75
+        }
+      },
+      "evaluator_errors": {},
+      "tags": [
+        "cat:expenses_travel",
+        "tenant:shared",
+        "golden"
+      ],
+      "metadata": {}
+    },
+    {
+      "case_id": "TCK-2026-0054",
+      "repeat": 0,
+      "output": {
+        "category": "account_access",
+        "confidence": 0.75
+      },
+      "error": null,
+      "error_type": null,
+      "latency_ms": 1.0841249968507327,
+      "cost_usd": 0.00007999999999999999,
+      "input_tokens": 115,
+      "output_tokens": 15,
+      "trace_id": "c6b1140431b04aff",
+      "scores": {
+        "label_correct": 1.0,
+        "label_valid": 1.0
+      },
+      "passed": {
+        "label_correct": true,
+        "label_valid": true
+      },
+      "details": {
+        "label_correct": {
+          "gold": "account_access",
+          "pred": "account_access",
+          "confidence": 0.75
+        }
+      },
+      "evaluator_errors": {},
+      "tags": [
+        "cat:account_access",
+        "tenant:shared",
+        "golden"
+      ],
+      "metadata": {}
+    },
+    {
+      "case_id": "TCK-2026-0055",
+      "repeat": 0,
+      "output": {
+        "category": "benefits_leave",
+        "confidence": 0.75
+      },
+      "error": null,
+      "error_type": null,
+      "latency_ms": 0.7930420033517294,
+      "cost_usd": 0.000084,
+      "input_tokens": 120,
+      "output_tokens": 16,
+      "trace_id": "c4194dda41d6493f",
+      "scores": {
+        "label_correct": 1.0,
+        "label_valid": 1.0
+      },
+      "passed": {
+        "label_correct": true,
+        "label_valid": true
+      },
+      "details": {
+        "label_correct": {
+          "gold": "benefits_leave",
+          "pred": "benefits_leave",
+          "confidence": 0.75
+        }
+      },
+      "evaluator_errors": {},
+      "tags": [
+        "cat:benefits_leave",
+        "tenant:shared",
+        "golden"
+      ],
+      "metadata": {}
+    },
+    {
+      "case_id": "TCK-2026-0056",
+      "repeat": 0,
+      "output": {
+        "category": "returns",
+        "confidence": 0.75
+      },
+      "error": null,
+      "error_type": null,
+      "latency_ms": 1.039582995872479,
+      "cost_usd": 0.00007999999999999999,
+      "input_tokens": 118,
+      "output_tokens": 14,
+      "trace_id": "d1acc9369ecf4d97",
+      "scores": {
+        "label_correct": 0.0,
+        "label_valid": 1.0
+      },
+      "passed": {
+        "label_correct": false,
+        "label_valid": true
+      },
+      "details": {
+        "label_correct": {
+          "gold": "shipment_tracking",
+          "pred": "returns",
+          "confidence": 0.75
+        }
+      },
+      "evaluator_errors": {},
+      "tags": [
+        "cat:shipment_tracking",
+        "tenant:logistics",
+        "golden"
+      ],
+      "metadata": {}
+    },
+    {
+      "case_id": "TCK-2026-0057",
+      "repeat": 0,
+      "output": {
+        "category": "hardware",
+        "confidence": 0.75
+      },
+      "error": null,
+      "error_type": null,
+      "latency_ms": 1.4072080011828803,
+      "cost_usd": 0.0000715,
+      "input_tokens": 101,
+      "output_tokens": 14,
+      "trace_id": "af129694017d4061",
+      "scores": {
+        "label_correct": 0.0,
+        "label_valid": 1.0
+      },
+      "passed": {
+        "label_correct": false,
+        "label_valid": true
+      },
+      "details": {
+        "label_correct": {
+          "gold": "vpn_network",
+          "pred": "hardware",
+          "confidence": 0.75
+        }
+      },
+      "evaluator_errors": {},
+      "tags": [
+        "cat:vpn_network",
+        "tenant:shared",
+        "golden"
+      ],
+      "metadata": {}
+    },
+    {
+      "case_id": "TCK-2026-0058",
+      "repeat": 0,
+      "output": {
+        "category": "account_access",
+        "confidence": 0.75
+      },
+      "error": null,
+      "error_type": null,
+      "latency_ms": 0.5899999960092828,
+      "cost_usd": 0.0000855,
+      "input_tokens": 126,
+      "output_tokens": 15,
+      "trace_id": "12add58a52d24c32",
+      "scores": {
+        "label_correct": 0.0,
+        "label_valid": 1.0
+      },
+      "passed": {
+        "label_correct": false,
+        "label_valid": true
+      },
+      "details": {
+        "label_correct": {
+          "gold": "security_report",
+          "pred": "account_access",
+          "confidence": 0.75
+        }
+      },
+      "evaluator_errors": {},
+      "tags": [
+        "cat:security_report",
+        "tenant:shared",
+        "golden"
+      ],
+      "metadata": {}
+    },
+    {
+      "case_id": "TCK-2026-0059",
+      "repeat": 0,
+      "output": {
+        "category": "returns",
+        "confidence": 0.95
+      },
+      "error": null,
+      "error_type": null,
+      "latency_ms": 0.5147089977981523,
+      "cost_usd": 0.00008099999999999999,
+      "input_tokens": 120,
+      "output_tokens": 14,
+      "trace_id": "300a9edd7bfb4e1b",
+      "scores": {
+        "label_correct": 1.0,
+        "label_valid": 1.0
+      },
+      "passed": {
+        "label_correct": true,
+        "label_valid": true
+      },
+      "details": {
+        "label_correct": {
+          "gold": "returns",
+          "pred": "returns",
+          "confidence": 0.95
+        }
+      },
+      "evaluator_errors": {},
+      "tags": [
+        "cat:returns",
+        "tenant:retail",
+        "golden"
+      ],
+      "metadata": {}
+    },
+    {
+      "case_id": "TCK-2026-0060",
+      "repeat": 0,
+      "output": {
+        "category": "account_access",
+        "confidence": 0.75
+      },
+      "error": null,
+      "error_type": null,
+      "latency_ms": 1.0818340015248396,
+      "cost_usd": 0.0000795,
+      "input_tokens": 114,
+      "output_tokens": 15,
+      "trace_id": "c08f87ebf1744774",
+      "scores": {
+        "label_correct": 1.0,
+        "label_valid": 1.0
+      },
+      "passed": {
+        "label_correct": true,
+        "label_valid": true
+      },
+      "details": {
+        "label_correct": {
+          "gold": "account_access",
+          "pred": "account_access",
+          "confidence": 0.75
+        }
+      },
+      "evaluator_errors": {},
+      "tags": [
+        "cat:account_access",
+        "tenant:shared",
+        "golden"
+      ],
+      "metadata": {}
+    },
+    {
+      "case_id": "CL-ADV-001",
+      "repeat": 0,
+      "output": {
+        "category": "vpn_network",
+        "confidence": 0.75
+      },
+      "error": null,
+      "error_type": null,
+      "latency_ms": 0.6111250040703453,
+      "cost_usd": 0.0000775,
+      "input_tokens": 110,
+      "output_tokens": 15,
+      "trace_id": "c7905445c36b4355",
+      "scores": {
+        "label_correct": 1.0,
+        "label_valid": 1.0
+      },
+      "passed": {
+        "label_correct": true,
+        "label_valid": true
+      },
+      "details": {
+        "label_correct": {
+          "gold": "vpn_network",
+          "pred": "vpn_network",
+          "confidence": 0.75
+        }
+      },
+      "evaluator_errors": {},
+      "tags": [
+        "cat:vpn_network",
+        "adversarial",
+        "critical"
+      ],
+      "metadata": {}
+    },
+    {
+      "case_id": "CL-ADV-002",
+      "repeat": 0,
+      "output": {
+        "category": "expenses_travel",
+        "confidence": 0.95
+      },
+      "error": null,
+      "error_type": null,
+      "latency_ms": 0.8710420006536879,
+      "cost_usd": 0.0000745,
+      "input_tokens": 104,
+      "output_tokens": 15,
+      "trace_id": "f2799b9934164447",
+      "scores": {
+        "label_correct": 1.0,
+        "label_valid": 1.0
+      },
+      "passed": {
+        "label_correct": true,
+        "label_valid": true
+      },
+      "details": {
+        "label_correct": {
+          "gold": "expenses_travel",
+          "pred": "expenses_travel",
+          "confidence": 0.95
+        }
+      },
+      "evaluator_errors": {},
+      "tags": [
+        "cat:expenses_travel",
+        "adversarial",
+        "critical"
+      ],
+      "metadata": {}
+    },
+    {
+      "case_id": "CL-ADV-003",
+      "repeat": 0,
+      "output": {
+        "category": "time_off",
+        "confidence": 0.75
+      },
+      "error": null,
+      "error_type": null,
+      "latency_ms": 0.4225840020808391,
+      "cost_usd": 0.0000735,
+      "input_tokens": 102,
+      "output_tokens": 15,
+      "trace_id": "d46ba134f07c4175",
+      "scores": {
+        "label_correct": 1.0,
+        "label_valid": 1.0
+      },
+      "passed": {
+        "label_correct": true,
+        "label_valid": true
+      },
+      "details": {
+        "label_correct": {
+          "gold": "time_off",
+          "pred": "time_off",
+          "confidence": 0.75
+        }
+      },
+      "evaluator_errors": {},
+      "tags": [
+        "cat:time_off",
+        "adversarial",
+        "critical"
+      ],
+      "metadata": {}
+    }
+  ]
+}

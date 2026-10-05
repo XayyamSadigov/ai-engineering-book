@@ -1,0 +1,28 @@
+{
+  "routes": [
+    {"name": "hr_policy", "description": "Questions about HR policies: PTO, leave, remote work, expenses, travel.",
+     "utterances": ["how many PTO days do I have", "parental leave rules", "can I work remotely from abroad", "expense claim rejected", "travel policy hotel limit", "per diem for a business trip"]},
+    {"name": "it_support", "description": "Account, password, MFA, VPN, laptop problems.",
+     "utterances": ["I am locked out of my account", "reset my password", "VPN does not connect", "new phone for MFA", "laptop is broken", "need access to a group"]},
+    {"name": "logistics_ops", "description": "Shipment tracking, route planning, warehouse scanners.",
+     "utterances": ["tracking ID is invalid", "webhook deliveries paused", "route planner exceeded stops", "scanner shows error code", "shipment status exception"]},
+    {"name": "retail_ops", "description": "Stores, registers, card payments, returns.",
+     "utterances": ["register declines cards", "store server offline", "customer return refund", "returns API error", "gift card not accepted at register"]}
+  ],
+  "test": [
+    ["my PTO balance looks wrong", "hr_policy"],
+    ["how long is parental leave", "hr_policy"],
+    ["hotel was over the travel limit", "hr_policy"],
+    ["password reset link expired", "it_support"],
+    ["VPN connects but nothing loads", "it_support"],
+    ["MFA prompts on my new phone", "it_support"],
+    ["tracking page shows exception status", "logistics_ops"],
+    ["scanner error SH-201 on manifest", "logistics_ops"],
+    ["route planner moved stops", "logistics_ops"],
+    ["register 2 declines every card", "retail_ops"],
+    ["refund for a customer return went to gift card", "retail_ops"],
+    ["what is the weather in Lisbon", null],
+    ["write me a poem about cats", null],
+    ["who won the football match yesterday", null]
+  ]
+}

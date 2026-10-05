@@ -1,0 +1,6 @@
+{"id": "FX-001", "question": "How many unused PTO days can be carried over into the next year?", "required_doc_ids": ["hr-pto-policy"], "acceptable_doc_ids": ["hr-faq"], "user_groups": ["all"], "tenant": "shared", "tags": ["exact-fact"]}
+{"id": "FX-002", "question": "What is the yearly home office stipend?", "required_doc_ids": ["hr-remote-work-policy"], "acceptable_doc_ids": [], "user_groups": ["all"], "tenant": "shared", "tags": ["exact-fact"]}
+{"id": "FX-003", "question": "NorthGate VPN error 412", "required_doc_ids": ["it-vpn-access-runbook"], "acceptable_doc_ids": [], "user_groups": ["all"], "tenant": "shared", "tags": ["exact-id"]}
+{"id": "FX-004", "question": "What does Returns API error RET-002 mean?", "required_doc_ids": ["prod-retail-returns-api"], "acceptable_doc_ids": [], "user_groups": ["all", "retail"], "tenant": "retail", "tags": ["exact-id"]}
+{"id": "FX-005", "question": "Which Patroni command promotes a replica during failover?", "required_doc_ids": ["it-database-failover-runbook"], "acceptable_doc_ids": [], "user_groups": ["it-oncall"], "tenant": "shared", "tags": ["exact-fact"]}
+{"id": "FX-006", "question": "What are the RTO and RPO for the PostgreSQL cluster?", "required_doc_ids": ["it-database-failover-runbook"], "acceptable_doc_ids": [], "user_groups": ["all", "logistics"], "tenant": "logistics", "tags": ["forbidden-doc", "abstain"]}

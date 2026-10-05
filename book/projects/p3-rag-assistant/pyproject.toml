@@ -1,0 +1,52 @@
+[project]
+name = "p3-rag-assistant"
+version = "0.1.0"
+description = "Project 3 of the AI Engineering book: a production RAG assistant for Northwind (ingestion workers, hybrid ACL-aware retrieval, grounded answers, scoped caches, evaluation gate)."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = [
+  "aie-core",
+  "ragkit",
+  "p2-semantic-search",  # import name: semsearch
+  "evalkit",
+  "guardrails",
+  "reliability",
+  "pydantic>=2.5",
+  "pydantic-settings>=2.0",
+  "fastapi>=0.110",
+  "uvicorn>=0.27",
+  "httpx>=0.25",
+  "sqlalchemy>=2.0",
+]
+
+[project.optional-dependencies]
+pg = ["psycopg[binary]>=3.1", "pgvector>=0.2.5"]
+redis = ["redis>=5.0"]
+dev = ["pytest>=7.4", "pytest-timeout>=2.2", "fakeredis>=2.20"]
+
+[project.scripts]
+rag-assistant-worker = "rag_assistant.ingestion.worker:main"
+rag-assistant-eval = "rag_assistant.eval.run_eval:main"
+rag-assistant-sync = "rag_assistant.ingestion.service:main"
+
+[tool.uv.sources]
+aie-core = { path = "../aie_core", editable = true }
+ragkit = { path = "../ragkit", editable = true }
+p2-semantic-search = { path = "../p2-semantic-search", editable = true }
+evalkit = { path = "../evalkit", editable = true }
+guardrails = { path = "../guardrails", editable = true }
+reliability = { path = "../reliability", editable = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["rag_assistant"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+timeout = 120
+markers = ["integration: needs PostgreSQL+pgvector and Redis (DATABASE_URL, REDIS_URL); skipped by default"]
+addopts = "-m 'not integration'"

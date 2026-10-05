@@ -1,0 +1,1550 @@
+{
+  "run_id": "5c31f05926f2",
+  "created_at": "2026-10-05T06:30:48.079377Z",
+  "versions": {
+    "target": "northwind-extraction",
+    "prompt": "extraction@baseline",
+    "model": "fake-baseline",
+    "dataset": "northwind-invoices@1#4b20327f063e",
+    "evaluators": {
+      "extraction": "1"
+    },
+    "extra": {
+      "system": "baseline"
+    }
+  },
+  "dataset_name": "northwind-invoices",
+  "dataset_version": "1",
+  "dataset_hash": "4b20327f063e7ba4d722251d67a3650b6a730e9270033f2c55e8b589a30ee462",
+  "concurrency": 4,
+  "repeats": 1,
+  "wall_time_s": 0.011642416997347027,
+  "results": [
+    {
+      "case_id": "INV-001",
+      "repeat": 0,
+      "output": {
+        "fields": {
+          "vendor": "Brightline Supply Co.",
+          "invoice_number": "BL-INV-2026-00231",
+          "invoice_date": "2026-01-14",
+          "due_date": "2026-02-13",
+          "po_number": "PO-NW-2026-10412",
+          "currency": "USD",
+          "subtotal": 3081.0,
+          "tax_amount": 246.48,
+          "total": 3327.48
+        },
+        "line_items": [
+          {
+            "description": "Recycled corrugated box, M (BL-BOX-M-R)",
+            "quantity": 2400.0,
+            "unit_price": 0.62,
+            "amount": 1488.0
+          },
+          {
+            "description": "Thermal label roll 100x150 (BL-LBL-1015)",
+            "quantity": 120.0,
+            "unit_price": 7.9,
+            "amount": 948.0
+          },
+          {
+            "description": "Tote lid, stackable (BL-TOTE-LID)",
+            "quantity": 300.0,
+            "unit_price": 2.15,
+            "amount": 645.0
+          }
+        ],
+        "evidence": {
+          "vendor": "Brightline Supply Co.",
+          "invoice_number": "INVOICE BL-INV-2026-00231",
+          "invoice_date": "Invoice date: 2026-01-14    Due date: 2026-02-13",
+          "due_date": "Invoice date: 2026-01-14    Due date: 2026-02-13",
+          "po_number": "PO Number: PO-NW-2026-10412",
+          "currency": "Currency: USD. Payment terms: net 30.",
+          "subtotal": "Subtotal     $3,081.00",
+          "tax_amount": "Tax (8%)       $246.48",
+          "total": "TOTAL DUE     $3,327.48"
+        }
+      },
+      "error": null,
+      "error_type": null,
+      "latency_ms": 2.813916995364707,
+      "cost_usd": 0.0007255,
+      "input_tokens": 260,
+      "output_tokens": 397,
+      "trace_id": "d357cbcba0c0491e",
+      "scores": {
+        "field_precision": 1.0,
+        "field_recall": 1.0,
+        "field_f1_weighted": 1.0,
+        "critical_fields_exact": 1.0,
+        "line_item_recall": 1.0,
+        "evidence_correct": 1.0
+      },
+      "passed": {
+        "field_precision": null,
+        "field_recall": null,
+        "field_f1_weighted": true,
+        "critical_fields_exact": true,
+        "line_item_recall": true,
+        "evidence_correct": true
+      },
+      "details": {},
+      "evaluator_errors": {},
+      "tags": [
+        "format:table",
+        "tenant:logistics",
+        "currency:USD"
+      ],
+      "metadata": {}
+    },
+    {
+      "case_id": "INV-002",
+      "repeat": 0,
+      "output": {
+        "fields": {
+          "vendor": "Harbor City Office Supplies",
+          "invoice_number": "HCOS-88121",
+          "invoice_date": "2026-01-20",
+          "due_date": "2026-02-19",
+          "po_number": null,
+          "currency": "USD",
+          "subtotal": 1600.0,
+          "tax_amount": 128.0,
+          "total": 1728.0
+        },
+        "line_items": [
+          {
+            "description": "A4 copy paper, 80gsm, box of 5 reams",
+            "quantity": 40.0,
+            "unit_price": 24.5,
+            "amount": 980.0
+          },
+          {
+            "description": "Whiteboard markers, assorted, pack of 12",
+            "quantity": 25.0,
+            "unit_price": 9.8,
+            "amount": 245.0
+          },
+          {
+            "description": "Ergonomic mouse pad",
+            "quantity": 60.0,
+            "unit_price": 6.25,
+            "amount": 375.0
+          }
+        ],
+        "evidence": {
+          "vendor": "From: Harbor City Office Supplies, 202 Market Street, Harbor City",
+          "invoice_number": "Please find below the details of invoice HCOS-88121, issued on 2026-01-20 and payable by 2026-02-19. This invoice relates to purchase order PO-NW-2026-10433.",
+          "invoice_date": "Please find below the details of invoice HCOS-88121, issued on 2026-01-20 and payable by 2026-02-19. This invoice relates to purchase order PO-NW-2026-10433.",
+          "due_date": "Please find below the details of invoice HCOS-88121, issued on 2026-01-20 and payable by 2026-02-19. This invoice relates to purchase order PO-NW-2026-10433.",
+          "currency": "The subtotal is $1,600.00. Tax at 8% amounts to $128.00, bringing the total to $1,728.00 (USD).",
+          "subtotal": "The subtotal is $1,600.00. Tax at 8% amounts to $128.00, bringing the total to $1,728.00 (USD).",
+          "tax_amount": "The subtotal is $1,600.00. Tax at 8% amounts to $128.00, bringing the total to $1,728.00 (USD).",
+          "total": "The subtotal is $1,600.00. Tax at 8% amounts to $128.00, bringing the total to $1,728.00 (USD)."
+        }
+      },
+      "error": null,
+      "error_type": null,
+      "latency_ms": 2.1643750005750917,
+      "cost_usd": 0.0009550000000000001,
+      "input_tokens": 236,
+      "output_tokens": 558,
+      "trace_id": "cec11c5529cf464b",
+      "scores": {
+        "field_precision": 1.0,
+        "field_recall": 0.9375,
+        "field_f1_weighted": 0.967741935483871,
+        "critical_fields_exact": 1.0,
+        "line_item_recall": 1.0,
+        "evidence_correct": 1.0
+      },
+      "passed": {
+        "field_precision": null,
+        "field_recall": null,
+        "field_f1_weighted": true,
+        "critical_fields_exact": true,
+        "line_item_recall": true,
+        "evidence_correct": true
+      },
+      "details": {
+        "field_f1_weighted": {
+          "po_number": "fn"
+        }
+      },
+      "evaluator_errors": {},
+      "tags": [
+        "format:letter",
+        "tenant:shared",
+        "currency:USD"
+      ],
+      "metadata": {}
+    },
+    {
+      "case_id": "INV-003",
+      "repeat": 0,
+      "output": {
+        "fields": {
+          "vendor": "Meridian Cloud Hosting",
+          "invoice_number": "MCH-2026-01-0077",
+          "invoice_date": "2026-01-31",
+          "due_date": "2026-03-02",
+          "po_number": "PO-NW-2025-09877",
+          "currency": "USD",
+          "subtotal": 23368.0,
+          "tax_amount": 0.0,
+          "total": 23368.0
+        },
+        "line_items": [
+          {
+            "description": "Compute, reserved instances, January 2026",
+            "quantity": 1.0,
+            "unit_price": 18450.0,
+            "amount": 18450.0
+          },
+          {
+            "description": "Object storage, 184 TB-month",
+            "quantity": 184.0,
+            "unit_price": 21.0,
+            "amount": 3864.0
+          },
+          {
+            "description": "Egress, 12.4 TB",
+            "quantity": 12.4,
+            "unit_price": 85.0,
+            "amount": 1054.0
+          }
+        ],
+        "evidence": {
+          "vendor": "=== MERIDIAN CLOUD HOSTING :: BILLING STATEMENT ===",
+          "invoice_number": "Statement/Invoice No.: MCH-2026-01-0077",
+          "invoice_date": "Period end / Issue date: 2026-01-31",
+          "due_date": "Payment due: 2026-03-02",
+          "po_number": "PO Number: PO-NW-2025-09877",
+          "currency": "Currency: USD",
+          "subtotal": "subtotal=23368.00",
+          "tax_amount": "Statement/Invoice No.: MCH-2026-01-0077",
+          "total": "subtotal=23368.00"
+        }
+      },
+      "error": null,
+      "error_type": null,
+      "latency_ms": 1.1972089996561408,
+      "cost_usd": 0.000674,
+      "input_tokens": 238,
+      "output_tokens": 370,
+      "trace_id": "e2e7987cbbb345c5",
+      "scores": {
+        "field_precision": 1.0,
+        "field_recall": 1.0,
+        "field_f1_weighted": 1.0,
+        "critical_fields_exact": 1.0,
+        "line_item_recall": 1.0,
+        "evidence_correct": 1.0
+      },
+      "passed": {
+        "field_precision": null,
+        "field_recall": null,
+        "field_f1_weighted": true,
+        "critical_fields_exact": true,
+        "line_item_recall": true,
+        "evidence_correct": true
+      },
+      "details": {},
+      "evaluator_errors": {},
+      "tags": [
+        "format:statement",
+        "tenant:shared",
+        "currency:USD"
+      ],
+      "metadata": {}
+    },
+    {
+      "case_id": "INV-004",
+      "repeat": 0,
+      "output": {
+        "fields": {
+          "vendor": "Kestrel Fleet Services",
+          "invoice_number": "KFS/26/0142",
+          "invoice_date": "2026-02-03",
+          "due_date": "2026-03-05",
+          "po_number": "PO-NW-2026-10501",
+          "currency": "USD",
+          "subtotal": 9420.0,
+          "tax_amount": 753.6,
+          "total": 10173.6
+        },
+        "line_items": [
+          {
+            "description": "Van service, 20,000 km interval, van-l",
+            "quantity": 14.0,
+            "unit_price": 310.0,
+            "amount": 4340.0
+          },
+          {
+            "description": "Brake pads, truck-7.5t, set",
+            "quantity": 6.0,
+            "unit_price": 245.0,
+            "amount": 1470.0
+          },
+          {
+            "description": "Labour, hourly",
+            "quantity": 38.0,
+            "unit_price": 95.0,
+            "amount": 3610.0
+          }
+        ],
+        "evidence": {
+          "vendor": "Kestrel Fleet Services",
+          "invoice_number": "INVOICE KFS/26/0142",
+          "invoice_date": "Invoice date: 2026-02-03    Due date: 2026-03-05",
+          "due_date": "Invoice date: 2026-02-03    Due date: 2026-03-05",
+          "po_number": "PO Number: PO-NW-2026-10501",
+          "currency": "Currency: USD. Payment terms: net 30.",
+          "subtotal": "Subtotal     $9,420.00",
+          "tax_amount": "Tax (8%)       $753.60",
+          "total": "TOTAL DUE    $10,173.60"
+        }
+      },
+      "error": null,
+      "error_type": null,
+      "latency_ms": 1.2296659988351166,
+      "cost_usd": 0.000696,
+      "input_tokens": 246,
+      "output_tokens": 382,
+      "trace_id": "8461b241115b4151",
+      "scores": {
+        "field_precision": 1.0,
+        "field_recall": 1.0,
+        "field_f1_weighted": 1.0,
+        "critical_fields_exact": 1.0,
+        "line_item_recall": 1.0,
+        "evidence_correct": 1.0
+      },
+      "passed": {
+        "field_precision": null,
+        "field_recall": null,
+        "field_f1_weighted": true,
+        "critical_fields_exact": true,
+        "line_item_recall": true,
+        "evidence_correct": true
+      },
+      "details": {},
+      "evaluator_errors": {},
+      "tags": [
+        "format:table",
+        "tenant:logistics",
+        "currency:USD"
+      ],
+      "metadata": {}
+    },
+    {
+      "case_id": "INV-005",
+      "repeat": 0,
+      "output": {
+        "fields": {
+          "vendor": "Oakline Facilities Ltd",
+          "invoice_number": "OAK-2026-0218",
+          "invoice_date": "2026-02-10",
+          "due_date": "2026-03-12",
+          "po_number": null,
+          "currency": "GBP",
+          "subtotal": 6612.3,
+          "tax_amount": 1322.46,
+          "total": 7934.76
+        },
+        "line_items": [
+          {
+            "description": "Cleaning services, Harbor City office, February",
+            "quantity": 1.0,
+            "unit_price": 6200.0,
+            "amount": 6200.0
+          },
+          {
+            "description": "Consumables (soap, towels)",
+            "quantity": 1.0,
+            "unit_price": 412.3,
+            "amount": 412.3
+          }
+        ],
+        "evidence": {
+          "vendor": "From: Oakline Facilities Ltd, 3 Oakline Court, Harbor City",
+          "invoice_number": "Please find below the details of invoice OAK-2026-0218, issued on 2026-02-10 and payable by 2026-03-12. This invoice relates to purchase order PO-NW-2026-10488.",
+          "invoice_date": "Please find below the details of invoice OAK-2026-0218, issued on 2026-02-10 and payable by 2026-03-12. This invoice relates to purchase order PO-NW-2026-10488.",
+          "due_date": "Please find below the details of invoice OAK-2026-0218, issued on 2026-02-10 and payable by 2026-03-12. This invoice relates to purchase order PO-NW-2026-10488.",
+          "currency": "The subtotal is £6,612.30. Tax at 20% amounts to £1,322.46, bringing the total to £7,934.76 (GBP).",
+          "subtotal": "The subtotal is £6,612.30. Tax at 20% amounts to £1,322.46, bringing the total to £7,934.76 (GBP).",
+          "tax_amount": "The subtotal is £6,612.30. Tax at 20% amounts to £1,322.46, bringing the total to £7,934.76 (GBP).",
+          "total": "The subtotal is £6,612.30. Tax at 20% amounts to £1,322.46, bringing the total to £7,934.76 (GBP)."
+        }
+      },
+      "error": null,
+      "error_type": null,
+      "latency_ms": 2.08629099506652,
+      "cost_usd": 0.0009080000000000001,
+      "input_tokens": 214,
+      "output_tokens": 534,
+      "trace_id": "224fc2c5cdf5429d",
+      "scores": {
+        "field_precision": 1.0,
+        "field_recall": 0.9375,
+        "field_f1_weighted": 0.967741935483871,
+        "critical_fields_exact": 1.0,
+        "line_item_recall": 1.0,
+        "evidence_correct": 1.0
+      },
+      "passed": {
+        "field_precision": null,
+        "field_recall": null,
+        "field_f1_weighted": true,
+        "critical_fields_exact": true,
+        "line_item_recall": true,
+        "evidence_correct": true
+      },
+      "details": {
+        "field_f1_weighted": {
+          "po_number": "fn"
+        }
+      },
+      "evaluator_errors": {},
+      "tags": [
+        "format:letter",
+        "tenant:shared",
+        "currency:GBP"
+      ],
+      "metadata": {}
+    },
+    {
+      "case_id": "INV-006",
+      "repeat": 0,
+      "output": {
+        "fields": {
+          "vendor": "Pinecrest Catering",
+          "invoice_number": "PC-26-0331",
+          "invoice_date": "2026-02-12",
+          "due_date": "2026-02-26",
+          "po_number": "PO-NW-2026-10520",
+          "currency": "USD",
+          "subtotal": 1852.5,
+          "tax_amount": 148.2,
+          "total": 2000.7
+        },
+        "line_items": [
+          {
+            "description": "Lunch, all-hands Retail Systems, 85 persons",
+            "quantity": 85.0,
+            "unit_price": 18.5,
+            "amount": 1572.5
+          },
+          {
+            "description": "Coffee service, half day",
+            "quantity": 2.0,
+            "unit_price": 140.0,
+            "amount": 280.0
+          }
+        ],
+        "evidence": {
+          "vendor": "Pinecrest Catering | 88 Pinecrest Avenue, Harbor City",
+          "invoice_number": "Inv# PC-26-0331 | 2026-02-12 | due 2026-02-26",
+          "invoice_date": "Inv# PC-26-0331 | 2026-02-12 | due 2026-02-26",
+          "due_date": "Inv# PC-26-0331 | 2026-02-12 | due 2026-02-26",
+          "po_number": "PO: PO-NW-2026-10520",
+          "currency": "Sub 1852.50 | Tax 8% 148.20 | Total 2000.70 USD",
+          "subtotal": "Sub 1852.50 | Tax 8% 148.20 | Total 2000.70 USD",
+          "tax_amount": "Sub 1852.50 | Tax 8% 148.20 | Total 2000.70 USD",
+          "total": "Sub 1852.50 | Tax 8% 148.20 | Total 2000.70 USD"
+        }
+      },
+      "error": null,
+      "error_type": null,
+      "latency_ms": 1.7364159939461388,
+      "cost_usd": 0.0007185000000000001,
+      "input_tokens": 162,
+      "output_tokens": 425,
+      "trace_id": "f0f306f53f834aea",
+      "scores": {
+        "field_precision": 1.0,
+        "field_recall": 1.0,
+        "field_f1_weighted": 1.0,
+        "critical_fields_exact": 1.0,
+        "line_item_recall": 1.0,
+        "evidence_correct": 1.0
+      },
+      "passed": {
+        "field_precision": null,
+        "field_recall": null,
+        "field_f1_weighted": true,
+        "critical_fields_exact": true,
+        "line_item_recall": true,
+        "evidence_correct": true
+      },
+      "details": {},
+      "evaluator_errors": {},
+      "tags": [
+        "format:receipt",
+        "tenant:retail",
+        "currency:USD"
+      ],
+      "metadata": {}
+    },
+    {
+      "case_id": "INV-007",
+      "repeat": 0,
+      "output": {
+        "fields": {
+          "vendor": "Vantage Software Ltd",
+          "invoice_number": "VS-INV-104877",
+          "invoice_date": "2026-02-15",
+          "due_date": "2026-03-17",
+          "po_number": "PO-NW-2026-10377",
+          "currency": "USD",
+          "subtotal": 60000.0,
+          "tax_amount": 0.0,
+          "total": 59000.0
+        },
+        "line_items": [
+          {
+            "description": "Dispatcher console licence, annual, per seat",
+            "quantity": 120.0,
+            "unit_price": 420.0,
+            "amount": 50400.0
+          },
+          {
+            "description": "Premium support, annual",
+            "quantity": 1.0,
+            "unit_price": 9600.0,
+            "amount": 9600.0
+          }
+        ],
+        "evidence": {
+          "vendor": "=== VANTAGE SOFTWARE LTD :: BILLING STATEMENT ===",
+          "invoice_number": "Statement/Invoice No.: VS-INV-104877",
+          "invoice_date": "Period end / Issue date: 2026-02-15",
+          "due_date": "Payment due: 2026-03-17",
+          "po_number": "PO Number: PO-NW-2026-10377",
+          "currency": "Currency: USD",
+          "subtotal": "subtotal=60000.00",
+          "tax_amount": "Statement/Invoice No.: VS-INV-104877",
+          "total": "subtotal=60000.00"
+        }
+      },
+      "error": null,
+      "error_type": null,
+      "latency_ms": 2.0558749965857714,
+      "cost_usd": 0.000568,
+      "input_tokens": 197,
+      "output_tokens": 313,
+      "trace_id": "cb4abfcbaf184250",
+      "scores": {
+        "field_precision": 1.0,
+        "field_recall": 1.0,
+        "field_f1_weighted": 1.0,
+        "critical_fields_exact": 1.0,
+        "line_item_recall": 1.0,
+        "evidence_correct": 0.8888888888888888
+      },
+      "passed": {
+        "field_precision": null,
+        "field_recall": null,
+        "field_f1_weighted": true,
+        "critical_fields_exact": true,
+        "line_item_recall": true,
+        "evidence_correct": false
+      },
+      "details": {
+        "evidence_correct": {
+          "total": "wrong_location"
+        }
+      },
+      "evaluator_errors": {},
+      "tags": [
+        "format:statement",
+        "tenant:logistics",
+        "currency:USD"
+      ],
+      "metadata": {}
+    },
+    {
+      "case_id": "INV-008",
+      "repeat": 0,
+      "output": {
+        "fields": {
+          "vendor": "Summit Telecom",
+          "invoice_number": "ST-2026-02-55102",
+          "invoice_date": "2026-02-28",
+          "due_date": "2026-03-30",
+          "po_number": "PO-NW-2025-09911",
+          "currency": "USD",
+          "subtotal": 68930.0,
+          "tax_amount": 5514.4,
+          "total": 74444.4
+        },
+        "line_items": [
+          {
+            "description": "Store connectivity, 1,240 sites, February",
+            "quantity": 1240.0,
+            "unit_price": 38.0,
+            "amount": 47120.0
+          },
+          {
+            "description": "Depot fibre, 38 sites, February",
+            "quantity": 38.0,
+            "unit_price": 420.0,
+            "amount": 15960.0
+          },
+          {
+            "description": "4G backup SIMs, 1,300 units",
+            "quantity": 1300.0,
+            "unit_price": 4.5,
+            "amount": 5850.0
+          }
+        ],
+        "evidence": {
+          "vendor": "Summit Telecom",
+          "invoice_number": "INVOICE ST-2026-02-55102",
+          "invoice_date": "Invoice date: 2026-02-28    Due date: 2026-03-30",
+          "due_date": "Invoice date: 2026-02-28    Due date: 2026-03-30",
+          "po_number": "PO Number: PO-NW-2025-09911",
+          "currency": "Currency: USD. Payment terms: net 30.",
+          "subtotal": "Subtotal    $68,930.00",
+          "tax_amount": "Tax (8%)     $5,514.40",
+          "total": "TOTAL DUE    $74,444.40"
+        }
+      },
+      "error": null,
+      "error_type": null,
+      "latency_ms": 2.588333001767751,
+      "cost_usd": 0.0007095000000000001,
+      "input_tokens": 249,
+      "output_tokens": 390,
+      "trace_id": "32f8c7f60e604efc",
+      "scores": {
+        "field_precision": 1.0,
+        "field_recall": 1.0,
+        "field_f1_weighted": 1.0,
+        "critical_fields_exact": 1.0,
+        "line_item_recall": 1.0,
+        "evidence_correct": 1.0
+      },
+      "passed": {
+        "field_precision": null,
+        "field_recall": null,
+        "field_f1_weighted": true,
+        "critical_fields_exact": true,
+        "line_item_recall": true,
+        "evidence_correct": true
+      },
+      "details": {},
+      "evaluator_errors": {},
+      "tags": [
+        "format:table",
+        "tenant:shared",
+        "currency:USD"
+      ],
+      "metadata": {}
+    },
+    {
+      "case_id": "INV-009",
+      "repeat": 0,
+      "output": {
+        "fields": {
+          "vendor": "Brightline Supply Co.",
+          "invoice_number": "BL-INV-2026-00318",
+          "invoice_date": "2026-03-02",
+          "due_date": "2026-04-01",
+          "po_number": null,
+          "currency": "USD",
+          "subtotal": 3836.0,
+          "tax_amount": 306.88,
+          "total": 4142.88
+        },
+        "line_items": [
+          {
+            "description": "Chilled liner, insulated (BL-CHL-L)",
+            "quantity": 800.0,
+            "unit_price": 3.4,
+            "amount": 2720.0
+          },
+          {
+            "description": "Recycled corrugated box, M (BL-BOX-M-R)",
+            "quantity": 1800.0,
+            "unit_price": 0.62,
+            "amount": 1116.0
+          }
+        ],
+        "evidence": {
+          "vendor": "Brightline Supply Co.",
+          "invoice_number": "INVOICE BL-INV-2026-00318",
+          "invoice_date": "Invoice date: 2026-03-02    Due date: 2026-04-01",
+          "due_date": "Invoice date: 2026-03-02    Due date: 2026-04-01",
+          "currency": "Currency: USD. Payment terms: net 30.",
+          "subtotal": "Subtotal     $3,836.00",
+          "tax_amount": "Tax (8%)       $306.88",
+          "total": "TOTAL DUE     $4,142.88"
+        }
+      },
+      "error": null,
+      "error_type": null,
+      "latency_ms": 1.3915839954279363,
+      "cost_usd": 0.0006000000000000001,
+      "input_tokens": 225,
+      "output_tokens": 325,
+      "trace_id": "b65f6a4f1e5c48dd",
+      "scores": {
+        "field_precision": 1.0,
+        "field_recall": 1.0,
+        "field_f1_weighted": 1.0,
+        "critical_fields_exact": 1.0,
+        "line_item_recall": 1.0,
+        "evidence_correct": 1.0
+      },
+      "passed": {
+        "field_precision": null,
+        "field_recall": null,
+        "field_f1_weighted": true,
+        "critical_fields_exact": true,
+        "line_item_recall": true,
+        "evidence_correct": true
+      },
+      "details": {},
+      "evaluator_errors": {},
+      "tags": [
+        "format:table",
+        "tenant:logistics",
+        "currency:USD"
+      ],
+      "metadata": {}
+    },
+    {
+      "case_id": "INV-010",
+      "repeat": 0,
+      "output": {
+        "fields": {
+          "vendor": "Zebra Hardware Distributors",
+          "invoice_number": "ZHD-0098231",
+          "invoice_date": "2026-03-04",
+          "due_date": "2026-04-03",
+          "po_number": null,
+          "currency": "USD",
+          "subtotal": 127710.0,
+          "tax_amount": 10216.8,
+          "total": 137926.8
+        },
+        "line_items": [
+          {
+            "description": "Zebra TC-58 rugged handheld",
+            "quantity": 60.0,
+            "unit_price": 1890.0,
+            "amount": 113400.0
+          },
+          {
+            "description": "Spare battery, TC-58",
+            "quantity": 120.0,
+            "unit_price": 68.0,
+            "amount": 8160.0
+          },
+          {
+            "description": "4-slot charging cradle",
+            "quantity": 15.0,
+            "unit_price": 410.0,
+            "amount": 6150.0
+          }
+        ],
+        "evidence": {
+          "vendor": "From: Zebra Hardware Distributors, 19 Logistics Lane, Riverside",
+          "invoice_number": "Please find below the details of invoice ZHD-0098231, issued on 2026-03-04 and payable by 2026-04-03. This invoice relates to purchase order PO-NW-2026-10590.",
+          "invoice_date": "Please find below the details of invoice ZHD-0098231, issued on 2026-03-04 and payable by 2026-04-03. This invoice relates to purchase order PO-NW-2026-10590.",
+          "due_date": "Please find below the details of invoice ZHD-0098231, issued on 2026-03-04 and payable by 2026-04-03. This invoice relates to purchase order PO-NW-2026-10590.",
+          "currency": "The subtotal is $127,710.00. Tax at 8% amounts to $10,216.80, bringing the total to $137,926.80 (USD).",
+          "subtotal": "The subtotal is $127,710.00. Tax at 8% amounts to $10,216.80, bringing the total to $137,926.80 (USD).",
+          "tax_amount": "The subtotal is $127,710.00. Tax at 8% amounts to $10,216.80, bringing the total to $137,926.80 (USD).",
+          "total": "The subtotal is $127,710.00. Tax at 8% amounts to $10,216.80, bringing the total to $137,926.80 (USD)."
+        }
+      },
+      "error": null,
+      "error_type": null,
+      "latency_ms": 1.7294999997830018,
+      "cost_usd": 0.000963,
+      "input_tokens": 237,
+      "output_tokens": 563,
+      "trace_id": "fd8c9b16b02d4daa",
+      "scores": {
+        "field_precision": 1.0,
+        "field_recall": 0.9375,
+        "field_f1_weighted": 0.967741935483871,
+        "critical_fields_exact": 1.0,
+        "line_item_recall": 1.0,
+        "evidence_correct": 1.0
+      },
+      "passed": {
+        "field_precision": null,
+        "field_recall": null,
+        "field_f1_weighted": true,
+        "critical_fields_exact": true,
+        "line_item_recall": true,
+        "evidence_correct": true
+      },
+      "details": {
+        "field_f1_weighted": {
+          "po_number": "fn"
+        }
+      },
+      "evaluator_errors": {},
+      "tags": [
+        "format:letter",
+        "tenant:logistics",
+        "currency:USD"
+      ],
+      "metadata": {}
+    },
+    {
+      "case_id": "INV-011",
+      "repeat": 0,
+      "output": {
+        "fields": {
+          "vendor": "Harbor City Office Supplies",
+          "invoice_number": "HCOS-88402",
+          "invoice_date": "2026-03-09",
+          "due_date": "2026-04-08",
+          "po_number": "PO-NW-2026-10601",
+          "currency": "USD",
+          "subtotal": 7020.0,
+          "tax_amount": 561.6,
+          "total": 7581.6
+        },
+        "line_items": [
+          {
+            "description": "Monitor arm, dual",
+            "quantity": 30.0,
+            "unit_price": 89.0,
+            "amount": 2670.0
+          },
+          {
+            "description": "USB-C dock",
+            "quantity": 30.0,
+            "unit_price": 145.0,
+            "amount": 4350.0
+          }
+        ],
+        "evidence": {
+          "vendor": "Harbor City Office Supplies | 202 Market Street, Harbor City",
+          "invoice_number": "Inv# HCOS-88402 | 2026-03-09 | due 2026-04-08",
+          "invoice_date": "Inv# HCOS-88402 | 2026-03-09 | due 2026-04-08",
+          "due_date": "Inv# HCOS-88402 | 2026-03-09 | due 2026-04-08",
+          "po_number": "PO: PO-NW-2026-10601",
+          "currency": "Sub 7020.00 | Tax 8% 561.60 | Total 7581.60 USD",
+          "subtotal": "Sub 7020.00 | Tax 8% 561.60 | Total 7581.60 USD",
+          "tax_amount": "Sub 7020.00 | Tax 8% 561.60 | Total 7581.60 USD",
+          "total": "Sub 7020.00 | Tax 8% 561.60 | Total 7581.60 USD"
+        }
+      },
+      "error": null,
+      "error_type": null,
+      "latency_ms": 2.511042002879549,
+      "cost_usd": 0.0006925,
+      "input_tokens": 152,
+      "output_tokens": 411,
+      "trace_id": "cf7f096134cf4f04",
+      "scores": {
+        "field_precision": 1.0,
+        "field_recall": 1.0,
+        "field_f1_weighted": 1.0,
+        "critical_fields_exact": 1.0,
+        "line_item_recall": 1.0,
+        "evidence_correct": 1.0
+      },
+      "passed": {
+        "field_precision": null,
+        "field_recall": null,
+        "field_f1_weighted": true,
+        "critical_fields_exact": true,
+        "line_item_recall": true,
+        "evidence_correct": true
+      },
+      "details": {},
+      "evaluator_errors": {},
+      "tags": [
+        "format:receipt",
+        "tenant:shared",
+        "currency:USD"
+      ],
+      "metadata": {}
+    },
+    {
+      "case_id": "INV-012",
+      "repeat": 0,
+      "output": {
+        "fields": {
+          "vendor": "Meridian Cloud Hosting",
+          "invoice_number": "MCH-2026-02-0081",
+          "invoice_date": "2026-02-28",
+          "due_date": "2026-03-30",
+          "po_number": "PO-NW-2025-09877",
+          "currency": "USD",
+          "subtotal": 30494.0,
+          "tax_amount": 0.0,
+          "total": 30494.0
+        },
+        "line_items": [
+          {
+            "description": "Compute, reserved instances, February 2026",
+            "quantity": 1.0,
+            "unit_price": 18450.0,
+            "amount": 18450.0
+          },
+          {
+            "description": "Object storage, 191 TB-month",
+            "quantity": 191.0,
+            "unit_price": 21.0,
+            "amount": 4011.0
+          },
+          {
+            "description": "Egress, 9.8 TB",
+            "quantity": 9.8,
+            "unit_price": 85.0,
+            "amount": 833.0
+          },
+          {
+            "description": "Managed PostgreSQL, 3 clusters",
+            "quantity": 3.0,
+            "unit_price": 2400.0,
+            "amount": 7200.0
+          }
+        ],
+        "evidence": {
+          "vendor": "=== MERIDIAN CLOUD HOSTING :: BILLING STATEMENT ===",
+          "invoice_number": "Statement/Invoice No.: MCH-2026-02-0081",
+          "invoice_date": "Period end / Issue date: 2026-02-28",
+          "due_date": "Payment due: 2026-03-30",
+          "po_number": "PO Number: PO-NW-2025-09877",
+          "currency": "Currency: USD",
+          "subtotal": "subtotal=30494.00",
+          "tax_amount": "Statement/Invoice No.: MCH-2026-02-0081",
+          "total": "subtotal=30494.00"
+        }
+      },
+      "error": null,
+      "error_type": null,
+      "latency_ms": 1.5644169980078004,
+      "cost_usd": 0.0007430000000000001,
+      "input_tokens": 265,
+      "output_tokens": 407,
+      "trace_id": "f65b06ec9d9545b2",
+      "scores": {
+        "field_precision": 1.0,
+        "field_recall": 1.0,
+        "field_f1_weighted": 1.0,
+        "critical_fields_exact": 1.0,
+        "line_item_recall": 1.0,
+        "evidence_correct": 1.0
+      },
+      "passed": {
+        "field_precision": null,
+        "field_recall": null,
+        "field_f1_weighted": true,
+        "critical_fields_exact": true,
+        "line_item_recall": true,
+        "evidence_correct": true
+      },
+      "details": {},
+      "evaluator_errors": {},
+      "tags": [
+        "format:statement",
+        "tenant:shared",
+        "currency:USD"
+      ],
+      "metadata": {}
+    },
+    {
+      "case_id": "INV-013",
+      "repeat": 0,
+      "output": {
+        "fields": {
+          "vendor": "Nordlicht Verpackungen GmbH",
+          "invoice_number": "NV-2026-0457",
+          "invoice_date": "2026-03-11",
+          "due_date": "2026-04-10",
+          "po_number": null,
+          "currency": "EUR",
+          "subtotal": 8180.0,
+          "tax_amount": 1554.2,
+          "total": 9734.2
+        },
+        "line_items": [
+          {
+            "description": "Stretch film, 500mm x 300m",
+            "quantity": 400.0,
+            "unit_price": 11.2,
+            "amount": 4480.0
+          },
+          {
+            "description": "Pallet, EUR, new",
+            "quantity": 250.0,
+            "unit_price": 14.8,
+            "amount": 3700.0
+          }
+        ],
+        "evidence": {
+          "vendor": "From: Nordlicht Verpackungen GmbH, Hafenstrasse 12, Nordhafen",
+          "invoice_number": "Please find below the details of invoice NV-2026-0457, issued on 2026-03-11 and payable by 2026-04-10. This invoice relates to purchase order PO-NW-2026-10577.",
+          "invoice_date": "Please find below the details of invoice NV-2026-0457, issued on 2026-03-11 and payable by 2026-04-10. This invoice relates to purchase order PO-NW-2026-10577.",
+          "due_date": "Please find below the details of invoice NV-2026-0457, issued on 2026-03-11 and payable by 2026-04-10. This invoice relates to purchase order PO-NW-2026-10577.",
+          "currency": "- Pallet, EUR, new: 250 x €14.80 = €3,700.00",
+          "subtotal": "The subtotal is €8,180.00. Tax at 19% amounts to €1,554.20, bringing the total to €9,734.20 (EUR).",
+          "tax_amount": "The subtotal is €8,180.00. Tax at 19% amounts to €1,554.20, bringing the total to €9,734.20 (EUR).",
+          "total": "The subtotal is €8,180.00. Tax at 19% amounts to €1,554.20, bringing the total to €9,734.20 (EUR)."
+        }
+      },
+      "error": null,
+      "error_type": null,
+      "latency_ms": 1.6549590000067838,
+      "cost_usd": 0.0008950000000000001,
+      "input_tokens": 221,
+      "output_tokens": 523,
+      "trace_id": "7241c366251c43ac",
+      "scores": {
+        "field_precision": 1.0,
+        "field_recall": 0.9375,
+        "field_f1_weighted": 0.967741935483871,
+        "critical_fields_exact": 1.0,
+        "line_item_recall": 1.0,
+        "evidence_correct": 1.0
+      },
+      "passed": {
+        "field_precision": null,
+        "field_recall": null,
+        "field_f1_weighted": true,
+        "critical_fields_exact": true,
+        "line_item_recall": true,
+        "evidence_correct": true
+      },
+      "details": {
+        "field_f1_weighted": {
+          "po_number": "fn"
+        }
+      },
+      "evaluator_errors": {},
+      "tags": [
+        "format:letter",
+        "tenant:logistics",
+        "currency:EUR"
+      ],
+      "metadata": {}
+    },
+    {
+      "case_id": "INV-014",
+      "repeat": 0,
+      "output": {
+        "fields": {
+          "vendor": "PayBridge Payments Inc.",
+          "invoice_number": "PBP-2026-Q1-0012",
+          "invoice_date": "2026-03-31",
+          "due_date": "2026-04-30",
+          "po_number": "PO-NW-2026-10300",
+          "currency": "USD",
+          "subtotal": 228900.0,
+          "tax_amount": 0.0,
+          "total": 228900.0
+        },
+        "line_items": [
+          {
+            "description": "Gateway fees, Q1 2026, 48.2M transactions",
+            "quantity": 48200000.0,
+            "unit_price": 0.0045,
+            "amount": 216900.0
+          },
+          {
+            "description": "Stand-in authorisation service, Q1",
+            "quantity": 1.0,
+            "unit_price": 12000.0,
+            "amount": 12000.0
+          }
+        ],
+        "evidence": {
+          "vendor": "=== PAYBRIDGE PAYMENTS INC. :: BILLING STATEMENT ===",
+          "invoice_number": "Statement/Invoice No.: PBP-2026-Q1-0012",
+          "invoice_date": "Period end / Issue date: 2026-03-31",
+          "due_date": "Payment due: 2026-04-30",
+          "po_number": "PO Number: PO-NW-2026-10300",
+          "currency": "Currency: USD",
+          "subtotal": "subtotal=228900.00",
+          "tax_amount": "Statement/Invoice No.: PBP-2026-Q1-0012",
+          "total": "subtotal=228900.00"
+        }
+      },
+      "error": null,
+      "error_type": null,
+      "latency_ms": 1.6379999942728318,
+      "cost_usd": 0.000621,
+      "input_tokens": 219,
+      "output_tokens": 341,
+      "trace_id": "03e20af04038428a",
+      "scores": {
+        "field_precision": 1.0,
+        "field_recall": 1.0,
+        "field_f1_weighted": 1.0,
+        "critical_fields_exact": 1.0,
+        "line_item_recall": 1.0,
+        "evidence_correct": 1.0
+      },
+      "passed": {
+        "field_precision": null,
+        "field_recall": null,
+        "field_f1_weighted": true,
+        "critical_fields_exact": true,
+        "line_item_recall": true,
+        "evidence_correct": true
+      },
+      "details": {},
+      "evaluator_errors": {},
+      "tags": [
+        "format:statement",
+        "tenant:retail",
+        "currency:USD"
+      ],
+      "metadata": {}
+    },
+    {
+      "case_id": "INV-015",
+      "repeat": 0,
+      "output": {
+        "fields": {
+          "vendor": "Pinecrest Catering",
+          "invoice_number": "PC-26-0402",
+          "invoice_date": "2026-04-02",
+          "due_date": "2026-04-16",
+          "po_number": "PO-NW-2026-10655",
+          "currency": "USD",
+          "subtotal": 1596.0,
+          "tax_amount": 127.68,
+          "total": 1723.68
+        },
+        "line_items": [
+          {
+            "description": "Breakfast, Logistics planning offsite, 42 persons",
+            "quantity": 42.0,
+            "unit_price": 14.0,
+            "amount": 588.0
+          },
+          {
+            "description": "Lunch, Logistics planning offsite, 42 persons",
+            "quantity": 42.0,
+            "unit_price": 22.0,
+            "amount": 924.0
+          }
+        ],
+        "evidence": {
+          "vendor": "Pinecrest Catering | 88 Pinecrest Avenue, Harbor City",
+          "invoice_number": "Inv# PC-26-0402 | 2026-04-02 | due 2026-04-16",
+          "invoice_date": "Inv# PC-26-0402 | 2026-04-02 | due 2026-04-16",
+          "due_date": "Inv# PC-26-0402 | 2026-04-02 | due 2026-04-16",
+          "po_number": "PO: PO-NW-2026-10655",
+          "currency": "Sub 1596.00 | Tax 8% 127.68 | Total 1723.68 USD",
+          "subtotal": "Sub 1596.00 | Tax 8% 127.68 | Total 1723.68 USD",
+          "tax_amount": "Sub 1596.00 | Tax 8% 127.68 | Total 1723.68 USD",
+          "total": "Sub 1596.00 | Tax 8% 127.68 | Total 1723.68 USD"
+        }
+      },
+      "error": null,
+      "error_type": null,
+      "latency_ms": 1.588750004884787,
+      "cost_usd": 0.000726,
+      "input_tokens": 165,
+      "output_tokens": 429,
+      "trace_id": "c9712d5096ca4da9",
+      "scores": {
+        "field_precision": 1.0,
+        "field_recall": 1.0,
+        "field_f1_weighted": 1.0,
+        "critical_fields_exact": 1.0,
+        "line_item_recall": 1.0,
+        "evidence_correct": 1.0
+      },
+      "passed": {
+        "field_precision": null,
+        "field_recall": null,
+        "field_f1_weighted": true,
+        "critical_fields_exact": true,
+        "line_item_recall": true,
+        "evidence_correct": true
+      },
+      "details": {},
+      "evaluator_errors": {},
+      "tags": [
+        "format:receipt",
+        "tenant:logistics",
+        "currency:USD"
+      ],
+      "metadata": {}
+    },
+    {
+      "case_id": "INV-016",
+      "repeat": 0,
+      "output": {
+        "fields": {
+          "vendor": "Kestrel Fleet Services",
+          "invoice_number": "KFS/26/0199",
+          "invoice_date": "2026-04-07",
+          "due_date": "2026-05-07",
+          "po_number": "PO-NW-2026-10640",
+          "currency": "USD",
+          "subtotal": 7044.0,
+          "tax_amount": 563.52,
+          "total": 7607.52
+        },
+        "line_items": [
+          {
+            "description": "Tyres, van-s, each",
+            "quantity": 48.0,
+            "unit_price": 128.0,
+            "amount": 6144.0
+          },
+          {
+            "description": "Wheel alignment",
+            "quantity": 12.0,
+            "unit_price": 75.0,
+            "amount": 900.0
+          }
+        ],
+        "evidence": {
+          "vendor": "Kestrel Fleet Services",
+          "invoice_number": "INVOICE KFS/26/0199",
+          "invoice_date": "Invoice date: 2026-04-07    Due date: 2026-05-07",
+          "due_date": "Invoice date: 2026-04-07    Due date: 2026-05-07",
+          "po_number": "PO Number: PO-NW-2026-10640",
+          "currency": "Currency: USD. Payment terms: net 30.",
+          "subtotal": "Subtotal     $7,044.00",
+          "tax_amount": "Tax (8%)       $563.52",
+          "total": "TOTAL DUE     $7,607.52"
+        }
+      },
+      "error": null,
+      "error_type": null,
+      "latency_ms": 1.4074589998926967,
+      "cost_usd": 0.0006029999999999999,
+      "input_tokens": 210,
+      "output_tokens": 332,
+      "trace_id": "dc0421a7b4594226",
+      "scores": {
+        "field_precision": 1.0,
+        "field_recall": 1.0,
+        "field_f1_weighted": 1.0,
+        "critical_fields_exact": 1.0,
+        "line_item_recall": 1.0,
+        "evidence_correct": 1.0
+      },
+      "passed": {
+        "field_precision": null,
+        "field_recall": null,
+        "field_f1_weighted": true,
+        "critical_fields_exact": true,
+        "line_item_recall": true,
+        "evidence_correct": true
+      },
+      "details": {},
+      "evaluator_errors": {},
+      "tags": [
+        "format:table",
+        "tenant:logistics",
+        "currency:USD"
+      ],
+      "metadata": {}
+    },
+    {
+      "case_id": "INV-017",
+      "repeat": 0,
+      "output": {
+        "fields": {
+          "vendor": "Vantage Software Ltd",
+          "invoice_number": "VS-INV-105102",
+          "invoice_date": "2026-04-10",
+          "due_date": "2026-05-10",
+          "po_number": "PO-NW-2026-10612",
+          "currency": "USD",
+          "subtotal": 24000.0,
+          "tax_amount": 0.0,
+          "total": 24000.0
+        },
+        "line_items": [
+          {
+            "description": "RoutePilot Studio licence, annual",
+            "quantity": 1.0,
+            "unit_price": 24000.0,
+            "amount": 24000.0
+          }
+        ],
+        "evidence": {
+          "vendor": "=== VANTAGE SOFTWARE LTD :: BILLING STATEMENT ===",
+          "invoice_number": "Statement/Invoice No.: VS-INV-105102",
+          "invoice_date": "Period end / Issue date: 2026-04-10",
+          "due_date": "Payment due: 2026-05-10",
+          "po_number": "PO Number: PO-NW-2026-10612",
+          "currency": "Currency: USD",
+          "subtotal": "quantity=1 unit=24000.0000 amount=24000.00",
+          "tax_amount": "Statement/Invoice No.: VS-INV-105102",
+          "total": "quantity=1 unit=24000.0000 amount=24000.00"
+        }
+      },
+      "error": null,
+      "error_type": null,
+      "latency_ms": 1.4723339991178364,
+      "cost_usd": 0.000531,
+      "input_tokens": 171,
+      "output_tokens": 297,
+      "trace_id": "55fbb7bb43694a5f",
+      "scores": {
+        "field_precision": 1.0,
+        "field_recall": 1.0,
+        "field_f1_weighted": 1.0,
+        "critical_fields_exact": 1.0,
+        "line_item_recall": 1.0,
+        "evidence_correct": 1.0
+      },
+      "passed": {
+        "field_precision": null,
+        "field_recall": null,
+        "field_f1_weighted": true,
+        "critical_fields_exact": true,
+        "line_item_recall": true,
+        "evidence_correct": true
+      },
+      "details": {},
+      "evaluator_errors": {},
+      "tags": [
+        "format:statement",
+        "tenant:logistics",
+        "currency:USD"
+      ],
+      "metadata": {}
+    },
+    {
+      "case_id": "INV-018",
+      "repeat": 0,
+      "output": {
+        "fields": {
+          "vendor": "Oakline Facilities Ltd",
+          "invoice_number": "OAK-2026-0411",
+          "invoice_date": "2026-04-11",
+          "due_date": "2026-05-11",
+          "po_number": null,
+          "currency": "GBP",
+          "subtotal": 7180.0,
+          "tax_amount": 1436.0,
+          "total": 8616.0
+        },
+        "line_items": [
+          {
+            "description": "Cleaning services, Harbor City office, April",
+            "quantity": 1.0,
+            "unit_price": 6200.0,
+            "amount": 6200.0
+          },
+          {
+            "description": "Window cleaning, quarterly",
+            "quantity": 1.0,
+            "unit_price": 980.0,
+            "amount": 980.0
+          }
+        ],
+        "evidence": {
+          "vendor": "From: Oakline Facilities Ltd, 3 Oakline Court, Harbor City",
+          "invoice_number": "Please find below the details of invoice OAK-2026-0411, issued on 2026-04-11 and payable by 2026-05-11. This invoice relates to purchase order PO-NW-2026-10488.",
+          "invoice_date": "Please find below the details of invoice OAK-2026-0411, issued on 2026-04-11 and payable by 2026-05-11. This invoice relates to purchase order PO-NW-2026-10488.",
+          "due_date": "Please find below the details of invoice OAK-2026-0411, issued on 2026-04-11 and payable by 2026-05-11. This invoice relates to purchase order PO-NW-2026-10488.",
+          "currency": "The subtotal is £7,180.00. Tax at 20% amounts to £1,436.00, bringing the total to £8,616.00 (GBP).",
+          "subtotal": "The subtotal is £7,180.00. Tax at 20% amounts to £1,436.00, bringing the total to £8,616.00 (GBP).",
+          "tax_amount": "The subtotal is £7,180.00. Tax at 20% amounts to £1,436.00, bringing the total to £8,616.00 (GBP).",
+          "total": "The subtotal is £7,180.00. Tax at 20% amounts to £1,436.00, bringing the total to £8,616.00 (GBP)."
+        }
+      },
+      "error": null,
+      "error_type": null,
+      "latency_ms": 1.4361659996211529,
+      "cost_usd": 0.000904,
+      "input_tokens": 212,
+      "output_tokens": 532,
+      "trace_id": "f6ab81af51104327",
+      "scores": {
+        "field_precision": 1.0,
+        "field_recall": 0.9375,
+        "field_f1_weighted": 0.967741935483871,
+        "critical_fields_exact": 1.0,
+        "line_item_recall": 1.0,
+        "evidence_correct": 1.0
+      },
+      "passed": {
+        "field_precision": null,
+        "field_recall": null,
+        "field_f1_weighted": true,
+        "critical_fields_exact": true,
+        "line_item_recall": true,
+        "evidence_correct": true
+      },
+      "details": {
+        "field_f1_weighted": {
+          "po_number": "fn"
+        }
+      },
+      "evaluator_errors": {},
+      "tags": [
+        "format:letter",
+        "tenant:shared",
+        "currency:GBP"
+      ],
+      "metadata": {}
+    },
+    {
+      "case_id": "INV-019",
+      "repeat": 0,
+      "output": {
+        "fields": {
+          "vendor": "Lumen Retail Hardware",
+          "invoice_number": "LRH-2026-0303",
+          "invoice_date": "2026-04-15",
+          "due_date": "2026-05-15",
+          "po_number": "PO-NW-2026-10688",
+          "currency": "USD",
+          "subtotal": 74064.0,
+          "tax_amount": 5925.12,
+          "total": 79989.12
+        },
+        "line_items": [
+          {
+            "description": "Register terminal, model R7",
+            "quantity": 48.0,
+            "unit_price": 1150.0,
+            "amount": 55200.0
+          },
+          {
+            "description": "Receipt printer, thermal",
+            "quantity": 48.0,
+            "unit_price": 215.0,
+            "amount": 10320.0
+          },
+          {
+            "description": "Barcode scanner, handheld",
+            "quantity": 96.0,
+            "unit_price": 89.0,
+            "amount": 8544.0
+          }
+        ],
+        "evidence": {
+          "vendor": "Lumen Retail Hardware",
+          "invoice_number": "INVOICE LRH-2026-0303",
+          "invoice_date": "Invoice date: 2026-04-15    Due date: 2026-05-15",
+          "due_date": "Invoice date: 2026-04-15    Due date: 2026-05-15",
+          "po_number": "PO Number: PO-NW-2026-10688",
+          "currency": "Currency: USD. Payment terms: net 30.",
+          "subtotal": "Subtotal    $74,064.00",
+          "tax_amount": "Tax (8%)     $5,925.12",
+          "total": "TOTAL DUE    $79,989.12"
+        }
+      },
+      "error": null,
+      "error_type": null,
+      "latency_ms": 0.716875001671724,
+      "cost_usd": 0.0006755,
+      "input_tokens": 232,
+      "output_tokens": 373,
+      "trace_id": "fd9e730d1b374232",
+      "scores": {
+        "field_precision": 1.0,
+        "field_recall": 1.0,
+        "field_f1_weighted": 1.0,
+        "critical_fields_exact": 1.0,
+        "line_item_recall": 1.0,
+        "evidence_correct": 1.0
+      },
+      "passed": {
+        "field_precision": null,
+        "field_recall": null,
+        "field_f1_weighted": true,
+        "critical_fields_exact": true,
+        "line_item_recall": true,
+        "evidence_correct": true
+      },
+      "details": {},
+      "evaluator_errors": {},
+      "tags": [
+        "format:table",
+        "tenant:retail",
+        "currency:USD"
+      ],
+      "metadata": {}
+    },
+    {
+      "case_id": "INV-020",
+      "repeat": 0,
+      "output": {
+        "fields": {
+          "vendor": "Summit Telecom",
+          "invoice_number": "ST-2026-03-55390",
+          "invoice_date": "2026-03-31",
+          "due_date": "2026-04-30",
+          "po_number": "PO-NW-2025-09911",
+          "currency": "USD",
+          "subtotal": 63080.0,
+          "tax_amount": 5046.4,
+          "total": 68126.4
+        },
+        "line_items": [
+          {
+            "description": "Store connectivity, 1,240 sites, March",
+            "quantity": 1240.0,
+            "unit_price": 38.0,
+            "amount": 47120.0
+          },
+          {
+            "description": "Depot fibre, 38 sites, March",
+            "quantity": 38.0,
+            "unit_price": 420.0,
+            "amount": 15960.0
+          }
+        ],
+        "evidence": {
+          "vendor": "Summit Telecom | Summit Plaza, Riverside",
+          "invoice_number": "Inv# ST-2026-03-55390 | 2026-03-31 | due 2026-04-30",
+          "invoice_date": "Inv# ST-2026-03-55390 | 2026-03-31 | due 2026-04-30",
+          "due_date": "Inv# ST-2026-03-55390 | 2026-03-31 | due 2026-04-30",
+          "po_number": "PO: PO-NW-2025-09911",
+          "currency": "Sub 63080.00 | Tax 8% 5046.40 | Total 68126.40 USD",
+          "subtotal": "Sub 63080.00 | Tax 8% 5046.40 | Total 68126.40 USD",
+          "tax_amount": "Sub 63080.00 | Tax 8% 5046.40 | Total 68126.40 USD",
+          "total": "Sub 63080.00 | Tax 8% 5046.40 | Total 68126.40 USD"
+        }
+      },
+      "error": null,
+      "error_type": null,
+      "latency_ms": 0.7320410004467703,
+      "cost_usd": 0.0007390000000000001,
+      "input_tokens": 164,
+      "output_tokens": 438,
+      "trace_id": "fed27ed996f145c5",
+      "scores": {
+        "field_precision": 1.0,
+        "field_recall": 1.0,
+        "field_f1_weighted": 1.0,
+        "critical_fields_exact": 1.0,
+        "line_item_recall": 1.0,
+        "evidence_correct": 1.0
+      },
+      "passed": {
+        "field_precision": null,
+        "field_recall": null,
+        "field_f1_weighted": true,
+        "critical_fields_exact": true,
+        "line_item_recall": true,
+        "evidence_correct": true
+      },
+      "details": {},
+      "evaluator_errors": {},
+      "tags": [
+        "format:receipt",
+        "tenant:shared",
+        "currency:USD"
+      ],
+      "metadata": {}
+    }
+  ]
+}

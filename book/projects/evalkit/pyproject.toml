@@ -1,0 +1,31 @@
+# path: book/projects/evalkit/pyproject.toml
+[project]
+name = "evalkit"
+version = "0.1.0"
+description = "Evaluation core for the AI Engineering book: case schema, versioned datasets, runner, deterministic and classification metrics, LLM judges, statistics, reports, and release gates."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = [
+  "aie-core",
+  "pydantic>=2.5",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.4", "pytest-asyncio>=0.23"]
+
+[tool.uv.sources]
+aie-core = { path = "../aie_core", editable = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["evalkit"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+markers = ["integration: needs a real provider and API key; skipped by default"]
+addopts = "-m 'not integration'"

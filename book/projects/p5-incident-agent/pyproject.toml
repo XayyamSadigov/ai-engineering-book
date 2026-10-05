@@ -1,0 +1,49 @@
+[project]
+name = "p5-incident-agent"
+version = "0.1.0"
+description = "Project 5 of the AI Engineering book: Northwind incident-research agent (planner-executor with replanning, evaluator-optimizer with a Definition of Done, approval-gated publishing)."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = [
+  "aie-core",
+  "agentkit",
+  "ragkit",
+  "evalkit",
+  "rank-bm25>=0.2.2",
+  "pydantic>=2.5",
+  "pydantic-settings>=2.0",
+  "fastapi>=0.110",
+  "uvicorn>=0.27",
+  "httpx>=0.25",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.4", "pytest-timeout>=2.2"]
+
+[project.scripts]
+p5 = "incident_agent.cli:main"
+
+[tool.uv.sources]
+aie-core = { path = "../aie_core", editable = true }
+agentkit = { path = "../agentkit", editable = true }
+ragkit = { path = "../ragkit", editable = true }
+evalkit = { path = "../evalkit", editable = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["incident_agent"]
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+timeout = 60
+pythonpath = ["."]
+markers = ["integration: needs a real provider and API key; skipped by default"]
+addopts = "-m 'not integration'"
+filterwarnings = ["ignore:Using `httpx` with `starlette.testclient`"]

@@ -1,0 +1,40 @@
+[project]
+name = "p4-support-assistant"
+version = "0.1.0"
+description = "Project 4 of the AI Engineering book: Northwind support assistant with governed tools (policy, approvals, idempotency, audit)."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = [
+  "aie-core",
+  "toolkit",
+  "pydantic>=2.5",
+  "pydantic-settings>=2.0",
+  "fastapi>=0.110",
+  "uvicorn>=0.27",
+  "httpx>=0.25",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.4", "pytest-timeout>=2.2"]
+
+[tool.uv.sources]
+aie-core = { path = "../aie_core", editable = true }
+toolkit = { path = "../toolkit", editable = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["support_assistant"]
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+timeout = 30
+pythonpath = [".", "../toolkit", "../shared-data"]
+markers = ["integration: needs a real provider and API key; skipped by default"]
+addopts = "-m 'not integration'"

@@ -1,0 +1,36 @@
+# OS / editors
+.DS_Store
+.idea/
+.vscode/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
+.coverage
+htmlcov/
+
+# Local tooling
+.claude-flow/
+.claude/
+
+# Secrets (examples are committed, real env files are not)
+.env
+.env.*
+!.env.example
+
+# Copyrighted source material: kept locally, not redistributed
+book/analysis/source-extracted-text.txt
+
+# Site build
+site/
+_site_src/
+
+# Local browser-automation output
+.playwright-mcp/

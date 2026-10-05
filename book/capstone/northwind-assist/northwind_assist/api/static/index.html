@@ -1,0 +1,234 @@
+<!doctype html>
+<!-- path: book/capstone/northwind-assist/northwind_assist/api/static/index.html -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Northwind Assist</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --harbor:#1E3A4C; --canvas:#EEF2F1; --paper:#FFFFFF; --ink:#1B2329; --muted:#566670;
+  --rule:#C9D3D1; --amber:#C9861F; --amber-wash:#FBF3E4; --ledger:#2F7D5B; --alert:#A23B2A;
+  --ui:"Atkinson Hyperlegible",system-ui,sans-serif; --read:"Source Serif 4",Georgia,serif;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --harbor:#8FB8CF; --canvas:#141B20; --paper:#1C252B; --ink:#E4ECEA; --muted:#9AAAB2;
+  --rule:#33424A; --amber:#E2A84C; --amber-wash:#2B2416; --ledger:#6CC29A; --alert:#E07A68;}}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--canvas);color:var(--ink);font:16px/1.5 var(--ui)}
+button,input,textarea{font:inherit;color:inherit}
+:focus-visible{outline:3px solid var(--harbor);outline-offset:2px}
+.app{display:grid;grid-template-columns:240px minmax(0,1fr) 320px;min-height:100vh}
+aside,main{padding:20px}
+.rail{border-right:1px solid var(--rule)}
+.inbox{border-left:1px solid var(--rule);background:color-mix(in srgb,var(--canvas) 70%,var(--paper))}
+h1{font-size:1.25rem;margin:0 0 4px;color:var(--harbor)}
+h2{font-size:1rem;margin:24px 0 8px}
+.who{color:var(--muted);font-size:.9rem;margin:0}
+.persona{display:block;width:100%;text-align:left;background:none;border:1px solid var(--rule);border-radius:6px;
+  padding:8px 10px;margin:6px 0;cursor:pointer}
+.persona[aria-pressed="true"]{border-color:var(--harbor);box-shadow:inset 3px 0 0 var(--harbor)}
+.persona small{display:block;color:var(--muted)}
+main{display:flex;flex-direction:column;max-width:860px;width:100%;margin:0 auto}
+#log{flex:1;overflow-y:auto}
+.turn{padding:14px 0;border-bottom:1px solid var(--rule)}
+.q{font-weight:700}
+.a{font-family:var(--read);font-size:1.06rem;line-height:1.65;margin-top:6px;max-width:68ch}
+.tab{font:700 .72rem var(--ui);vertical-align:super;background:var(--harbor);color:var(--paper);border-radius:3px 3px 0 0;
+  padding:0 5px;margin-left:2px;text-decoration:none}
+.sources{margin:8px 0 0;padding:0;list-style:none;font-size:.88rem;color:var(--muted)}
+.sources li{padding:2px 0}
+.sources b{color:var(--ink)}
+.status{font-size:.82rem;color:var(--muted);margin-top:6px}
+.status.blocked,.status.error{color:var(--alert)}
+.note{font-size:.85rem;color:var(--muted);border-left:3px solid var(--rule);padding-left:8px;margin:6px 0}
+.fb{margin-top:6px}
+.fb button{border:1px solid var(--rule);background:var(--paper);border-radius:4px;padding:2px 10px;cursor:pointer}
+.fb button[disabled]{opacity:.6;cursor:default}
+form.composer{display:flex;gap:8px;padding-top:12px;border-top:2px solid var(--harbor);background:var(--canvas);position:sticky;bottom:0}
+textarea{flex:1;min-height:52px;max-height:200px;resize:vertical;border:1px solid var(--rule);border-radius:6px;padding:10px;background:var(--paper)}
+.primary{background:var(--harbor);color:var(--paper);border:0;border-radius:6px;padding:0 18px;cursor:pointer}
+.primary[disabled]{opacity:.5}
+.empty{color:var(--muted);font-size:.92rem;max-width:60ch}
+.slip{background:var(--paper);border:1px solid var(--rule);border-top:2px dashed var(--amber);border-left:6px solid var(--amber);
+  margin:0 0 14px;padding:12px 12px 10px;position:relative}
+.slip::before{content:"";position:absolute;top:-8px;left:-6px;right:-1px;height:6px;
+  background:radial-gradient(circle at 6px 6px,var(--canvas) 3px,transparent 3.5px) 0 0/12px 6px repeat-x}
+.slip h3{margin:0 0 6px;font-size:.95rem}
+.slip dl{margin:0;font-size:.86rem;display:grid;grid-template-columns:max-content 1fr;gap:2px 10px}
+.slip dt{color:var(--muted)} .slip dd{margin:0;overflow-wrap:anywhere}
+.slip .body{white-space:pre-wrap;font-family:var(--read);background:var(--amber-wash);padding:6px 8px;margin:8px 0;font-size:.92rem}
+.slip .hash{color:var(--muted);font-size:.75rem}
+.slip .acts{display:flex;gap:8px;margin-top:8px}
+.ok{background:var(--ledger);color:#fff;border:0;border-radius:4px;padding:4px 12px;cursor:pointer}
+.no{background:none;border:1px solid var(--alert);color:var(--alert);border-radius:4px;padding:4px 12px;cursor:pointer}
+.mem{font-size:.88rem;margin:6px 0} .mem button{margin-left:6px}
+@media (max-width:900px){.app{grid-template-columns:1fr}.rail,.inbox{border:0;border-bottom:1px solid var(--rule)}
+  aside,main{padding:16px}
+  #personas{display:flex;flex-wrap:wrap;gap:6px}
+  .persona{display:inline-block;width:auto;margin:0;padding:6px 12px}
+  .persona small{display:none}
+  .rail h2{margin-top:14px}}
+@media (prefers-reduced-motion:no-preference){.slip{animation:drop .25s ease-out}
+  @keyframes drop{from{transform:translateY(-6px);opacity:0}to{transform:none;opacity:1}}}
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="rail" aria-label="Sign in">
+    <h1>Northwind Assist</h1>
+    <p class="who" id="who">Not signed in</p>
+    <h2>Sign in as</h2>
+    <div id="personas"><p class="empty">Development sign-in is off. Use your company login.</p></div>
+    <h2>What I remember</h2>
+    <div id="memory"><p class="empty">Nothing yet. Say "remember that my team is Store 0412".</p></div>
+  </aside>
+
+  <main>
+    <section id="log" aria-live="polite" aria-label="Conversation">
+      <p class="empty" id="hint">Ask about a policy or runbook, or ask for an action: "create ticket: VPN drops at store 0412",
+        "send TCK-2026-0001 to priya.raman@northwind.example: Card payments are restored."</p>
+    </section>
+    <form class="composer" id="composer">
+      <label for="msg" class="who" hidden>Message</label>
+      <textarea id="msg" placeholder="Ask Northwind Assist" required disabled></textarea>
+      <button class="primary" id="send" disabled>Send</button>
+    </form>
+  </main>
+
+  <aside class="inbox" aria-label="Approvals">
+    <h1>Waiting for approval</h1>
+    <p class="who">Replies are sent only after a lead approves the exact text.</p>
+    <div id="approvals"><p class="empty">No actions are waiting.</p></div>
+  </aside>
+</div>
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+let token = null, session = "ses_" + Math.random().toString(16).slice(2, 12), me = null;
+
+async function api(path, opts = {}) {
+  const r = await fetch(path, {...opts, headers: {"content-type": "application/json",
+    ...(token ? {authorization: "Bearer " + token} : {}), ...(opts.headers || {})}});
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.status);
+  return r.json();
+}
+
+async function loadPersonas() {
+  try {
+    const ps = await api("/v1/auth/personas");
+    $("#personas").innerHTML = Object.entries(ps).map(([id, p]) =>
+      `<button class="persona" data-id="${esc(id)}" aria-pressed="false"><b>${esc(id)}</b><small>${esc(p.title)}, ${esc(p.tenant)}</small></button>`).join("");
+    document.querySelectorAll(".persona").forEach(b => b.onclick = () => signIn(b.dataset.id));
+  } catch { /* dev sign-in disabled */ }
+}
+
+async function signIn(id) {
+  token = (await api("/v1/auth/dev-token", {method: "POST", body: JSON.stringify({persona: id})})).access_token;
+  me = await api("/v1/me");
+  document.querySelectorAll(".persona").forEach(b => b.setAttribute("aria-pressed", b.dataset.id === id));
+  $("#who").textContent = `${me.user_id}, ${me.tenant} (${me.roles.join(", ")})`;
+  $("#msg").disabled = $("#send").disabled = false;
+  $("#log").innerHTML = ""; session = "ses_" + Math.random().toString(16).slice(2, 12);
+  refreshSide();
+}
+
+function refreshSide() { loadApprovals(); loadMemory(); }
+
+async function loadApprovals() {
+  const items = await api("/v1/approvals").catch(() => []);
+  const lead = me && me.scopes.includes("replies:approve");
+  $("#approvals").innerHTML = items.length ? items.map(a => `
+    <article class="slip"><h3>${esc(a.tool === "send_reply" ? "Send reply" : a.tool)} for ${esc(a.arguments.ticket_id || "")}</h3>
+      <dl><dt>To</dt><dd>${esc(a.arguments.to || "")}</dd><dt>Subject</dt><dd>${esc(a.arguments.subject || "")}</dd>
+      <dt>Asked by</dt><dd>${esc(a.requested_by)}</dd></dl>
+      <div class="body">${esc(a.arguments.body || JSON.stringify(a.arguments))}</div>
+      <div class="hash">Approval covers exactly this text: ${esc(a.args_hash.slice(0, 16))}</div>
+      ${lead ? `<div class="acts"><button class="ok" data-a="${esc(a.approval_id)}">Approve and send</button>
+      <button class="no" data-r="${esc(a.approval_id)}">Reject</button></div>` : `<p class="who">A lead will review this.</p>`}
+    </article>`).join("") : `<p class="empty">No actions are waiting.</p>`;
+  document.querySelectorAll("[data-a]").forEach(b => b.onclick = () => decide(b.dataset.a, "approve"));
+  document.querySelectorAll("[data-r]").forEach(b => b.onclick = () => decide(b.dataset.r, "reject"));
+}
+
+async function decide(id, what) {
+  try { const r = await api(`/v1/approvals/${id}/${what}`, {method: "POST", body: "{}"});
+    note($("#log"), what === "approve" ? `Approved and ${r.status === "ok" ? "sent" : r.status}.` : "Rejected. Nothing was sent.");
+  } catch (e) { note($("#log"), `Could not ${what}: ${e.message}.`); }
+  loadApprovals();
+}
+
+async function loadMemory() {
+  const m = await api("/v1/memory").catch(() => null);
+  if (!m) return;
+  const facts = Object.entries(m.facts).map(([k, v]) => `<p class="mem">${esc(k)}: <b>${esc(v)}</b></p>`);
+  const pend = m.pending.map(p => `<p class="mem">Remember ${esc(p.key)} = <b>${esc(p.value)}</b>?
+    <button class="ok" data-c="${esc(p.record_id)}">Yes</button><button class="no" data-x="${esc(p.record_id)}">No</button></p>`);
+  $("#memory").innerHTML = facts.concat(pend).join("") || `<p class="empty">Nothing yet. Say "remember that my team is Store 0412".</p>`;
+  document.querySelectorAll("[data-c]").forEach(b => b.onclick = () => api(`/v1/memory/${b.dataset.c}/confirm`, {method: "POST"}).then(loadMemory));
+  document.querySelectorAll("[data-x]").forEach(b => b.onclick = () => api(`/v1/memory/${b.dataset.x}/reject`, {method: "POST"}).then(loadMemory));
+}
+
+function note(parent, text) { const p = document.createElement("p"); p.className = "note"; p.textContent = text;
+  const st = parent.querySelector(":scope > .status"); st ? parent.insertBefore(p, st) : parent.appendChild(p); }
+
+function renderAnswer(el, text, cites) {
+  el.innerHTML = esc(text).replace(/\[(E\d+)\]/g, (m, e) => cites[e] ? `<a class="tab" href="#src-${el.dataset.t}-${e}" title="${esc(cites[e].title)}">${e}</a>` : "");
+}
+
+$("#composer").onsubmit = async ev => {
+  ev.preventDefault();
+  const text = $("#msg").value.trim(); if (!text) return;
+  $("#msg").value = ""; $("#send").disabled = true;
+  const t = Date.now().toString(36), turn = document.createElement("div");
+  turn.className = "turn";
+  turn.innerHTML = `<div class="q">${esc(text)}</div><div class="a" data-t="${t}"></div><ul class="sources"></ul><div class="status">Working</div>`;
+  $("#log").appendChild(turn);
+  const a = turn.querySelector(".a"), srcs = turn.querySelector(".sources"), st = turn.querySelector(".status");
+  let answer = "", cites = {}, reqId = null;
+  try {
+    const r = await fetch("/v1/chat", {method: "POST", headers: {"content-type": "application/json", accept: "text/event-stream",
+      authorization: "Bearer " + token}, body: JSON.stringify({message: text, session_id: session})});
+    if (!r.ok) { const body = await r.json().catch(() => ({})); throw new Error(r.status === 429 ? "Too many requests. Wait a moment and send again."
+      : (body.error || body.detail || `request failed with ${r.status}`)); }
+    const reader = r.body.getReader(), dec = new TextDecoder(); let buf = "";
+    for (;;) {
+      const {value, done} = await reader.read(); if (done) break;
+      buf += dec.decode(value, {stream: true});
+      let i; while ((i = buf.indexOf("\n\n")) >= 0) {
+        const frame = buf.slice(0, i); buf = buf.slice(i + 2);
+        const name = (frame.match(/^event: (.*)$/m) || [])[1], data = (frame.match(/^data: (.*)$/m) || [])[1];
+        if (!name || !data) continue;
+        const d = JSON.parse(data);
+        if (name === "meta") { reqId = d.request_id; st.textContent = `Model ${d.model_alias}${d.degrade_level ? ", reduced mode" : ""}`; }
+        if (name === "citation") { cites[d.eid] = d; srcs.insertAdjacentHTML("beforeend",
+          `<li id="src-${t}-${esc(d.eid)}"><b>${esc(d.eid)}</b> ${esc(d.title || d.doc_id)}, version ${esc(d.version)}</li>`); }
+        if (name === "delta") { answer += d.text; renderAnswer(a, answer, cites); }
+        if (name === "tool") note(turn, `${d.tool}: ${d.status}${d.duplicate ? " (duplicate, not repeated)" : ""}`);
+        if (name === "approval") { note(turn, "Waiting for a lead to approve the exact text."); loadApprovals(); }
+        if (name === "memory") { note(turn, d.kind === "pending" ? `I think you prefer ${d.key} = ${d.value}. Confirm it on the left.` :
+          d.kind === "stored" ? `Remembered ${d.key}.` : `Not stored: ${d.reasons.join(", ")}.`); loadMemory(); }
+        if (name === "notice" && d.kind !== "withheld") note(turn, d.message || d.reasons?.join("; ") || d.kind);
+        if (name === "structured") note(turn, `Extracted ${d.doc_type}, route ${d.route}.`);
+        if (name === "error") { st.className = "status error"; st.textContent = d.message; }
+        if (name === "done") {
+          if (!answer && d.status === "insufficient_evidence") a.textContent = "I could not find this in the documents you can access.";
+          st.className = "status " + (d.status === "blocked" ? "blocked" : "");
+          st.textContent = `${d.status.replaceAll("_", " ")}, cost ${Number(d.cost_usd).toFixed(5)} USD (illustrative)`;
+          turn.insertAdjacentHTML("beforeend", `<div class="fb"><button data-v="up" aria-label="Helpful">Helpful</button> <button data-v="down" aria-label="Not helpful">Not helpful</button></div>`);
+          turn.querySelectorAll(".fb button").forEach(b => b.onclick = async () => {
+            await api("/v1/feedback", {method: "POST", body: JSON.stringify({request_id: reqId, rating: b.dataset.v})});
+            turn.querySelectorAll(".fb button").forEach(x => x.disabled = true); b.textContent += ", thanks"; });
+        }
+      }
+    }
+  } catch (e) { st.className = "status error"; st.textContent = e.message; }
+  $("#send").disabled = false; $("#msg").focus(); $("#log").scrollTop = $("#log").scrollHeight;
+};
+$("#msg").addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); $("#composer").requestSubmit(); } });
+loadPersonas();
+</script>
+</body>
+</html>

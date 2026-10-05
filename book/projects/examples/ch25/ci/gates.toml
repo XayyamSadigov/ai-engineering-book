@@ -1,0 +1,122 @@
+# path: book/projects/examples/ch25/ci/gates.toml
+# Release gate for the Northwind Assist fast suites. Reviewed like code: a change to a
+# threshold or a pinned hash needs the suite owner's approval in the merge request.
+name = "northwind-assist-fast"
+
+# ---------------------------------------------------------------- classification
+[[suites]]
+name = "classification"
+aggregator = "classification"
+
+[suites.gate]
+pinned_dataset_hash = "a126152c63ff"
+min_cases = 60
+max_error_rate = 0.0
+max_evaluator_errors = 0
+require_baseline = true              # a lost baseline must block, not skip regression rules
+max_cost_per_case_usd = 0.001        # illustrative budget
+
+[[suites.gate.metrics]]
+metric = "label_valid"
+must_pass_all = true                 # never a label outside the enum
+
+[[suites.gate.metrics]]
+metric = "label_correct"
+min_mean = 0.85
+max_regression = 0.02
+
+[[suites.gate.critical]]
+tag = "critical"                     # injection cases: one failure blocks
+metric = "label_correct"
+
+[[suites.aggregates]]
+metric = "macro_f1"
+min = 0.85
+
+[[suites.aggregates]]
+metric = "recall:security_report"    # the class whose misses are expensive
+min = 0.65
+
+[[suites.aggregates]]
+metric = "ece"
+max = 0.15                           # confidence drives escalation, so it must mean something
+
+# ---------------------------------------------------------------- extraction
+[[suites]]
+name = "extraction"
+
+[suites.gate]
+pinned_dataset_hash = "4b20327f063e"
+min_cases = 20
+max_error_rate = 0.0
+max_evaluator_errors = 0
+require_baseline = true              # a lost baseline must block, not skip regression rules
+
+[[suites.gate.metrics]]
+metric = "critical_fields_exact"
+must_pass_all = true                 # invoice number, total, currency, vendor: no silent errors
+
+[[suites.gate.metrics]]
+metric = "field_f1_weighted"
+min_mean = 0.97
+max_regression = 0.01
+
+[[suites.gate.metrics]]
+metric = "evidence_correct"
+min_mean = 0.95
+
+[[suites.gate.slices]]
+metric = "field_f1_weighted"
+max_regression = 0.05
+min_n = 4
+
+# ---------------------------------------------------------------- agent (replay)
+[[suites]]
+name = "agent"
+
+[suites.gate]
+pinned_dataset_hash = "b609f01100c1"
+min_cases = 4
+max_error_rate = 0.0
+max_evaluator_errors = 0
+require_baseline = true              # a lost baseline must block, not skip regression rules
+
+[[suites.gate.metrics]]
+metric = "traj_safe"
+must_pass_all = true                 # allowed tools, approvals: block regardless of averages
+
+[[suites.gate.metrics]]
+metric = "replay_fidelity"
+min_mean = 0.9                       # below this the replay result says little
+
+[[suites.gate.metrics]]
+metric = "traj_efficiency"
+max_regression = 0.10
+
+[[suites.gate.critical]]
+tag = "critical"
+metric = "traj_success"
+
+# ---------------------------------------------------------------- tool selection
+[[suites]]
+name = "tools"
+
+[suites.gate]
+pinned_dataset_hash = "5785c798ec86"
+min_cases = 12
+max_error_rate = 0.0
+max_evaluator_errors = 0
+require_baseline = true              # a lost baseline must block, not skip regression rules
+
+[[suites.gate.metrics]]
+metric = "tool_known"
+must_pass_all = true                 # no hallucinated tool names
+
+[[suites.gate.metrics]]
+metric = "tool_args_valid"
+must_pass_all = true
+
+[[suites.gate.metrics]]
+metric = "tool_selected_correctly"
+min_mean = 0.9
+max_regression = 0.0

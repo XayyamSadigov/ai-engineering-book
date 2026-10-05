@@ -1,0 +1,84 @@
+# path: book/projects/examples/ch25/ci/github/eval-gate.yml
+# Copy to .github/workflows/eval-gate.yml at the repository root.
+# Merge requests: unit tests, then the fast eval suite, then the release gate.
+# Nightly: the full suite (repeated trials, judges) against the same gate.
+name: eval-gate
+
+on:
+  pull_request:
+    paths:
+      - "book/projects/**"
+  schedule:
+    - cron: "0 2 * * *"
+  workflow_dispatch: {}
+
+concurrency:
+  group: eval-gate-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  PROJECT_DIR: book/projects/examples/ch25
+  LLM_PROVIDER: fake            # the fast suite uses stand-in models; nightly may set a real provider
+  EVAL_SYSTEM: candidate
+
+jobs:
+  unit-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        run: |
+          pip install -e book/projects/aie_core -e book/projects/evalkit -e book/projects/agentkit
+          pip install "pytest>=8" "pyyaml>=6" "numpy>=1.26"
+      - name: Unit tests (eval suites skipped)
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: python -m pytest -q --junitxml=junit.xml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: junit
+          path: ${{ env.PROJECT_DIR }}/junit.xml
+
+  eval-gate:
+    needs: unit-tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        run: |
+          pip install -e book/projects/aie_core -e book/projects/evalkit -e book/projects/agentkit
+          pip install "pytest>=8" "pyyaml>=6" "numpy>=1.26"
+      - name: Run eval suite
+        working-directory: ${{ env.PROJECT_DIR }}
+        env:
+          SUITE: ${{ github.event_name == 'schedule' && 'full' || 'fast' }}
+          # Real-provider keys only for the nightly job, from repository secrets:
+          # OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          # --eval-suite fast on merge requests; full on the nightly schedule
+          python -m pytest -q --eval-suite "$SUITE" --eval-out eval-out/runs -m "eval_fast or eval_full"
+      - name: Release gate
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          python ci/release_gate.py --config ci/gates.toml --runs eval-out/runs \
+            --baselines ci/baselines --out eval-out
+      - name: Upload eval report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-report-${{ github.run_id }}
+          path: ${{ env.PROJECT_DIR }}/eval-out/
+          retention-days: 90

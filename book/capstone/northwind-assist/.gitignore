@@ -1,0 +1,10 @@
+.env
+__pycache__/
+.mypy_cache/
+.ruff_cache/
+eval/out*/
+eval-out/
+*.sqlite
+traces.jsonl
+.agent-runs/
+junit.xml

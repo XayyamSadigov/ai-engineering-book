@@ -1,0 +1,27 @@
+[project]
+name = "aie-ch25-taskevals"
+version = "0.1.0"
+description = "Chapter 25: task-specific evaluators, replay-based agent evaluation, synthetic data, CI release gate, online evaluation"
+requires-python = ">=3.11"
+dependencies = [
+  "aie-core",
+  "evalkit",
+  "agentkit",
+  "pydantic>=2.6",
+  "numpy>=1.26",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pyyaml>=6"]
+
+[tool.uv.sources]
+aie-core = { path = "../../aie_core", editable = true }
+evalkit = { path = "../../evalkit", editable = true }
+agentkit = { path = "../../agentkit", editable = true }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+  "integration: needs a real LLM provider (skipped by default)",
+]
+addopts = "-m 'not integration'"

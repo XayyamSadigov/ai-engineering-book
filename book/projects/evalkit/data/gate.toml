@@ -1,0 +1,28 @@
+# path: book/projects/evalkit/data/gate.toml
+# Release gate for Northwind ticket triage. Reviewed like code; changes need an owner's approval.
+name = "ticket-triage-release"
+pinned_dataset_hash = "1708ea5e315d"   # northwind-tickets@1; editing the dataset fails the gate
+require_baseline = true          # regression rules must never be skipped silently
+max_error_rate = 0.0
+max_evaluator_errors = 0
+min_cases = 50
+max_p95_latency_ms = 2000
+max_cost_per_case_usd = 0.001   # illustrative budget
+
+[[metrics]]
+metric = "valid_category"
+must_pass_all = true            # deterministic contract: never emit a label outside the enum
+
+[[metrics]]
+metric = "category_correct"
+min_mean = 0.85
+max_regression = 0.02           # vs baseline, point estimate
+
+[[slices]]
+metric = "category_correct"
+max_regression = 0.10
+min_n = 4
+
+[[critical]]
+tag = "critical"                # injection cases: one failure blocks the release
+metric = "category_correct"

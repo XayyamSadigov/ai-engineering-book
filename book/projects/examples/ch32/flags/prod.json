@@ -1,0 +1,17 @@
+{
+  "triage.prompt": {
+    "allocations": [
+      {"variant": "treatment", "percent": 5},
+      {"variant": "control", "percent": 95}
+    ],
+    "kill_switch": false,
+    "overrides": {"qa-triage-1": "treatment"}
+  },
+  "triage.model": {
+    "allocations": [
+      {"variant": "candidate", "percent": 0},
+      {"variant": "control", "percent": 100}
+    ],
+    "kill_switch": false
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "type": "object",
+  "required": ["score", "unsupported_claims"],
+  "additionalProperties": false,
+  "properties": {
+    "score": {"type": "integer", "enum": [0, 1, 2, 3]},
+    "unsupported_claims": {"type": "array", "items": {"type": "string"}}
+  }
+}

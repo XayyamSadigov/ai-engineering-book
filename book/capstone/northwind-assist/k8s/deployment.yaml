@@ -1,0 +1,89 @@
+# path: book/capstone/northwind-assist/k8s/deployment.yaml
+# API and ingestion worker. A sketch: storage classes, network policies and the ingress
+# controller's SSE settings (proxy buffering off, read timeout above the longest stream) are
+# environment-specific.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: northwind-assist-api
+  labels: { app: northwind-assist, role: api }
+spec:
+  replicas: 3
+  strategy: { type: RollingUpdate, rollingUpdate: { maxSurge: 1, maxUnavailable: 0 } }
+  selector: { matchLabels: { app: northwind-assist, role: api } }
+  template:
+    metadata:
+      labels: { app: northwind-assist, role: api, track: stable }
+    spec:
+      securityContext: { runAsNonRoot: true, runAsUser: 10001, fsGroup: 10001 }
+      terminationGracePeriodSeconds: 30        # longer than the request deadline (8 s) plus drain
+      containers:
+        - name: api
+          image: registry.northwind.example/northwind/assist:1.0.0   # pin by digest in production
+          ports: [{ containerPort: 8000, name: http }]
+          envFrom:
+            - configMapRef: { name: northwind-assist-config }
+            - secretRef: { name: northwind-assist-secrets }
+          env:
+            - { name: NA_GIT_SHA, valueFrom: { fieldRef: { fieldPath: "metadata.annotations['northwind.example/git-sha']" } } }
+          resources:
+            requests: { cpu: "500m", memory: "1Gi" }
+            limits: { memory: "2Gi" }
+          readinessProbe: { httpGet: { path: /readyz, port: http }, periodSeconds: 5, failureThreshold: 3 }
+          livenessProbe: { httpGet: { path: /healthz, port: http }, periodSeconds: 10, failureThreshold: 6 }
+          lifecycle:
+            preStop: { exec: { command: ["sleep", "5"] } }   # let the load balancer drain first
+          securityContext: { allowPrivilegeEscalation: false, readOnlyRootFilesystem: true }
+          volumeMounts: [{ name: data, mountPath: /data }, { name: tmp, mountPath: /tmp }]
+      volumes:
+        - { name: data, persistentVolumeClaim: { claimName: northwind-assist-data } }   # BM25 snapshots, RWX
+        - { name: tmp, emptyDir: {} }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: northwind-assist-worker
+  labels: { app: northwind-assist, role: worker }
+spec:
+  replicas: 2
+  selector: { matchLabels: { app: northwind-assist, role: worker } }
+  template:
+    metadata:
+      labels: { app: northwind-assist, role: worker }
+    spec:
+      securityContext: { runAsNonRoot: true, runAsUser: 10001, fsGroup: 10001 }
+      terminationGracePeriodSeconds: 90        # SIGTERM finishes the leased job
+      containers:
+        - name: worker
+          image: registry.northwind.example/northwind/assist:1.0.0
+          command: ["northwind-assist-worker", "--role", "ingest"]
+          envFrom:
+            - configMapRef: { name: northwind-assist-config }
+            - secretRef: { name: northwind-assist-secrets }
+          resources:
+            requests: { cpu: "250m", memory: "1Gi" }
+            limits: { memory: "2Gi" }
+          volumeMounts: [{ name: data, mountPath: /data }]
+      volumes:
+        - { name: data, persistentVolumeClaim: { claimName: northwind-assist-data } }
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: northwind-assist-nightly-eval
+  labels: { app: northwind-assist, role: eval }
+spec:
+  schedule: "17 2 * * *"                      # providers change models without telling you (Ch 32)
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: eval
+              image: registry.northwind.example/northwind/assist:1.0.0
+              command: ["northwind-assist-worker", "--role", "eval", "--out", "/tmp/eval"]
+              envFrom: [{ configMapRef: { name: northwind-assist-config } }, { secretRef: { name: northwind-assist-secrets } }]
+              env: [{ name: NA_KNOWLEDGE_BACKEND, value: local }, { name: NA_ENVIRONMENT, value: test }]

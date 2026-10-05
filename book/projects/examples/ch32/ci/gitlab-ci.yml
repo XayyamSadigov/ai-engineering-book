@@ -1,0 +1,132 @@
+# path: book/projects/examples/ch32/ci/gitlab-ci.yml
+# Copy to .gitlab-ci.yml. Same pipeline as ci/github-actions.yml: lint -> typecheck -> unit ->
+# offline eval gate -> build -> canary -> promote (manual), plus a scheduled drift eval.
+# Deployment commands are environment-specific placeholders.
+stages: [lint, test, eval, build, canary, promote]
+
+variables:
+  WORKDIR: book/projects/examples/ch32
+  PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
+  IMAGE: "$CI_REGISTRY_IMAGE/triage:$CI_COMMIT_SHORT_SHA"
+
+default:
+  image: python:3.12-slim
+  cache:
+    key: pip-$CI_COMMIT_REF_SLUG
+    paths: [.cache/pip]
+  before_script:
+    - cd "$WORKDIR"
+    - pip install -e ../../aie_core -e ".[dev]"
+
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+
+lint:
+  stage: lint
+  rules:
+    - if: $CI_PIPELINE_SOURCE != "schedule"
+  script:
+    - ruff check .
+    - ruff format --check .
+
+typecheck:
+  stage: lint
+  rules:
+    - if: $CI_PIPELINE_SOURCE != "schedule"
+  script:
+    - mypy
+
+unit:
+  stage: test
+  rules:
+    - if: $CI_PIPELINE_SOURCE != "schedule"
+  variables:
+    CASSETTE_MODE: replay
+    LLM_PROVIDER: fake
+  script:
+    - python -m northwind_triage.adapters.prompt_store
+    - pytest -q --junitxml=reports/unit.xml
+  artifacts:
+    when: always
+    reports:
+      junit: $WORKDIR/reports/unit.xml
+
+offline-eval:
+  stage: eval
+  needs: [unit]
+  timeout: 20m
+  rules:
+    # Merge requests: simulated model, no secrets exposed to branch pipelines.
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      variables: { LLM_PROVIDER: fake }
+    # Default branch: real provider; OPENAI_API_KEY is a protected, masked CI variable.
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_PIPELINE_SOURCE != "schedule"
+      variables: { LLM_PROVIDER: openai, LLM_MODEL: $TRIAGE_MODEL }
+  script:
+    - python -m northwind_triage.eval_gate --prompt-version "${TRIAGE_CANDIDATE_PROMPT:-1.1.0}" --report reports/eval.json
+  artifacts:
+    when: always
+    paths: [$WORKDIR/reports/eval.json]
+
+build:
+  stage: build
+  needs: [offline-eval]
+  image: docker:27
+  services: [docker:27-dind]
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_PIPELINE_SOURCE != "schedule"
+  before_script:
+    - cd "$WORKDIR"
+    - echo "$CI_REGISTRY_PASSWORD" | docker login "$CI_REGISTRY" -u "$CI_REGISTRY_USER" --password-stdin
+  script:
+    - docker build -f Dockerfile --build-arg TRIAGE_GIT_SHA="$CI_COMMIT_SHORT_SHA" -t "$IMAGE" ../..
+    - docker push "$IMAGE"
+
+canary:
+  stage: canary
+  needs: [build]
+  timeout: 90m
+  environment: { name: canary }
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_PIPELINE_SOURCE != "schedule"
+  script:
+    - helm upgrade --install triage-canary deploy/chart --set image="$IMAGE" --set canary.weight=5
+    - sleep 1800
+    - mkdir -p reports
+    - 'curl -sf -H "Authorization: Bearer $METRICS_TOKEN" "$METRICS_URL/triage/arm?deployment=stable&window=30m" > reports/baseline.json'
+    - 'curl -sf -H "Authorization: Bearer $METRICS_TOKEN" "$METRICS_URL/triage/arm?deployment=canary&window=30m" > reports/canary.json'
+    - python -m northwind_triage.experiments canary --baseline reports/baseline.json --canary reports/canary.json
+  after_script:
+    # after_script runs on failure too; roll back when the verdict job failed. A hold (exit 3)
+    # also fails the job and rolls back: a pipeline cannot wait open-ended; retry to observe longer.
+    - cd "$WORKDIR"
+    - if [ "$CI_JOB_STATUS" = "failed" ]; then helm upgrade --install triage-canary deploy/chart --set canary.weight=0; fi
+  artifacts:
+    when: always
+    paths: [$WORKDIR/reports/]
+
+promote:
+  stage: promote
+  needs: [build, canary]
+  environment: { name: production }
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_PIPELINE_SOURCE != "schedule"
+      when: manual                   # a human presses the button; protected environment
+  script:
+    - helm upgrade --install triage deploy/chart --set image="$IMAGE" --set canary.weight=0
+
+nightly-drift:
+  stage: eval
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+  variables:
+    LLM_PROVIDER: openai
+    LLM_MODEL: $TRIAGE_MODEL
+  script:
+    - python -m northwind_triage.eval_gate --prompt-version 1.0.0 --report reports/nightly.json
+  artifacts:
+    when: always
+    paths: [$WORKDIR/reports/nightly.json]

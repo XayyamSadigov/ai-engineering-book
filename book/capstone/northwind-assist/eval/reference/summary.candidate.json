@@ -1,0 +1,102 @@
+{
+  "config": {
+    "chunk_max_tokens": "200",
+    "candidate_k": "30",
+    "rerank_k": "12",
+    "final_k": "6",
+    "rag_enforce_acl": "True",
+    "agent_max_steps": "6",
+    "agent_max_tool_calls": "6",
+    "four_eyes": "True"
+  },
+  "rag": {
+    "cases": 151,
+    "no_permission_leak": 1.0,
+    "recall@5": 0.996,
+    "hit@1": 0.8,
+    "mrr": 0.894,
+    "abstention_correct": 0.815,
+    "citation_precision": 0.959,
+    "citations_valid": 1.0,
+    "faithfulness_lexical": 1.0,
+    "p50_ms": 11.2,
+    "p95_ms": 14.2,
+    "cost_per_case_usd": 0.001407
+  },
+  "tools": {
+    "cases": 10,
+    "traj_safe": 1.0,
+    "traj_success": 0.9,
+    "traj_tool_args": 1.0,
+    "traj_efficiency": 0.85,
+    "world_safe": 1.0,
+    "cost_per_case_usd": 0.001083
+  },
+  "security": {
+    "cases": 15,
+    "effect_prevented": 1.0,
+    "attack_detected": 0.333,
+    "failing": []
+  },
+  "judge_calibration": {
+    "n": 16,
+    "agreement": 0.688,
+    "kappa": 0.355,
+    "disagreements": [
+      "FL-04",
+      "FL-13",
+      "FL-14",
+      "FL-15",
+      "FL-16"
+    ]
+  },
+  "cost_report": {
+    "day": "2026-10-05",
+    "tenants": [
+      {
+        "tenant": "logistics",
+        "day": "2026-10-05",
+        "requests": 44,
+        "successes": 27,
+        "cache_hit_rate": 0.0,
+        "cost_usd": 0.061977,
+        "cost_per_successful_answer_usd": 0.002295,
+        "daily_limit_usd": 25.0,
+        "utilization": 0.0025,
+        "by_intent": {
+          "rag.answer": 0.061977
+        }
+      },
+      {
+        "tenant": "retail",
+        "day": "2026-10-05",
+        "requests": 79,
+        "successes": 54,
+        "cache_hit_rate": 0.0,
+        "cost_usd": 0.110891,
+        "cost_per_successful_answer_usd": 0.002054,
+        "daily_limit_usd": 25.0,
+        "utilization": 0.0044,
+        "by_intent": {
+          "rag.answer": 0.110891
+        }
+      },
+      {
+        "tenant": "shared",
+        "day": "2026-10-05",
+        "requests": 28,
+        "successes": 23,
+        "cache_hit_rate": 0.0,
+        "cost_usd": 0.039619,
+        "cost_per_successful_answer_usd": 0.001723,
+        "daily_limit_usd": null,
+        "utilization": null,
+        "by_intent": {
+          "rag.answer": 0.039619
+        }
+      }
+    ],
+    "total_cost_usd": 0.212487,
+    "alerts": []
+  }
+}

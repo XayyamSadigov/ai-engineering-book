@@ -1,0 +1,120 @@
+# path: book/projects/examples/ch31/alerts.yaml
+# Alert rules for Northwind Assist. Metric names are defined in metrics.py and documented in
+# dashboards.md. Thresholds are illustrative; derive yours from SLOs and baseline variance.
+# condition: exactly one of `threshold` (absolute) or `baseline_ratio` (relative to the same
+# metric over `baseline_window` immediately before `window`).
+rules:
+  # ---------------------------------------------------------------- quality
+  - name: answer_quality_drop
+    metric: quality.eval_pass_rate          # probe + sampled-judge traffic only (labeled traces)
+    window: 6h
+    baseline_window: 24h
+    condition: {op: "<", baseline_ratio: 0.92}
+    min_samples: 30
+    group_by: tenant.id
+    severity: page
+    runbook: "Chapter 31 playbook, steps 1-4: scope, version diff, stage triage"
+
+  - name: negative_feedback_spike
+    metric: quality.negative_feedback_rate
+    window: 6h
+    baseline_window: 24h
+    condition: {op: ">", baseline_ratio: 1.5}
+    min_samples: 40
+    group_by: tenant.id
+    severity: ticket
+    runbook: "Read 20 thumbs-down traces before touching any prompt"
+
+  - name: context_truncation_high
+    metric: quality.context_truncation_rate
+    window: 1h
+    condition: {op: ">", threshold: 0.15}
+    min_samples: 30
+    severity: ticket
+    runbook: "Check chunk size and index version; evidence is being dropped by the packer"
+
+  - name: guardrail_block_surge
+    metric: quality.guardrail_block_rate
+    window: 1h
+    baseline_window: 24h
+    condition: {op: ">", baseline_ratio: 2.0}
+    min_samples: 50
+    severity: ticket
+    runbook: "Attack, policy version change, or validator regression; split by guardrail.name"
+
+  # ---------------------------------------------------------------- latency
+  - name: request_p95_slo
+    metric: latency.request_p95_ms
+    window: 1h
+    condition: {op: ">", threshold: 8000}     # p95 completion under 8 s (Northwind target)
+    min_samples: 50
+    severity: page
+    runbook: "latency_breakdown(): which stage owns the p95? then input-token distribution"
+
+  # ---------------------------------------------------------------- cost
+  - name: cost_per_request_jump
+    metric: cost.per_request_usd
+    window: 6h
+    baseline_window: 24h
+    condition: {op: ">", baseline_ratio: 1.25}
+    min_samples: 50
+    group_by: tenant.id
+    severity: ticket
+    runbook: "cost_by_tenant(); check input tokens per request and llm calls per request"
+
+  # ---------------------------------------------------------------- errors and safety
+  - name: trace_error_rate
+    metric: errors.trace_error_rate
+    window: 1h
+    condition: {op: ">", threshold: 0.05}
+    min_samples: 50
+    severity: page
+    runbook: "error_distribution(); provider errors -> Chapter 29, semantic classes -> playbook"
+
+  - name: cross_tenant_retrieval
+    metric: errors.class_rate:retrieval_contamination
+    window: 1h
+    condition: {op: ">", threshold: 0.0}
+    min_samples: 1                            # one event is an incident
+    severity: page
+    runbook: "Security incident: freeze index promotions, pull every contaminated trace"
+
+  - name: agent_loops
+    metric: errors.class_rate:loop
+    window: 6h
+    condition: {op: ">", threshold: 0.02}
+    min_samples: 20
+    severity: ticket
+    runbook: "trajectory_view() on the top looping traces"
+
+  # ---------------------------------------------------------------- SLO burn (Chapter 29)
+  # Burn rate = bad share / error budget. 14.4 over 1 h spends 2% of a 30-day budget in an hour.
+  # With a 99.5% availability objective that is 7.2% failed requests; with the 95% completion
+  # objective even 14.4 would need 72% slow requests, so latency gets the slower, ticket-level
+  # rule (6 over 6 h, 30% slow) and request_p95_slo above stays the fast latency signal.
+  - name: availability_fast_burn
+    metric: slo.availability_burn_rate
+    window: 1h
+    confirm_window: 5m                        # both windows must burn: not a blip, still happening
+    condition: {op: ">", threshold: 14.4}
+    min_samples: 50
+    severity: page
+    runbook: "Chapter 29: breaker states, admission rejections, provider errors; then error_distribution()"
+
+  - name: completion_slow_burn
+    metric: slo.completion_burn_rate
+    window: 6h
+    confirm_window: 30m
+    condition: {op: ">", threshold: 6.0}
+    min_samples: 100
+    severity: ticket
+    runbook: "latency_breakdown() by route; input-token and output-token distributions"
+
+  # ---------------------------------------------------------------- telemetry health
+  - name: telemetry_gaps
+    metric: telemetry.incomplete_rate
+    window: 1h
+    condition: {op: ">", threshold: 0.01}
+    min_samples: 50
+    severity: ticket
+    runbook: "A deploy stopped stamping versions or broke context propagation"

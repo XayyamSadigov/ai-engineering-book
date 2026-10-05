@@ -1,0 +1,85 @@
+{
+  "_note": "Illustrative catalog for Chapter 7. Names, tiers and prices are invented.",
+  "models": [
+    {
+      "alias": "nw-small",
+      "model_id": "small-instruct-2026-03",
+      "provider": "local",
+      "context_tokens": 32000,
+      "max_output_tokens": 4000,
+      "supports_tools": false,
+      "supports_json_schema": true,
+      "supports_vision": false,
+      "reasoning_efforts": [],
+      "data_zones": [
+        "onprem"
+      ],
+      "cost_tier": 1,
+      "latency_tier": 1,
+      "input_per_1m": 0.1,
+      "output_per_1m": 0.4,
+      "notes": "self-hosted; stays inside Northwind's network"
+    },
+    {
+      "alias": "nw-general",
+      "model_id": "general-2026-02",
+      "provider": "cloud-a",
+      "context_tokens": 128000,
+      "max_output_tokens": 8000,
+      "supports_tools": true,
+      "supports_json_schema": true,
+      "supports_vision": true,
+      "reasoning_efforts": [],
+      "data_zones": [
+        "eu"
+      ],
+      "cost_tier": 2,
+      "latency_tier": 2,
+      "input_per_1m": 1.0,
+      "output_per_1m": 4.0,
+      "notes": ""
+    },
+    {
+      "alias": "nw-reasoning",
+      "model_id": "reasoner-2026-01",
+      "provider": "cloud-a",
+      "context_tokens": 200000,
+      "max_output_tokens": 32000,
+      "supports_tools": true,
+      "supports_json_schema": true,
+      "supports_vision": false,
+      "reasoning_efforts": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "data_zones": [
+        "eu"
+      ],
+      "cost_tier": 3,
+      "latency_tier": 4,
+      "input_per_1m": 5.0,
+      "output_per_1m": 20.0,
+      "notes": ""
+    },
+    {
+      "alias": "nw-longctx",
+      "model_id": "longctx-2025-12",
+      "provider": "cloud-b",
+      "context_tokens": 1000000,
+      "max_output_tokens": 8000,
+      "supports_tools": false,
+      "supports_json_schema": false,
+      "supports_vision": false,
+      "reasoning_efforts": [],
+      "data_zones": [
+        "any"
+      ],
+      "cost_tier": 3,
+      "latency_tier": 3,
+      "input_per_1m": 2.5,
+      "output_per_1m": 10.0,
+      "notes": "large window, no tools, no native schema mode"
+    }
+  ]
+}

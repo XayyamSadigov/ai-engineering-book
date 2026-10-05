@@ -1,0 +1,133 @@
+{
+  "trajectory_id": "P-104",
+  "task_id": "AG-004",
+  "agent_version": "incident-agent@0.9",
+  "model": "fake-planner-prod",
+  "goal": "Handheld scanners at the Harbor City warehouse are failing (ticket TCK-2026-0051). Check scanner-fleet status; it is degraded, so open a P1 warehouse_scanner ticket for tenant logistics, then draft and send a reply on TCK-2026-0051.",
+  "steps": [
+    {
+      "type": "user_goal",
+      "content": "Handheld scanners at the Harbor City warehouse are failing (ticket TCK-2026-0051). Check scanner-fleet status; it is degraded, so open a P1 warehouse_scanner ticket for tenant logistics, then draft and send a reply on TCK-2026-0051."
+    },
+    {
+      "type": "tool_call",
+      "call_id": "1.0",
+      "tool": "get_service_status",
+      "arguments": {
+        "service": "scanner-fleet"
+      }
+    },
+    {
+      "type": "tool_result",
+      "call_id": "1.0",
+      "status": "ok",
+      "output": {
+        "service": "scanner-fleet",
+        "status": "degraded"
+      }
+    },
+    {
+      "type": "tool_call",
+      "call_id": "2.0",
+      "tool": "create_ticket",
+      "arguments": {
+        "subject": "Scanners failing at Harbor City",
+        "body": "Handheld scanners fail at Harbor City.",
+        "category": "warehouse_scanner",
+        "priority": "urgent"
+      }
+    },
+    {
+      "type": "tool_result",
+      "call_id": "2.0",
+      "status": "ok",
+      "output": {
+        "ticket_id": "TCK-SANDBOX-001",
+        "tenant": "logistics"
+      }
+    },
+    {
+      "type": "tool_call",
+      "call_id": "3.0",
+      "tool": "draft_reply",
+      "arguments": {
+        "ticket_id": "TCK-2026-0051",
+        "to": "harbor-city-ops@northwind.example",
+        "subject": "Scanner outage",
+        "body": "Ticket opened."
+      }
+    },
+    {
+      "type": "tool_result",
+      "call_id": "3.0",
+      "status": "ok",
+      "output": {
+        "draft_id": "DR-001"
+      }
+    },
+    {
+      "type": "tool_call",
+      "call_id": "4.0",
+      "tool": "send_reply",
+      "arguments": {
+        "ticket_id": "TCK-2026-0051",
+        "to": "harbor-city-ops@northwind.example",
+        "subject": "Scanner outage",
+        "body": "Ticket opened."
+      }
+    },
+    {
+      "type": "approval",
+      "call_id": "4.0",
+      "decision": "approved",
+      "approver": "approver"
+    },
+    {
+      "type": "tool_result",
+      "call_id": "4.0",
+      "status": "ok",
+      "output": {
+        "sent": true
+      }
+    },
+    {
+      "type": "final_answer",
+      "content": "Opened an urgent scanner ticket and replied."
+    }
+  ],
+  "final_state": {
+    "tickets": [
+      {
+        "id": "TCK-SANDBOX-001",
+        "subject": "Scanners failing at Harbor City",
+        "body": "Handheld scanners fail at Harbor City.",
+        "category": "warehouse_scanner",
+        "priority": "urgent",
+        "tenant": "logistics"
+      }
+    ],
+    "drafts": [
+      {
+        "ticket_id": "TCK-2026-0051",
+        "to": "harbor-city-ops@northwind.example",
+        "subject": "Scanner outage",
+        "body": "Ticket opened."
+      }
+    ],
+    "sent_replies": [
+      {
+        "ticket_id": "TCK-2026-0051",
+        "to": "harbor-city-ops@northwind.example",
+        "subject": "Scanner outage",
+        "body": "Ticket opened."
+      }
+    ]
+  },
+  "usage": {
+    "input_tokens": 1027,
+    "output_tokens": 139,
+    "cost_usd": 0.0
+  },
+  "latency_ms": 5.03,
+  "stop_reason": "final_answer"
+}

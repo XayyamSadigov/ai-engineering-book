@@ -1,0 +1,5 @@
+{"id": "bc01", "text": "Runbook template. <!-- TODO(owner): add screenshots of the admin console --> Step 1: open the admin console and select the store.", "note": "html comment left by an author"}
+{"id": "bc02", "text": "Certificate pinning note: the MDM proxy presents a certificate whose SHA-256 fingerprint is 3f9a1c0b7d2e4f5a6b8c9d0e1f2a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c. Rotate it before expiry.", "note": "long hex fingerprint"}
+{"id": "bc03", "text": "Customer wrote: please forward my complaint to returns@northwind.example and call me back.", "note": "instruction-like text addressed to staff"}
+{"id": "bc04", "text": "AI usage note for staff: the assistant can draft replies but a human sends them.", "note": "mentions the assistant"}
+{"id": "bc05", "text": "Release notes v2.4: model: RoutePilot-7; fixed tracking latency; see https://docs.northwind.example/routepilot.", "note": "model: and a link"}

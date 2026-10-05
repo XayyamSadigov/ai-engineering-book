@@ -1,0 +1,32 @@
+{"query": "how many PTO days can I carry over to next year", "relevant": ["hr-pto-policy"], "style": "lexical"}
+{"query": "vacation days that roll into January", "relevant": ["hr-pto-policy"], "style": "paraphrase"}
+{"query": "VPN client error and troubleshooting steps", "relevant": ["it-vpn-access-runbook"], "style": "lexical"}
+{"query": "cannot reach internal tools from home", "relevant": ["it-vpn-access-runbook"], "style": "paraphrase"}
+{"query": "reset my password after account lockout", "relevant": ["it-password-reset-runbook"], "style": "lexical"}
+{"query": "I typed the wrong secret too many times and now I am blocked", "relevant": ["it-password-reset-runbook"], "style": "paraphrase"}
+{"query": "hotel accommodation limits for business travel", "relevant": ["hr-travel-policy"], "style": "lexical"}
+{"query": "which flight class am I allowed on a long trip", "relevant": ["hr-travel-policy"], "style": "paraphrase"}
+{"query": "expense claim deadline and approval thresholds", "relevant": ["hr-expense-policy"], "style": "lexical"}
+{"query": "getting money back for a client dinner", "relevant": ["hr-expense-policy"], "style": "paraphrase"}
+{"query": "parental leave entitlement and splitting into blocks", "relevant": ["hr-parental-leave-policy"], "style": "lexical"}
+{"query": "time off after my baby is born", "relevant": ["hr-parental-leave-policy"], "style": "paraphrase"}
+{"query": "laptop replacement for a broken or stolen device", "relevant": ["it-laptop-replacement-runbook"], "style": "lexical"}
+{"query": "my computer was taken from my car", "relevant": ["it-laptop-replacement-runbook"], "style": "paraphrase"}
+{"query": "new hire account provisioning on day one", "relevant": ["it-onboarding-accounts-runbook"], "style": "lexical"}
+{"query": "my start date is Monday and I have no login yet", "relevant": ["it-onboarding-accounts-runbook"], "style": "paraphrase"}
+{"query": "Trackline tracking API webhooks and rate limits", "relevant": ["prod-logistics-tracking-api"], "style": "lexical"}
+{"query": "where is the parcel status endpoint documented", "relevant": ["prod-logistics-tracking-api"], "style": "paraphrase"}
+{"query": "RoutePilot route planner constraints and manual adjustments", "relevant": ["prod-logistics-route-planner"], "style": "lexical"}
+{"query": "returns API eligibility rules and error codes", "relevant": ["prod-retail-returns-api"], "style": "lexical"}
+{"query": "Lumen POS offline mode and nightly synchronisation", "relevant": ["prod-retail-pos-overview"], "style": "lexical"}
+{"query": "ScanHub scanner error codes and offline behaviour", "relevant": ["prod-warehouse-scanner-guide"], "style": "lexical"}
+{"query": "PostgreSQL failover checklist and verification queries", "relevant": ["it-database-failover-runbook"], "style": "lexical"}
+{"query": "primary database died, how do we promote the replica", "relevant": ["it-database-failover-runbook"], "style": "paraphrase"}
+{"query": "incident severity levels and postmortem procedure", "relevant": ["it-incident-response-runbook"], "style": "lexical"}
+{"query": "card payment outage root cause in retail stores", "relevant": ["inc-2025-11-pos-outage"], "style": "lexical"}
+{"query": "tracking API latency degradation root cause", "relevant": ["inc-2026-02-tracking-latency"], "style": "lexical"}
+{"query": "remote work eligibility, core hours and equipment stipend", "relevant": ["hr-remote-work-policy"], "style": "lexical"}
+{"query": "data classification levels and handling rules for personal data", "relevant": ["sec-data-classification-policy"], "style": "lexical"}
+{"query": "privileged access, break-glass accounts and access reviews", "relevant": ["sec-access-control-policy"], "style": "lexical"}
+{"query": "gifts, hospitality and conflicts of interest", "relevant": ["hr-code-of-conduct"], "style": "lexical"}
+{"query": "is it ok to accept a present from a supplier", "relevant": ["hr-code-of-conduct"], "style": "paraphrase"}

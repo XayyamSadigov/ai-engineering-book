@@ -1,0 +1,25 @@
+# path: book/capstone/northwind-assist/k8s/service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: northwind-assist
+  labels: { app: northwind-assist }
+spec:
+  selector: { app: northwind-assist, role: api }
+  ports: [{ name: http, port: 80, targetPort: http }]
+---
+# Canary: same selector plus track=canary pods from a second Deployment; traffic split by the
+# ingress or mesh (weight 5%), promoted by the CI canary step when the canary verdict passes.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: northwind-assist
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"          # SSE must not be buffered
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "120"
+spec:
+  rules:
+    - host: assist.northwind.example
+      http:
+        paths:
+          - { path: /, pathType: Prefix, backend: { service: { name: northwind-assist, port: { name: http } } } }

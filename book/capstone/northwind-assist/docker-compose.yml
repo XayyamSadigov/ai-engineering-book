@@ -1,0 +1,100 @@
+# path: book/capstone/northwind-assist/docker-compose.yml
+# Run from book/capstone/northwind-assist (the build context is the book root, ../..):
+#   cp .env.example .env                 # defaults run offline: LLM_PROVIDER=fake
+#   docker compose up -d                 # postgres+pgvector, redis, otel-collector, worker, api
+#   docker compose run --rm sync         # enqueue a sync of shared-data/docs; the worker indexes it
+#   docker compose run --rm eval         # offline eval + release gate inside the image
+#   open http://localhost:8000           # login stub, chat, approvals
+x-app: &app
+  build: { context: ../.., dockerfile: capstone/northwind-assist/Dockerfile }
+  image: northwind/assist:1.0.0
+  env_file: [.env]
+  environment: &app-env
+    DATABASE_URL: postgresql://northwind:northwind@postgres:5432/northwind
+    REDIS_URL: redis://redis:6379/0
+    TRACE_SINK: otel
+    OTEL_EXPORTER: otlp
+    OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318/v1/traces
+    OTEL_SERVICE_NAME: northwind-assist
+    # knowledge tier = Project 3 (registry in Postgres, queue in Redis, pgvector, BM25 snapshots on /data)
+    NA_KNOWLEDGE_BACKEND: p3
+    NA_KNOWLEDGE_SYNC_ON_START: "false"
+    RAG_VECTOR_BACKEND: pgvector
+    RAG_REGISTRY_BACKEND: sql
+    RAG_QUEUE_BACKEND: redis
+    RAG_CACHE_BACKEND: redis
+    RAG_DOCS_DIR: /book/projects/shared-data/docs
+    RAG_BLOB_DIR: /data/blobs
+    RAG_SNAPSHOT_DIR: /data/snapshots
+    RAG_ALLOW_DEV_AUTH_SECRET: "true"   # Project 3's own token stub is unused here; capstone auth is JWT
+    NA_IDEMPOTENCY_DB: /data/idempotency.sqlite
+    NA_MEMORY_DB: /data/memory.sqlite
+    NA_AUDIT_LOG_PATH: /data/audit.jsonl
+    NA_COST_LEDGER_PATH: /data/cost.jsonl
+    NA_EVENT_DIR: /data/agent-runs
+  volumes: [nadata:/data]
+  depends_on:
+    postgres: { condition: service_healthy }
+    redis: { condition: service_healthy }
+    otel-collector: { condition: service_started }
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: northwind
+      POSTGRES_PASSWORD: northwind     # local development only; production reads a secret
+      POSTGRES_DB: northwind
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U northwind -d northwind"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]   # the ingestion queue must survive a restart
+    volumes: [redisdata:/data]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.104.0
+    command: ["--config=/etc/otel/config.yaml"]
+    volumes: ["./otel-collector.yaml:/etc/otel/config.yaml:ro"]
+    ports: ["4318:4318"]
+
+  api:
+    <<: *app
+    ports: ["8000:8000"]
+
+  worker:
+    <<: *app
+    command: ["northwind-assist-worker", "--role", "ingest"]
+    stop_grace_period: 60s             # SIGTERM drains the current job before exit
+    healthcheck: { disable: true }
+
+  sync:
+    <<: *app
+    command: ["rag-assistant-sync"]
+    profiles: ["jobs"]
+    healthcheck: { disable: true }
+
+  eval:
+    <<: *app
+    command: ["northwind-assist-eval", "--out", "/data/eval"]
+    environment:
+      <<: *app-env
+      NA_KNOWLEDGE_BACKEND: local      # the gate builds its own in-process index from the same code
+      TRACE_SINK: none
+    profiles: ["jobs"]
+    healthcheck: { disable: true }
+
+volumes:
+  pgdata:
+  redisdata:
+  nadata:

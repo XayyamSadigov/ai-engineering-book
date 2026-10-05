@@ -1,0 +1,43 @@
+[project]
+name = "ragkit"
+version = "0.1.0"
+description = "Document model, parsers, normalization, deduplication, and chunking strategies for the AI Engineering book (Chapters 11-15)."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = [
+  "aie-core",
+  "evalkit",
+  "p2-semantic-search",  # Project 2 (import name semsearch): VectorStore, used by ragkit.retrieval.dense
+  "pydantic>=2.5",
+  "pydantic-settings>=2.0",
+  "numpy>=1.24",
+  "pypdf>=4.0",
+]
+
+[project.optional-dependencies]
+tiktoken = ["tiktoken>=0.5"]
+dev = ["pytest>=7.4"]
+rerank = ["sentence-transformers>=2.2"]  # optional local cross-encoder (Chapter 12)
+
+[project.scripts]
+ragkit-chunk-eval = "ragkit.eval.chunk_size:main"
+ragkit-rag-eval = "ragkit.eval.run_rag_eval:main"
+ragkit-compare-retrievers = "ragkit.eval.compare_retrievers:main"
+
+[tool.uv.sources]
+aie-core = { path = "../aie_core", editable = true }
+evalkit = { path = "../evalkit", editable = true }
+p2-semantic-search = { path = "../p2-semantic-search", editable = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["ragkit"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["integration: needs a real provider and API key; skipped by default"]
+addopts = "-m 'not integration'"

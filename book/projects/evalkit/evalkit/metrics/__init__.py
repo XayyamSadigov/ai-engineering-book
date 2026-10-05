@@ -1,0 +1,53 @@
+# path: book/projects/evalkit/evalkit/metrics/__init__.py
+"""Deterministic and classification metrics. All pure functions; no model calls."""
+from .classification import (
+    CalibrationBin,
+    ConfusionMatrix,
+    ThresholdPoint,
+    best_threshold,
+    binary_counts,
+    brier_score,
+    calibration_bins,
+    classification_report,
+    expected_calibration_error,
+    threshold_sweep,
+)
+from .deterministic import (
+    PRF,
+    FieldScores,
+    contains,
+    exact_match,
+    field_prf,
+    forbids,
+    json_schema_valid,
+    normalize_text,
+    numeric_close,
+    parse_number,
+    prf_from_counts,
+    set_precision_recall,
+)
+
+__all__ = [
+    "PRF",
+    "FieldScores",
+    "prf_from_counts",
+    "normalize_text",
+    "exact_match",
+    "contains",
+    "forbids",
+    "parse_number",
+    "numeric_close",
+    "set_precision_recall",
+    "field_prf",
+    "json_schema_valid",
+    "ConfusionMatrix",
+    "classification_report",
+    "ThresholdPoint",
+    "binary_counts",
+    "threshold_sweep",
+    "best_threshold",
+    "CalibrationBin",
+    "calibration_bins",
+    "expected_calibration_error",
+    "brier_score",
+]

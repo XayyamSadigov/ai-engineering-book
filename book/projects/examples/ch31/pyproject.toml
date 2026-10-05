@@ -1,0 +1,24 @@
+# path: book/projects/examples/ch31/pyproject.toml
+[project]
+name = "ch31-observability"
+version = "0.1.0"
+description = "Chapter 31: tracing schema, OTel wiring, trace store, debugging queries, alerts"
+requires-python = ">=3.11"
+dependencies = [
+  "aie-core",
+  "pydantic>=2",
+  "pyyaml>=6",
+  "opentelemetry-api>=1.25",
+  "opentelemetry-sdk>=1.25",
+]
+
+[project.optional-dependencies]
+otlp = ["opentelemetry-exporter-otlp-proto-http>=1.25"]
+dev = ["pytest>=8"]
+
+[tool.uv.sources]
+aie-core = { path = "../../aie_core", editable = true }
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

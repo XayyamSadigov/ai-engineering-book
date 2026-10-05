@@ -1,0 +1,43 @@
+# path: book/projects/p2-semantic-search/docker-compose.yml
+# docker compose up -d db            # PostgreSQL 16 + pgvector only (for local dev and integration tests)
+# docker compose run --rm ingest     # index shared-data/docs into pgvector
+# docker compose up api              # search API on http://localhost:8000
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: northwind
+      POSTGRES_PASSWORD: northwind   # local development only
+      POSTGRES_DB: northwind
+    ports: ["5432:5432"]
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U northwind -d northwind"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  ingest:
+    build: { context: .., dockerfile: p2-semantic-search/Dockerfile }
+    command: ["semsearch", "ingest", "--prune"]
+    environment: &app-env
+      VECTOR_BACKEND: pgvector
+      DATABASE_URL: postgresql://northwind:northwind@db:5432/northwind
+      DOCS_DIR: /app/shared-data/docs
+      EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-fake}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-fake-embedding}
+      EMBEDDING_DIMENSIONS: ${EMBEDDING_DIMENSIONS:-256}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      LLM_BASE_URL: ${LLM_BASE_URL:-}
+      HNSW_EF_SEARCH: ${HNSW_EF_SEARCH:-100}
+    depends_on: { db: { condition: service_healthy } }
+    profiles: ["jobs"]
+
+  api:
+    build: { context: .., dockerfile: p2-semantic-search/Dockerfile }
+    environment: *app-env
+    ports: ["8000:8000"]
+    depends_on: { db: { condition: service_healthy } }
+
+volumes:
+  pgdata:

@@ -20,7 +20,7 @@ from aie_core.llm.gateway import PricingTable
 from aie_core.observability import NoopTracer, Tracer
 from agentkit import EventStore, InMemoryEventStore, JsonlEventStore, RunResult
 
-from .checks import find_conflicts
+from .checks import CITATION, find_conflicts
 from .contracts import (
     AgentUsage, AnswerReport, BudgetSlice, Claim, Plan, RejectedClaim, ResearchFindings, ResultEnvelope, Role,
     SubQuestion, TaskEnvelope, TaskStatus,
@@ -28,8 +28,9 @@ from .contracts import (
 from .corpus import Corpus
 from .ledger import BudgetLedger, TeamBudget, TeamLog
 from .render import claim_key, render_answer, short_label
+from .text import numbers
 from .roles import TOOLS_BY_ROLE, AgentFactory, skipped
-from .tools import make_research_tools
+from .tools import make_research_tools, observed_passage_ids
 from .verification import verify_claims
 
 
@@ -152,6 +153,7 @@ class _Run:
         seen_claims: dict[str, str] = {}
         verified_ok: set[str] = set()
         answered: dict[str, bool] = {}          # base subquestion id -> has at least one verified claim
+        base_of = {sq.id: sq.id for sq in plan.subquestions}   # follow-up id -> the planner's id
         for rnd in range(1, self.cfg.max_rounds + 1):
             if not pending:
                 break
@@ -187,14 +189,20 @@ class _Run:
             verified_ok |= {c.claim_id for c in outcome.accepted}
             for sq, res in results:
                 if res.status is not TaskStatus.SKIPPED:
-                    base = sq.id.rstrip("f")
+                    base = base_of[sq.id]
                     answered[base] = answered.get(base, False) or bool(set(by_sq.get(sq.id, [])) & verified_ok)
             # follow-up only for subquestions that ran but yielded nothing verified; skipped ones stay skipped
-            pending = [SubQuestion(id=f"{sq.id}f", topic=sq.topic, question=sq.question + " Search with different "
-                                   "keywords; look for exact rules, deadlines, and amounts.")
-                       for sq, res in results
-                       if res.status is not TaskStatus.SKIPPED and not (set(by_sq.get(sq.id, [])) & verified_ok)
-                       and not sq.id.endswith("f")]
+            pending = []
+            for sq, res in results:
+                if (res.status is TaskStatus.SKIPPED or set(by_sq.get(sq.id, [])) & verified_ok
+                        or base_of[sq.id] != sq.id):        # only the planner's subquestions get one follow-up
+                    continue
+                fid = f"{sq.id[:20]}-f{rnd}"
+                while fid in base_of:                        # never collide with a planner id
+                    fid = f"{fid[:22]}x"
+                base_of[fid] = sq.id
+                pending.append(SubQuestion(id=fid, topic=sq.topic, question=sq.question + " Search with different "
+                                           "keywords; look for exact rules, deadlines, and amounts."))
         skipped_objectives = [short_label(c.objective, 80) for c in self.children
                               if c.sender is Role.RESEARCHER and c.status is TaskStatus.SKIPPED]
         topics = {sq.id: sq.topic or short_label(sq.question, 60) for sq in plan.subquestions}
@@ -272,10 +280,10 @@ class _Run:
         """Zero trust in children: re-check against the child's own event log that every cited
         passage was actually returned by a tool, even though the child's DoD already checked it."""
         run = self.team.last_runs.get(res.task_id)
-        seen = run.state.observation_text() if run else ""
+        seen = set().union(*(observed_passage_ids(o.content) for o in run.state.observations if o.ok)) if run else set()
         kept = []
         for c in claims:
-            if all(f"[{e.passage_id}]" in seen for e in c.evidence):
+            if all(e.passage_id in seen for e in c.evidence):
                 kept.append(c)
             else:
                 rejected.append(RejectedClaim(claim=c, reason="evidence not observed by the worker",
@@ -319,9 +327,31 @@ class _Run:
             return fallback
         res = self.run_agent(env)
         if res.ok and res.output:
-            return str(res.output["answer"])
+            answer = str(res.output["answer"])
+            problem = self.unsupported_line(answer, accepted)
+            if problem is None:
+                return answer
+            self.notes.append(f"synthesis rejected ({problem}); deterministic rendering used")
+            return fallback
         self.notes.append(f"synthesis failed ({res.stop_reason}); deterministic rendering used")
         return fallback
+
+    def unsupported_line(self, answer: str, accepted: list[Claim]) -> str | None:
+        """The writer may reword verified claims but not add a number: every number on a cited line
+        must come from the verified claims behind its citations, and every number on an uncited line
+        from some verified claim (or the question). Wording is left to the writer."""
+        texts: dict[str, list[str]] = {}
+        for c in accepted:
+            for e in c.evidence:
+                texts.setdefault(e.passage_id, []).append(c.text)
+        anywhere = numbers(" ".join(c.text for c in accepted) + " " + self.question)
+        for raw in answer.splitlines():
+            pids = CITATION.findall(raw)
+            text = CITATION.sub("", raw)
+            allowed = numbers(" ".join(t for p in pids for t in texts.get(p, []))) if pids else anywhere
+            if extra := sorted(numbers(text) - allowed):
+                return f"{short_label(text.strip(), 60)!r}: numbers not in verified claims: {extra}"
+        return None
 
 
 __all__ = ["ResearchTeam", "TeamConfig"]

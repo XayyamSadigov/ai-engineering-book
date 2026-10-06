@@ -15,7 +15,7 @@ import time
 from enum import Enum
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from agentkit import Budget
 
@@ -94,6 +94,13 @@ class Plan(BaseModel):
     """Planner output. The size bound is deliberately loose; the spawn cap is the real limit."""
 
     subquestions: list[SubQuestion] = Field(min_length=1, max_length=12)
+
+    @model_validator(mode="after")
+    def _unique_ids(self) -> "Plan":
+        ids = [sq.id for sq in self.subquestions]
+        if len(set(ids)) != len(ids):
+            raise ValueError(f"subquestion ids must be unique: {ids}")
+        return self
 
 
 class EvidenceRef(BaseModel):

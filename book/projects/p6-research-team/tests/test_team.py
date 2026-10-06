@@ -128,7 +128,7 @@ def test_follow_up_round_respects_the_cap_too(corpus, principal):
     started = [c for c in researchers(report) if c.run_id]
     assert len(started) == 3                                   # 2 in round 1, 1 follow-up, then the cap
     assert [e.data["reason"] for e in team.last_log.of("spawn_refused")] == ["spawn_cap"]
-    assert started[-1].task_id.endswith(".r2-sq1f")             # the follow-up is a new, refined objective
+    assert started[-1].task_id.endswith(".r2-sq1-f1")             # the follow-up is a new, refined objective
     assert report.status != "complete"
 
 

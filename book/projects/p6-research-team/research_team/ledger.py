@@ -80,6 +80,8 @@ class BudgetLedger:
     def admit(self, env: TaskEnvelope, *, counts_as_child: bool = True) -> Admission:
         """Decide whether a task may start and reserve its slice. Order: structure, then money."""
         with self._lock:
+            if env.task_id in self._reserved:
+                return Admission(False, "duplicate")     # one outstanding reservation per task id
             if counts_as_child:
                 if env.depth > self.limits.max_depth:
                     return Admission(False, "max_depth")
@@ -98,7 +100,11 @@ class BudgetLedger:
             if cost_left is not None:
                 if cost_left <= 0:
                     return Admission(False, "budget")
-                cost = min(cost or cost_left, cost_left)
+                if cost is None:   # no slice requested: a fair share, so one child cannot take the pool;
+                    # children split it with one extra share kept for the supervisor's own phases
+                    share = max(1, self.limits.max_children - self.children) + 1 if counts_as_child else 1
+                    cost = cost_left / share
+                cost = min(cost, cost_left)
             deadline = min(env.budget.deadline_s or left, left)
             granted = env.budget.model_copy(update={"max_tokens": tokens, "max_cost_usd": cost,
                                                     "deadline_s": deadline})

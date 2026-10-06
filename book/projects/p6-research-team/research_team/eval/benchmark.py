@@ -92,9 +92,11 @@ def summarize(scores: list[Score], configs: list[str]) -> dict[str, dict[str, di
     return out
 
 
-def verdict(summary: dict[str, dict[str, dict[str, float]]], *, min_rubric_gain: float = 0.5) -> list[str]:
-    """Rules, not vibes: the team pays off against a baseline on a question kind only if its
-    rubric gain is at least `min_rubric_gain`, or it is at least 25% faster at equal quality."""
+def verdict(summary: dict[str, dict[str, dict[str, float]]], *, min_rubric_gain: float = 0.5,
+            max_token_ratio: float = 1.5) -> list[str]:
+    """Rules, not vibes: the team pays off against a baseline on a question kind only if it uses at
+    most `max_token_ratio` times the baseline's tokens and either gains at least `min_rubric_gain`
+    on the rubric or is at least 25% faster at equal quality."""
     lines = []
     if "team" not in summary:
         return lines
@@ -106,7 +108,7 @@ def verdict(summary: dict[str, dict[str, dict[str, float]]], *, min_rubric_gain:
             gain = t["rubric"] - b["rubric"]
             tok = t["tokens"] / b["tokens"] if b["tokens"] else float("inf")
             speed = b["wall_ms"] / t["wall_ms"] if t["wall_ms"] else 1.0
-            pays = gain >= min_rubric_gain or (gain >= 0 and speed >= 1.25)
+            pays = tok <= max_token_ratio and (gain >= min_rubric_gain or (gain >= 0 and speed >= 1.25))
             lines.append(f"team vs {base} on {kind} questions: rubric {gain:+.2f}, tokens x{tok:.2f}, "
                          f"speed x{speed:.2f} -> {'PAYS OFF' if pays else 'DOES NOT PAY OFF'}")
     if {"single", "single+verify"} <= set(summary):

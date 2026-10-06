@@ -26,17 +26,22 @@ class VerificationOutcome:
 
 
 def guard(claim: Claim, corpus: Corpus, principal: dict[str, Any], min_overlap: float) -> tuple[bool, str]:
-    reasons = []
+    """Every citation must resolve to a passage this principal can read, under the document it
+    names, and support the claim. One good citation cannot carry a fake or irrelevant one."""
+    if not claim.evidence:
+        return False, "no evidence cited"
+    whys = []
     for ev in claim.evidence:
         p = corpus.get(ev.passage_id, principal)
         if p is None:
-            reasons.append(f"{ev.passage_id}: unknown passage")
-            continue
+            return False, f"{ev.passage_id}: unknown passage"
+        if ev.doc_id != p.doc_id:
+            return False, f"{ev.passage_id}: belongs to {p.doc_id}, not {ev.doc_id}"
         ok, why = deterministic_support(claim.text, p.text, min_overlap=min_overlap)
-        if ok:
-            return True, why
-        reasons.append(f"{ev.passage_id}: {why}")
-    return False, "; ".join(reasons)
+        if not ok:
+            return False, f"{ev.passage_id}: {why}"
+        whys.append(why)
+    return True, "; ".join(whys)
 
 
 def verify_claims(

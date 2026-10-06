@@ -3,6 +3,7 @@
 never from model arguments; an invisible passage is reported as unknown, not as forbidden."""
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from agentkit import ErrorClass, FunctionTool, SideEffect, ToolContext, ToolOutput
@@ -19,12 +20,29 @@ def _obj(props: dict[str, Any], required: list[str]) -> dict[str, Any]:
     return {"type": "object", "properties": props, "required": required, "additionalProperties": False}
 
 
+_HIT_LINE = re.compile(r"^\[([^\]\s]+)\] ")
+
+
+def observed_passage_ids(observation: str) -> set[str]:
+    """Passage ids a tool result actually returned, read from the result's structure: the id that
+    starts each hit line of a search, or the id in a passage header. A bracketed id anywhere else
+    (the echoed query, a passage body) does not count, so a model cannot "observe" an id by
+    putting it in its own query."""
+    lines = observation.split("\n")
+    if lines[0].startswith(SEARCH_HEADER):
+        return {m.group(1) for line in lines[1:] if (m := _HIT_LINE.match(line))}
+    if lines[0].startswith(PASSAGE_HEADER + " ["):
+        return {lines[0][len(PASSAGE_HEADER) + 2:].split("]", 1)[0]}
+    return set()
+
+
 def make_research_tools(corpus: Corpus, *, k: int = 4) -> list[FunctionTool]:
     def search_docs(ctx: ToolContext, query: str) -> ToolOutput:
         hits = corpus.search(query, ctx.principal, k=k)
+        echo = " ".join(query.split()).replace("[", "(").replace("]", ")")   # one line, no fake ids
         if not hits:
-            return ToolOutput(content=f'{SEARCH_HEADER} for "{query}": no results', data={"hits": []})
-        lines = [f'{SEARCH_HEADER} for "{query}":']
+            return ToolOutput(content=f'{SEARCH_HEADER} for "{echo}": no results', data={"hits": []})
+        lines = [f'{SEARCH_HEADER} for "{echo}":']
         for p, score in hits:
             snippet = " ".join(p.text.split())[:SNIPPET_CHARS]
             lines.append(f"[{p.passage_id}] {p.label}: {snippet}")
@@ -48,4 +66,4 @@ def make_research_tools(corpus: Corpus, *, k: int = 4) -> list[FunctionTool]:
     ]
 
 
-__all__ = ["make_research_tools", "SEARCH_HEADER", "PASSAGE_HEADER"]
+__all__ = ["make_research_tools", "observed_passage_ids", "SEARCH_HEADER", "PASSAGE_HEADER"]

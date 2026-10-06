@@ -15,6 +15,7 @@ from aie_core.llm.structured import extract_json
 
 from .contracts import Claim, Conflict
 from .text import content_terms, numbers, quantities
+from .tools import observed_passage_ids
 
 CITATION = re.compile(r"\[([a-z0-9][a-z0-9-]*#[a-z0-9-]+)\]")
 
@@ -95,9 +96,9 @@ def evidence_observed() -> Check:
         data = parse_json_answer(answer)
         if data is None:
             return False, "answer is not JSON"
-        seen = state.observation_text()
+        seen = set().union(*(observed_passage_ids(o.content) for o in state.observations if o.ok))
         cited = {e.get("passage_id", "") for c in data.get("claims", []) for e in c.get("evidence", [])}
-        unseen = sorted(p for p in cited if f"[{p}]" not in seen)
+        unseen = sorted(cited - seen)
         if unseen:
             return False, f"evidence not found in any tool result: {unseen}"
         return True, ""

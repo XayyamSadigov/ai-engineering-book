@@ -19,7 +19,7 @@ from back_of_envelope import (
 )
 
 
-def test_tokens_per_second_matches_source_example() -> None:
+def test_tokens_per_second_basic() -> None:
     # 10 rps x 2,000 input tokens = 20k input tokens/s; 10 x 500 = 5k output tokens/s
     assert tokens_per_second(10, 2_000) == 20_000
     assert tokens_per_second(10, 500) == 5_000
@@ -159,3 +159,16 @@ def test_case4_prefix_cache_is_what_meets_the_agent_budget() -> None:
     assert uncached.cost_per_day / 1_200 == pytest.approx(1.62)  # over the 1 USD/task ceiling
     assert cached.cost_per_day == pytest.approx(648)
     assert cached.cost_per_day / 1_200 == pytest.approx(0.54)
+
+
+def test_inputs_that_would_produce_silent_wrong_answers_are_refused() -> None:
+    import pytest
+    from back_of_envelope import Prices, Workload, estimate, replicas_needed
+    with pytest.raises(ValueError):
+        Workload("x", 1000, 1000, 0, 1, cached_fraction=1.5)
+    with pytest.raises(ValueError):
+        estimate(Workload("x", 1000, 1000, 0, 1, cached_fraction=0.8), Prices(2, 8))   # cached price missing
+    with pytest.raises(ValueError):
+        replicas_needed(6000, 3000, headroom=0.5)
+    idle = estimate(Workload("x", 0, 1000, 100, 1), Prices(2, 8), fixed_cost=120)
+    assert idle.cost_per_request == float("inf")

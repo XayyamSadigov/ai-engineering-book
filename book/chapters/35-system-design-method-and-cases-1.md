@@ -1,6 +1,8 @@
 # Chapter 35 — System Design Method and Cases I
 
-After this chapter you will be able to take a one-paragraph product request such as "an assistant that answers employee questions from our documents" and turn it into a defensible design: requirements with numbers, the simplest architecture that meets them, model and retrieval and tool choices justified per step, a security boundary, an evaluation plan, a capacity and cost estimate with the arithmetic shown, and a list of failure modes with their degraded modes. The chapter gives you a ten-step method and a reusable worksheet, then runs the method end to end on four systems: an enterprise knowledge assistant, a customer support copilot with a voice channel, a document processing system, and a repository-aware coding assistant. Each case ends with a map from the design's boxes to the packages and projects earlier chapters built, so a design is also a build plan. The only new code is a small sizing module, `book/projects/examples/ch35/back_of_envelope.py`, whose tests reproduce the step-9 numbers quoted in all four cases. Chapter 36 applies the same method to research agents, analytics assistants, workflow automation, a serving platform, and an evaluation platform.
+After this chapter you will be able to take a one-paragraph product request such as "an assistant that answers employee questions from our documents" and turn it into a defensible design: requirements with numbers, the simplest architecture that meets them, model and retrieval and tool choices justified per step, a security boundary, an evaluation plan, a capacity and cost estimate with the arithmetic shown, and a list of failure modes with their degraded modes. The chapter gives you a ten-step method and a reusable worksheet, then runs the method end to end on four systems: an enterprise knowledge assistant, a customer support copilot with a voice channel, a document processing system, and a repository-aware coding assistant. Each case ends with a map from the design's boxes to the packages and projects earlier chapters built, so a design is also a build plan.
+
+The only new code is a small sizing module, `book/projects/examples/ch35/back_of_envelope.py`, whose tests reproduce the step-9 numbers quoted in all four cases. Chapter 36 applies the same method to research agents, analytics assistants, workflow automation, a serving platform, and an evaluation platform.
 
 ## Why this matters
 
@@ -59,7 +61,7 @@ Say what is remembered across turns and across sessions, where it is stored, who
 
 ### Step 7: Handle security
 
-Walk the threat catalogue of Chapter 26 against your diagram: prompt injection through retrieved documents or tool results, data exfiltration through URLs and markdown, permission bypass through the model, excessive agency through tools, secrets in prompts or logs, insecure handling of model output downstream. For each, name the control and where it lives. Controls are code, policy engines, sandboxes, allowlists, and tests; prompt wording is not a control. Identity must propagate from the user through every stage, and caches must be keyed by the scope that determines the answer.
+Walk the threat catalog of Chapter 26 against your diagram: prompt injection through retrieved documents or tool results, data exfiltration through URLs and markdown, permission bypass through the model, excessive agency through tools, secrets in prompts or logs, insecure handling of model output downstream. For each, name the control and where it lives. Controls are code, policy engines, sandboxes, allowlists, and tests; prompt wording is not a control. Identity must propagate from the user through every stage, and caches must be keyed by the scope that determines the answer.
 
 ### Step 8: Handle evaluation
 
@@ -77,7 +79,7 @@ This is the back-of-the-envelope step. The formulas are few and you should be ab
 - Storage: `chunks * dimensions * bytes_per_dim * index_overhead` for a vector index; add the text, metadata, and lexical index.
 - Replicas for a self-hosted model: `ceil(demand_tokens_per_s * headroom / replica_tokens_per_s)`.
 
-Then do two sanity checks. Multiply cost per request by daily requests and compare to the ceiling from step 1. Multiply any proposed context increase by daily requests; a 1,000-token addition on 259,200 requests per day is 259 million tokens per day, and this is how "a bit more context" becomes a budget line.
+Then do two sanity checks. Multiply cost per request by daily requests and compare to the ceiling from step 1. Multiply any proposed context increase by daily requests; a 1,000-token addition on Case 2's 72,000 suggestions per day is 72 million tokens per day, and this is how "a bit more context" becomes a budget line.
 
 ### Step 10: Discuss failure modes and degraded modes
 
@@ -90,7 +92,7 @@ Fill one row per step before any review. Empty cells are findings.
 | Step | Questions to answer | Output artifact |
 |---|---|---|
 | 1 Requirements | users, job, correctness, freshness, privacy, side effects, SLOs, scale, cost ceiling | numbered requirement list |
-| 2 Architecture | request path, sync vs async, trust boundary, which ladder rungs are used | diagram with boundaries |
+| 2 Architecture | request path, sync vs async, trust boundary, which rungs of the complexity ladder (prompt, retrieval, tools, memory, agent) are used | diagram with boundaries |
 | 3 Models | per step: capability, latency budget, fallback, routing rule | model table |
 | 4 Retrieval | sources, ingestion, ACL filter point, candidate funnel k values, freshness | funnel table |
 | 5 Tools | per tool: side-effect class, validation, permission, approval, idempotency, timeout | tool table |
@@ -121,7 +123,7 @@ class Workload:   # name, daily_requests, input_tokens, output_tokens, avg_laten
     ...           # active_hours=8, peak_factor=3, cached_fraction=0.0
 
 @dataclass(frozen=True)
-class Prices:     # input_per_m, output_per_m, cached_input_per_m=0.0 (illustrative, caller-supplied)
+class Prices:     # input_per_m, output_per_m, cached_input_per_m=None (required if anything is cached)
     ...
 
 def estimate(workload: Workload, prices: Prices, fixed_cost: float = 0.0) -> Estimate:
@@ -148,7 +150,7 @@ This is Northwind Assist in its first release: a read-only assistant over HR pol
 4. Document ACLs (`all`, `hr`, `it-oncall`, tenant tags) are honored exactly; zero cross-tenant or cross-group leakage, verified by tests.
 5. Freshness: a document change is visible in answers within one hour.
 6. Read-only. No tools with side effects in this release.
-7. SLOs: p95 time to first token under 2 s, p95 completion under 8 s, availability 99.5 percent during business hours.
+7. SLOs: p95 time to first token under 2 s, p95 completion under 8 s, availability 99.5 percent during business hours, measured over a 30-day window (Chapter 29).
 8. Scale (illustrative): 4,000 employees, about 30 percent active daily, 5 questions each, so 6,000 questions per day concentrated in an 8-hour window with a peak factor of 5. Corpus about 60,000 documents.
 9. Cost ceiling: under 0.05 USD per answered question all in.
 
@@ -237,7 +239,7 @@ Peak rate: 6,000 / (8 × 3,600) = 0.208 requests per second average; × 5 = 1.04
 
 Tokens per request: system prompt 800 + evidence 8 × 400 = 3,200 + question and history 500 = 4,500 input; 300 output.
 
-Peak throughput: 1.04 × 4,500 ≈ 4,690 input tokens/s; 1.04 × 300 ≈ 310 output tokens/s. Any hosted tier handles this; a single self-hosted replica would too.
+Peak throughput: 1.04 × 4,500 ≈ 4,690 input tokens/s; 1.04 × 300 ≈ 310 output tokens/s. Any hosted tier handles this; a single self-hosted replica would too (Chapter 34 owns replica sizing).
 
 Concurrency: average request lasts about 6 s end to end, so 1.04 × 6 ≈ 6 requests in flight at peak. The reranker sees 6 × 60 = 360 pairs in flight; one GPU or a few CPU cores suffice.
 
@@ -382,9 +384,11 @@ Voice gold set: 200 recorded calls across accents, background noise levels, and 
 
 ### Step 9: Scaling
 
-Chat. Peak rate: 72,000 / 28,800 × 2 = 5 rps. Tokens per suggestion: system and tone rules 1,500 + conversation 1,500 + account context 800 + evidence 2,000 = 5,800 input; 250 output. Peak throughput: 29,000 input tokens/s, 1,250 output tokens/s. Concurrency: at 4 s per suggestion end to end, 5 × 4 = 20 in flight. Daily: 72,000 × 5,800 = 417.6 million input, 18 million output. Cost uncached: 417.6 × 2 + 18 × 8 = 835.2 + 144 = 979.2 USD per day, 0.0136 per suggestion, 0.082 per six-turn conversation, just under the ceiling. The system prompt and account context are identical across the turns of a conversation, so about half the input is cacheable; at 0.2 per million for cached tokens the cost becomes 208.8 × 2 + 208.8 × 0.2 + 144 = 417.6 + 41.8 + 144 = 603.4 USD per day, a 38 percent reduction and the single biggest lever in this design.
+Chat. Peak rate: 72,000 / 28,800 × 2 = 5 rps. Tokens per suggestion: system and tone rules 1,500 + conversation 1,500 + account context 800 + evidence 2,000 = 5,800 input; 250 output. Peak throughput: 29,000 input tokens/s, 1,250 output tokens/s. Concurrency: at 4 s per suggestion end to end, 5 × 4 = 20 in flight. Daily: 72,000 × 5,800 = 417.6 million input, 18 million output.
 
-Voice. Concurrency by Little's Law: 1,500 calls per hour × 360 s = 1,500 / 3,600 × 360 = 150 concurrent calls at peak, so 150 open audio streams, 150 STT streams, and 150 TTS streams. Turn rate: one caller turn every 12 s per call gives 150 / 12 = 12.5 turns/s; at 2,500 input tokens (mostly cached conversation prefix) and 80 output tokens per turn that is 31,000 input tokens/s and 1,000 output tokens/s. Daily: 8,000 calls × 30 turns = 240,000 turns; 600 million input tokens of which about 70 percent cached, 19.2 million output. LLM cost: 180 × 2 + 420 × 0.2 + 19.2 × 8 = 360 + 84 + 153.6 ≈ 598 USD per day. Speech: 8,000 × 6 = 48,000 call minutes; at illustrative 0.01 USD per minute for STT and 0.015 for TTS, 1,200 USD per day. Total about 1,800 USD per day, 0.22 USD per call, of which speech is two thirds. Voice cost is dominated by speech processing, not by the language model, so optimizing the LLM prompt saves little; shortening calls and cutting silence does more.
+Cost uncached: 417.6 × 2 + 18 × 8 = 835.2 + 144 = 979.2 USD per day, 0.0136 per suggestion, 0.082 per six-turn conversation, just under the ceiling. The system prompt and account context are identical across the turns of a conversation, and earlier turns extend that stable prefix, so about half the input is cacheable; at 0.2 per million for cached tokens the cost becomes 208.8 × 2 + 208.8 × 0.2 + 144 = 417.6 + 41.8 + 144 = 603.4 USD per day, a 38 percent reduction and the single biggest lever in this design.
+
+Voice. Concurrency by Little's Law: (1,500 / 3,600 calls per second) × 360 s = 150 concurrent calls at peak, so 150 open audio streams, 150 STT streams, and 150 TTS streams. Turn rate: one caller turn every 12 s per call gives 150 / 12 = 12.5 turns/s; at 2,500 input tokens (mostly cached conversation prefix) and 80 output tokens per turn that is 31,000 input tokens/s and 1,000 output tokens/s. Daily: 8,000 calls × 30 turns = 240,000 turns; 600 million input tokens of which about 70 percent cached, 19.2 million output. LLM cost: 180 × 2 + 420 × 0.2 + 19.2 × 8 = 360 + 84 + 153.6 ≈ 598 USD per day. Speech: 8,000 × 6 = 48,000 call minutes; at illustrative 0.01 USD per minute for STT and 0.015 for TTS, both billed on full call minutes (pessimistic for TTS), 1,200 USD per day. Total about 1,800 USD per day, 0.22 USD per call, of which speech is two thirds. Voice cost is dominated by speech processing, not by the language model, so optimizing the LLM prompt saves little; shortening calls and cutting silence does more.
 
 The voice latency budget, measured from the end of the caller's speech to the first audio they hear:
 
@@ -399,7 +403,7 @@ The voice latency budget, measured from the end of the caller's speech to the fi
 | Network egress | 75 ms | |
 | Total | 1,200 ms | median target 1,000 ms requires overlap |
 
-To reach a 1 s median the stages must overlap: start the model on a stable partial transcript when the intent is read-only, and let STT finalization run concurrently. Barge-in is a cancellation path: when VAD detects speech during playback, TTS stops within 200 ms, the in-flight generation is cancelled, and the conversation state records what the caller actually heard, not what the model generated. The hazard to design against is a side effect triggered from a partial: `create_ticket` is only ever called from a finalized transcript plus an explicit confirmation turn, never from a partial, because partials can revise "cancel the order" into "don't cancel the order" 300 ms later. Chapter 38's `TurnGate` encodes exactly this rule in code: an unstable partial may trigger only read-class tools, and only a final transcript above a confidence threshold unlocks writes, which still pass the normal policy and confirmation.
+To reach a 1 s median the stages must overlap: start the model on a stable partial transcript when the intent is read-only, and let STT finalization run concurrently. Barge-in is a cancellation path: when voice activity detection (VAD) detects speech during playback, TTS stops within 200 ms, the in-flight generation is cancelled, and the conversation state records what the caller actually heard, not what the model generated. The hazard to design against is a side effect triggered from a partial: `create_ticket` is only ever called from a finalized transcript plus an explicit confirmation turn, never from a partial, because partials can revise "cancel the order" into "don't cancel the order" 300 ms later. Chapter 38's `TurnGate` encodes exactly this rule in code: an unstable partial may trigger only read-class tools, and only a final transcript above a confidence threshold unlocks writes, which still pass the normal policy and confirmation.
 
 ### Step 10: Failure modes
 
@@ -507,9 +511,9 @@ Ground truth is field-level: 1,000 invoices and 150 contracts labeled by the fin
 
 ### Step 9: Scaling
 
-Invoices. Tokens per invoice: schema and instructions 1,200 + document 2 pages × 700 = 1,400; total 2,600 input, 400 output. Daily: 8,000 × 2,600 = 20.8 million input, 3.2 million output. Cost on the capable model: 20.8 × 2 + 3.2 × 8 = 41.6 + 25.6 = 67.2 USD per day; on the small model at one tenth the price, 6.7 USD per day, with the cascade landing in between, roughly 15 USD per day. Contracts: 30 pages ≈ 21,000 tokens, split into about 10 sections, each extracted with the schema, about 25,000 input and 3,000 output per contract; 200 contracts give 5 million input and 0.6 million output tokens, 10 + 4.8 = 14.8 USD per day on the capable model.
+Invoices. Tokens per invoice: schema and instructions 1,200 + document 2 pages × 700 = 1,400; total 2,600 input, 400 output. Daily: 8,000 × 2,600 = 20.8 million input, 3.2 million output. Cost on the capable model: 20.8 × 2 + 3.2 × 8 = 41.6 + 25.6 = 67.2 USD per day; on the small model at one tenth the price, 6.7 USD per day, with the cascade landing in between, roughly 15 USD per day if about 12 percent of invoices escalate (illustrative). Contracts: 30 pages ≈ 21,000 tokens, split into about 10 sections, each extracted with the schema, about 25,000 input (sections plus a roughly 400-token contract schema each) and 3,000 output per contract; 200 contracts give 5 million input and 0.6 million output tokens, 10 + 4.8 = 14.8 USD per day on the capable model.
 
-OCR: 40 percent × 8,000 × 2 = 6,400 pages per day; at 2 s per page that is 12,800 CPU-seconds, about 3.6 CPU-hours, trivially parallel.
+OCR: 40 percent × 8,000 × 2 = 6,400 pages per day; at an illustrative 2 s per page that is 12,800 CPU-seconds, about 3.6 CPU-hours, trivially parallel.
 
 Throughput for the morning batch: 4,000 invoices, about 20 s each through the pipeline. With 20 workers, 4,000 × 20 / 20 = 4,000 s ≈ 67 minutes, inside the two-hour window; 40 workers halves it. The model tier sees 20 workers / 20 s = 1 document per second, 2,600 input tokens/s, which no rate limit will notice. Workers are the scaling knob; the model is not the bottleneck.
 
@@ -561,7 +565,7 @@ Northwind's engineering organization of about 400 engineers wants a repository-a
 4. The agent may read and search the repository, apply patches, run tests and linters, and show diffs. Network access is disabled by default; package installation requires approval; destructive git operations are not available.
 5. Code stays within Northwind's boundary: hosted models are allowed only for repositories tagged as such; others use a self-hosted model.
 6. Scale (illustrative): autocomplete 400 × 300 = 120,000 completions per day; agent mode 400 × 3 = 1,200 tasks per day, each about 25 model steps and 10 minutes of sandbox time.
-7. Cost ceiling: under 1 USD per agent task; autocomplete under 0.05 USD per engineer per day.
+7. Cost ceiling: under 1 USD per successful agent task; autocomplete under 0.05 USD per engineer per day.
 
 ### Step 2: Architecture
 
@@ -638,9 +642,9 @@ Trajectories are replayed from the event log (Chapter 19) so a failing task is d
 
 Autocomplete. Peak rate: 120,000 / 28,800 × 2 = 8.3 rps. Tokens: 2,000 input (about 80 percent of it a cacheable prefix of the current file and neighbors), 30 output. Peak throughput: 16,700 input tokens/s, 250 output tokens/s. Concurrency at 600 ms per completion: 8.3 × 0.6 = 5 in flight. Daily: 240 million input of which 192 million cached, 3.6 million output. Cost at small-model prices (0.2 and 0.8 per million, 0.02 cached): 48 × 0.2 + 192 × 0.02 + 3.6 × 0.8 = 9.6 + 3.8 + 2.9 = 16.3 USD per day, 0.04 per engineer per day. Self-hosting: at 250 output tokens/s peak and prefill dominated, one modest replica with prefix caching suffices, two for availability (Chapter 34 for the serving math).
 
-Agent mode. 1,200 tasks × 25 steps = 30,000 steps per day; peak factor 2.5 gives 30,000 / 28,800 × 2.5 = 2.6 steps/s. Tokens per step: about 30,000 input (system prompt, working set, compacted history, mostly cached between consecutive steps) and 600 output. Peak throughput: 78,000 input tokens/s (mostly cached) and 1,560 output tokens/s. Per task: 750,000 input and 15,000 output tokens. Daily: 900 million input, 18 million output. Cost uncached at capable-model prices: 1,800 + 144 = 1,944 USD per day, 1.62 per task, over the ceiling. With 80 percent of input served from the prefix cache: 180 × 2 + 720 × 0.2 + 18 × 8 = 360 + 144 + 144 = 648 USD per day, 0.54 per task. The cache is not an optimization here; it is what makes the design meet its budget, which is why the context builder must keep the prefix stable across steps (Chapter 5).
+Agent mode. 1,200 tasks × 25 steps = 30,000 steps per day; peak factor 2.5 gives 30,000 / 28,800 × 2.5 = 2.6 steps/s. Tokens per step: about 30,000 input (system prompt, working set, compacted history, mostly cached between consecutive steps) and 600 output. Peak throughput: 78,000 input tokens/s (mostly cached) and 1,560 output tokens/s. Per task: 750,000 input and 15,000 output tokens. Daily: 900 million input, 18 million output. Cost uncached at capable-model prices: 1,800 + 144 = 1,944 USD per day, 1.62 per task, over the ceiling. With 80 percent of input served from the prefix cache: 180 × 2 + 720 × 0.2 + 18 × 8 = 360 + 144 + 144 = 648 USD per day, 0.54 per task, or 0.90 per successful task at an illustrative 60 percent success rate. Here the cache is what makes the design meet its budget, which is why the context builder must keep the prefix stable across steps (Chapter 5).
 
-Sandboxes: 1,200 tasks × 10 minutes = 200 sandbox-hours per day; average concurrency 200 / 8 = 25, peak about 60. Each needs the repository checkout, so for 300 repositories averaging 500 MB that is 30 GB of warm checkouts in a cache plus 60 × 2 GB of sandbox scratch at peak.
+Sandboxes: 1,200 tasks × 10 minutes = 200 sandbox-hours per day; average concurrency 200 / 8 = 25, peak about 63 at a 2.5 peak factor. Each needs the repository checkout, so for an illustrative 300 repositories averaging 500 MB that is 150 GB of warm checkouts in a cache plus 63 × 2 GB of sandbox scratch at peak.
 
 ### Step 10: Failure modes
 
@@ -682,7 +686,7 @@ Lead with requirements and numbers. State the users, the job, what correct means
 
 Architecture before tools. Draw the request path and the trust boundary, name the ladder rungs you are using and the ones you are deliberately not (no agent, no memory, no fine-tuning) with a one-sentence reason each. Only then name the components that implement each box, and present them as options with criteria rather than as choices.
 
-Show the arithmetic. Three lines of Little's Law and token math carry more weight than any adjective, and they expose whether the design is plausible: a single-replica design with 80 requests in flight and 1.5 GiB of KV cache each is not.
+Show the arithmetic. Three lines of Little's Law and token math carry more weight than any adjective, and they expose whether the design is plausible: a single-replica design with 80 requests in flight and an illustrative 1.5 GiB of KV cache each is not (Chapter 34 owns KV sizing).
 
 Spend the deep dive on the hardest constraint, which is rarely the model: ACL-safe caching in Case 1, side effects from partial transcripts in Case 2, review rate in Case 3, the context strategy and the Definition of Done in Case 4.
 
@@ -738,10 +742,10 @@ Each is a design exercise. Deliver the completed worksheet (all ten rows), one M
 
 - System design for AI is a fixed sequence: requirements with numbers, simplest architecture, models per step, retrieval, tools, memory, security, evaluation, scaling arithmetic, failure modes. Skipped steps become architecture changes.
 - Correctness must be stated as a testable property in step 1; it is what the evaluation set in step 8 measures and what the Definition of Done in an agent enforces.
-- Back-of-the-envelope sizing is four formulas: peak rate, tokens per second, Little's Law for concurrency, and cost per day from tokens by class. Show the arithmetic and label the assumptions.
+- Back-of-the-envelope sizing rests on four core formulas: peak rate, tokens per second, Little's Law for concurrency, and cost per day from tokens by class. Show the arithmetic and label the assumptions.
 - Of the four cases, only the coding assistant needs an agent loop. The knowledge assistant and support copilot are workflows with model calls, and document processing is a batch pipeline.
 - Permissions live in retrieval filters and tool bindings, never in the prompt. Caches are keyed by everything that determines the answer, including permission scope and index version.
 - Side effects need confirmation bound to validated arguments, idempotency keys, and, in voice, finalized transcripts; a partial transcript must never trigger a write.
 - The dominant cost is often not the model: review hours in document processing, speech processing in voice, and the prefix cache hit rate in agent mode decide the budget.
-- Every design has degraded modes. Define them in order (drop rewrite, drop rerank, smaller model, no generation, human handoff) and detect each failure with a named telemetry signal.
+- Every design has degraded modes. Define them in order (drop rewrite, drop rerank, lexical-only retrieval, smaller model, no generation, human handoff) and detect each failure with a named telemetry signal.
 - Present designs in the order of the method: requirements and numbers first, architecture before tools, the deep dive on the hardest constraint, evaluation and rollout last.

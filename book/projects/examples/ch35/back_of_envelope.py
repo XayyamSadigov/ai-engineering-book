@@ -74,6 +74,8 @@ def replicas_needed(
     """Replicas to serve ``demand_tokens_per_s`` with ``headroom`` (1.5 = 50 percent spare)."""
     if replica_tokens_per_s <= 0:
         raise ValueError("replica_tokens_per_s must be positive")
+    if headroom < 1:
+        raise ValueError("headroom is a multiplier of at least 1 (1.5 = 50 percent spare)")
     return max(1, math.ceil(demand_tokens_per_s * headroom / replica_tokens_per_s))
 
 
@@ -90,6 +92,12 @@ class Workload:
     peak_factor: float = 3.0
     cached_fraction: float = 0.0  # share of input tokens served from a prefix cache
 
+    def __post_init__(self) -> None:
+        if not 0 <= self.cached_fraction <= 1:
+            raise ValueError("cached_fraction must be between 0 and 1")
+        if self.daily_requests < 0 or self.peak_factor <= 0 or self.active_hours <= 0:
+            raise ValueError("daily_requests must be non-negative; peak_factor and active_hours positive")
+
 
 @dataclass(frozen=True)
 class Prices:
@@ -97,7 +105,7 @@ class Prices:
 
     input_per_m: float
     output_per_m: float
-    cached_input_per_m: float = 0.0
+    cached_input_per_m: float | None = None   # required when any input is cached
 
 
 @dataclass(frozen=True)
@@ -116,6 +124,8 @@ class Estimate:
 
 def estimate(workload: Workload, prices: Prices, fixed_cost: float = 0.0) -> Estimate:
     """Run the full step-9 arithmetic for one workload. Each field is one formula above."""
+    if workload.cached_fraction > 0 and prices.cached_input_per_m is None:
+        raise ValueError("set Prices.cached_input_per_m: cached tokens are discounted, not free")
     rps = peak_rps(workload.daily_requests, workload.active_hours, workload.peak_factor)
     cached = daily_tokens(workload.daily_requests, workload.input_tokens * workload.cached_fraction)
     uncached = daily_tokens(workload.daily_requests, workload.input_tokens) - cached
@@ -126,7 +136,7 @@ def estimate(workload: Workload, prices: Prices, fixed_cost: float = 0.0) -> Est
         prices.input_per_m,
         prices.output_per_m,
         cached_input_tokens=cached,
-        price_cached_per_m=prices.cached_input_per_m,
+        price_cached_per_m=prices.cached_input_per_m or 0.0,
         fixed_cost=fixed_cost,
     )
     return Estimate(
@@ -138,7 +148,8 @@ def estimate(workload: Workload, prices: Prices, fixed_cost: float = 0.0) -> Est
         daily_cached_tokens=cached,
         daily_output_tokens=out,
         cost_per_day=cost,
-        cost_per_request=cost / workload.daily_requests if workload.daily_requests else 0.0,
+        # with no traffic the fixed cost is spread over nothing: report it as unbounded, not free
+        cost_per_request=cost / workload.daily_requests if workload.daily_requests else (math.inf if cost else 0.0),
         notes=[
             "peak_factor and active_hours are assumptions: replace with measured traffic",
             "add retries, agent steps, and failed tasks before quoting cost per successful task",

@@ -20,7 +20,7 @@ from aie_core.llm.client import LLMClient
 from aie_core.llm.errors import LLMError
 from aie_core.llm.gateway import PricingTable
 from aie_core.llm.tokens import count_message_tokens
-from aie_core.llm.types import CompletionRequest
+from aie_core.llm.types import CompletionRequest, ToolCall
 from aie_core.observability import NoopTracer, Tracer
 
 from .budget import Budget, TerminationReason
@@ -144,9 +144,12 @@ class AgentRuntime:
         return self._drive(s)
 
     def resume(self, run_id: str, *, approve: bool | None = None, reason: str = "",
-               budget: Budget | None = None) -> RunResult:
+               budget: Budget | None = None, request_id: str | None = None) -> RunResult:
         """Continue a run from its event log: after an approval pause, after a crash, or with a
-        larger budget after a budget stop. State is rebuilt from events, never from memory."""
+        larger budget after a budget stop. State is rebuilt from events, never from memory.
+
+        Pass `request_id` (from the `approval_required` note) with a decision so it applies only
+        to the call the reviewer saw; a stale decision for another call is refused."""
         events = self.store.load(run_id)
         if not events:
             raise KeyError(f"unknown run {run_id!r}")
@@ -160,6 +163,8 @@ class AgentRuntime:
                 raise ValueError("run is awaiting approval: pass approve=True or approve=False")
             rec = state.pending_approval
             assert rec is not None
+            if request_id is not None and request_id != rec.request_id:
+                raise ValueError(f"decision is for {request_id!r}, but {rec.request_id!r} is awaiting approval")
             self._emit(s, Resumed, by="human", note=reason)
             if approve:
                 self._emit(s, ToolCallApproved, request_id=rec.request_id, tool=rec.tool, by="human", reason=reason)
@@ -169,7 +174,8 @@ class AgentRuntime:
         elif state.status is AgentStatus.STOPPED:
             if not (state.stop_reason and state.stop_reason.is_budget and budget is not None):
                 raise ValueError(f"run stopped with {state.stop_reason}; only budget stops resume, with a new budget")
-            self._emit(s, Resumed, by="operator", note=f"budget extended to {budget.model_dump()}")
+            self._emit(s, Resumed, by="operator", note=f"budget extended to {budget.model_dump()}",
+                       budget=budget.model_dump())
         else:  # RUNNING with no Stopped event: the previous process died mid-run
             self._emit(s, Resumed, by="recovery", note="resumed after interruption")
         return self._drive(s)
@@ -178,6 +184,8 @@ class AgentRuntime:
     def _drive(self, s: _Session) -> RunResult:
         with self.tracer.span("agent.run", run_id=s.run_id, goal=s.state.goal[:200]) as span:
             while s.state.status is AgentStatus.RUNNING:
+                if s.state.step_open and self._recover_step(s):   # only after a crash mid-step
+                    continue
                 if s.state.pending_calls:                  # only after resume
                     self._process_calls(s)
                     if s.state.status is AgentStatus.RUNNING:
@@ -251,15 +259,39 @@ class AgentRuntime:
             span.set_attribute("output_tokens", completion.usage.output_tokens)
             span.set_attribute("cost_usd", cost)
             if calls:
-                for i, call in enumerate(calls):
-                    self._emit(s, ToolCallRequested, step=step, request_id=f"{step}.{i}", call_id=call.id,
-                               tool=call.name, arguments=call.arguments, key=action_key(call.name, call.arguments))
+                self._request_calls(s, step, calls)
                 self._process_calls(s)
             else:
                 self._handle_final(s, completion.text, completion.finish_reason)
             if s.state.status is AgentStatus.RUNNING:
                 self._close_step(s)
             span.set_attribute("progress", s.state.steps_without_progress == 0)
+
+    def _request_calls(self, s: _Session, step: int, calls: list[ToolCall]) -> None:
+        for i, call in enumerate(calls):
+            if f"{step}.{i}" not in s.state.calls:     # on recovery, only the ones not yet recorded
+                self._emit(s, ToolCallRequested, step=step, request_id=f"{step}.{i}", call_id=call.id,
+                           tool=call.name, arguments=call.arguments, key=action_key(call.name, call.arguments))
+
+    def _recover_step(self, s: _Session) -> bool:
+        """Finish what a crash interrupted inside the open step. True if it emitted anything."""
+        st = s.state
+        if st.final_answer is not None:        # accepted, but the Stopped event was never written
+            self._stop(s, TerminationReason.COMPLETED, "final answer accepted before the interruption")
+            return True
+        last = st.observations[-1] if st.observations else None
+        if last is not None and last.step == st.step and last.error_class is ErrorClass.FATAL:
+            self._stop(s, TerminationReason.FATAL_ERROR, f"{last.tool}: fatal error before the interruption")
+            return True
+        if any(f"{st.step}.{i}" not in st.calls for i in range(len(st.open_tool_calls))):
+            self._request_calls(s, st.step, st.open_tool_calls)
+            return True
+        if st.open_final is not None:
+            self._handle_final(s, *st.open_final)
+            if s.state.status is AgentStatus.RUNNING:
+                self._close_step(s)
+            return True
+        return False
 
     def _handle_final(self, s: _Session, text: str, finish_reason: str) -> None:
         if finish_reason == "length":

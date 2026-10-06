@@ -137,6 +137,7 @@ class Resumed(Event):
     type: Literal["resumed"] = "resumed"
     by: str = "human"
     note: str = ""
+    budget: dict[str, Any] | None = None  # set when an operator extends the budget; replay reads it
 
 
 class Stopped(Event):

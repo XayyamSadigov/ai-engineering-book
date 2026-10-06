@@ -13,7 +13,7 @@ from typing import Any, Iterable, Literal
 
 from pydantic import BaseModel, Field
 
-from aie_core.llm.types import Message, Role, ToolSpec
+from aie_core.llm.types import Message, Role, ToolCall, ToolSpec
 
 from .budget import BudgetUsage, TerminationReason
 from .errors import ErrorClass
@@ -39,6 +39,7 @@ class CallRecord(BaseModel):
     step: int
     status: Literal["requested", "approved", "denied", "done"] = "requested"
     approved_by: str | None = None
+    ok: bool | None = None                                           # set by the ToolResult
 
 
 class Observation(BaseModel):
@@ -70,6 +71,8 @@ class AgentState(BaseModel):
     result_hashes: set[str] = Field(default_factory=set)
     step_had_progress: bool = False
     step_open: bool = False                                          # a ModelDecision without its StepCompleted
+    open_tool_calls: list[ToolCall] = Field(default_factory=list)    # the open step's batch, for crash recovery
+    open_final: tuple[str, str] | None = None                        # (text, finish_reason) not yet judged
     steps_without_progress: int = 0
     consecutive_errors: int = 0
     dod_rejections: int = 0
@@ -92,7 +95,8 @@ class AgentState(BaseModel):
         return next((c for c in self.calls.values() if c.status == "requested"), None)
 
     def tools_called(self) -> set[str]:
-        return {c.tool for c in self.calls.values() if c.status == "done"}
+        """Tools that ran and succeeded; a failed call is not evidence the work was done."""
+        return {c.tool for c in self.calls.values() if c.status == "done" and c.ok}
 
     def observation_text(self) -> str:
         return "\n".join(o.content for o in self.observations if o.ok)
@@ -125,6 +129,8 @@ def apply(state: AgentState, event: Event) -> AgentState:
         state.usage.cost_usd += event.cost_usd
         state.step_had_progress = False
         state.step_open = True
+        state.open_tool_calls = list(event.tool_calls)
+        state.open_final = (event.text, event.finish_reason) if event.kind == "final" else None
         state.messages.append(
             Message(role=Role.ASSISTANT, content=event.text, tool_calls=list(event.tool_calls) or None)
         )
@@ -146,7 +152,8 @@ def apply(state: AgentState, event: Event) -> AgentState:
         state.messages.append(Message.tool(event.call_id, f"DENIED ({event.error_class.value}): {event.reason}"))
 
     elif isinstance(event, ToolResult):
-        state.calls[event.request_id].status = "done"
+        rec = state.calls[event.request_id]
+        rec.status, rec.ok = "done", event.ok
         state.usage.tool_calls += 1
         state.key_counts[event.key] = state.key_counts.get(event.key, 0) + 1
         state.observations.append(
@@ -178,11 +185,14 @@ def apply(state: AgentState, event: Event) -> AgentState:
     elif isinstance(event, Note):
         if event.kind == "dod_rejected":
             state.dod_rejections += 1
+        if event.kind in ("dod_rejected", "truncated_answer"):
+            state.open_final = None
         if event.to_model:
             state.messages.append(Message.user(f"[harness:{event.kind}] {event.text}"))
 
     elif isinstance(event, FinalAnswer):
         state.final_answer = event.text
+        state.open_final = None
 
     elif isinstance(event, Resumed):
         state.status = AgentStatus.RUNNING

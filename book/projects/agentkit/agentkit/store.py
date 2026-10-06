@@ -3,7 +3,7 @@
 
 The in-memory store is for tests and single-process tools. The JSONL store writes one file
 per run and one event per line, flushed on every append, so a crash loses at most the event
-being written. Chapter 38 swaps in a database-backed store with the same protocol.
+being written; `load` drops that torn last line. Chapter 38 swaps in a database-backed store with the same protocol.
 """
 from __future__ import annotations
 
@@ -65,8 +65,8 @@ class JsonlEventStore:
                 expected = len(self.load(event.run_id)) if path.exists() else 0
             if event.seq != expected:
                 raise ValueError(f"run {event.run_id}: expected seq {expected}, got {event.seq}")
-            with path.open("a", encoding="utf-8") as f:
-                f.write(event_to_json(event) + "\n")
+            with path.open("ab") as f:                       # bytes: "\n" on every platform
+                f.write((event_to_json(event) + "\n").encode("utf-8"))
                 f.flush()
                 os.fsync(f.fileno())
             self._next_seq[event.run_id] = expected + 1
@@ -76,11 +76,22 @@ class JsonlEventStore:
         if not path.exists():
             return []
         events: list[Event] = []
-        with path.open(encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if line:
-                    events.append(event_from_json(line))
+        data = path.read_bytes()
+        lines = data.split(b"\n")
+        for i, line in enumerate(lines):
+            if not line.strip():
+                continue
+            try:
+                events.append(event_from_json(line.decode("utf-8")))
+            except ValueError:                 # includes a UTF-8 sequence cut in half
+                if i != len(lines) - 1:        # complete lines end with "\n"; this one did not
+                    raise                      # corruption mid-file is not a torn write: fail loudly
+                with path.open("r+b") as f:    # drop the torn tail so later appends stay valid
+                    f.truncate(len(data) - len(line))
+                return events
+        if lines[-1]:                          # whole last event, newline lost: restore it
+            with path.open("ab") as f:
+                f.write(b"\n")
         return events
 
     def runs(self) -> list[str]:

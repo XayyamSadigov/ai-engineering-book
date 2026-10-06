@@ -22,7 +22,9 @@ from aie_core.llm.types import Completion, CompletionRequest, Message, Role, Str
 from .budget import Budget
 from .dod import DefinitionOfDone
 from .errors import ErrorClass
-from .events import Event, GoalSet, ModelDecision, Stopped, ToolCallDenied, ToolCallRequested, ToolResult, action_key
+from .events import (
+    Event, GoalSet, ModelDecision, Resumed, Stopped, ToolCallDenied, ToolCallRequested, ToolResult, action_key,
+)
 from .runtime import AgentRuntime, LoopConfig, RunResult
 from .store import EventStore, InMemoryEventStore
 from .tools import PolicyDecision, SideEffect, Tool, ToolContext, ToolOutput
@@ -219,7 +221,7 @@ def replay(
         llm or RecordedLLM.from_events(events),
         tools,
         system_prompt=(goal.system_prompt or "") if reuse_prompt else str(system_prompt),
-        budget=budget or Budget(**goal.budget),
+        budget=budget or Budget(**_last_budget(events, goal)),
         policy=RecordedPolicy(events),
         dod=dod,
         store=store or InMemoryEventStore(),
@@ -233,6 +235,12 @@ def replay(
     stops = [e for e in events if isinstance(e, Stopped)]
     return ReplayReport(original=original, replayed=replayed, first_divergence=_first_divergence(original, replayed),
                         misses=misses, result=result, original_stop=stops[-1].reason if stops else None)
+
+
+def _last_budget(events: Sequence[Event], goal: GoalSet) -> dict[str, Any]:
+    """The budget the run finished under: the latest operator extension, else the original."""
+    extended = [e.budget for e in events if isinstance(e, Resumed) and e.budget is not None]
+    return extended[-1] if extended else goal.budget
 
 
 __all__ = [

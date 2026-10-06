@@ -168,7 +168,9 @@ def main(event_dir: str | None = None, out=sys.stdout) -> dict[str, Any]:
     pending = first.state.pending_approval
     if pending is not None:
         print(f"  approval needed for {pending.tool}({json.dumps(pending.arguments)})", file=out)
-    final = runtime.resume(run_id, approve=True, reason="on-call lead approved")
+    # Bind the decision to the call the reviewer saw; a stale decision for another call is refused.
+    final = runtime.resume(run_id, approve=True, reason="on-call lead approved",
+                           request_id=pending.request_id if pending else None)
     print(f"[{run_id}] {final.stop_reason.value if final.stop_reason else None} after "
           f"{final.state.usage.steps} steps, trajectory={final.trajectory()}", file=out)
     print(f"  answer: {final.final_answer}", file=out)

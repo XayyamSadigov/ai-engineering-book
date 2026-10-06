@@ -376,7 +376,8 @@ class DefaultPolicy:
     - `require_approval`: extra tool names that need a human, on top of tools that declare it.
     - `irreversible_needs_approval`: any IRREVERSIBLE tool needs approval (default True).
     - `rules`: extra callables `(tool, arguments, principal) -> PolicyDecision | None`; the first
-      non-None decision wins. Use them for argument-level checks such as tenant scope.
+      decision that denies or requires approval wins. A rule cannot waive the approval checks
+      below. Use them for argument-level checks such as tenant scope.
     """
 
     def __init__(
@@ -400,7 +401,7 @@ class DefaultPolicy:
             return PolicyDecision(allowed=False, reason=f"tool '{tool.name}' is not allowed for this run")
         for rule in self.rules:
             decision = rule(tool, arguments, principal)
-            if decision is not None:
+            if decision is not None and (not decision.allowed or decision.requires_approval):
                 return decision
         if getattr(tool, "approval_by_executor", False):
             return PolicyDecision(allowed=True, reason="approval delegated to the tool executor")

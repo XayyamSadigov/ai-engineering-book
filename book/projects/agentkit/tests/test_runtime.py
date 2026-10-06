@@ -115,7 +115,8 @@ def test_approval_pause_then_resume_executes_once(tools, counter):
     assert paused.stop_reason is TerminationReason.APPROVAL_REQUIRED
     assert paused.state.pending_approval is not None and counter.count("send_reply") == 0
 
-    resumed = rt.resume("run-approval", approve=True, reason="checked by on-call")
+    resumed = rt.resume("run-approval", approve=True, reason="checked by on-call",
+                        request_id=paused.state.pending_approval.request_id)
     assert resumed.ok
     assert counter.count("send_reply") == 1
     assert counter.keys == ["run-approval:1.0"]

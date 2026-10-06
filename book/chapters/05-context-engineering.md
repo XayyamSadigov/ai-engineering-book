@@ -35,7 +35,9 @@ The context of a request is everything the model conditions on. That includes th
 - **Memory.** Each token in the prompt occupies KV-cache memory for the entire generation. On self-hosted serving this directly reduces concurrency (Chapter 34).
 - **Attention.** Each extra token competes with the relevant ones. Distractors lower accuracy even when the right evidence is present.
 
-The window has a hard limit, which is the advertised maximum, and a soft limit well below it. Past the soft limit, quality on your task starts to fall. The soft limit depends on the model, the task, and how much of the context is distractor text. You find it by measurement, not from a model card. In production the binding constraint is often neither limit but the latency target. Northwind's goal is a p95 time to first token under 2 seconds for RAG answers. Suppose load tests show (illustrative numbers) about 0.4 s of fixed overhead and an effective prefill rate of 8,000 tokens per second at p95. Then the latency budget allows roughly 12,800 input tokens, whatever the window says. The input budget is the minimum of what the window allows after reserving output and what the latency target allows. The builder enforces that number. It is not discovered during an incident.
+The window has a hard limit, which is the advertised maximum, and a soft limit well below it. Past the soft limit, quality on your task starts to fall. The soft limit depends on the model, the task, and how much of the context is distractor text, and you find it by measurement.
+
+In production the binding constraint is often neither limit but the latency target. Northwind's goal is a p95 time to first token under 2 seconds for RAG answers. Suppose load tests show (illustrative numbers) about 0.4 s of fixed overhead and an effective prefill rate of 8,000 tokens per second at p95. Then the latency budget allows roughly 12,800 input tokens, whatever the window says. The input budget is the minimum of what the window allows after reserving output and what the latency target allows, and the builder enforces that number.
 
 ### What belongs in context, and what does not
 
@@ -74,21 +76,25 @@ Assembling context is a pipeline with eight stages. Each stage has its own failu
 7. **Label.** Attach source ids and trust boundaries so the model can cite sources and can tell instructions from data.
 8. **Attribute.** Record what was included, what was dropped, and why. Later, check which included items actually influenced the output.
 
-Stage 3 is where the third incident came from. The enrichment step ran after the only permission check. The fix was structural. Permission filtering moved into the builder, the last component before the model. Now every item is checked no matter which upstream step produced it. A check that runs earlier is defense in depth. The check that runs last is the one that guarantees the property.
+Stage 3 is where the third incident came from. The enrichment step ran after the only permission check. The fix was structural: permission filtering moved into the builder, the last component before the model, so every item is checked no matter which upstream step produced it. A check that runs earlier is defense in depth. The check that runs last is the one that guarantees the property.
 
-Selection is more than a threshold. Stages 3 and 4 decide which candidates compete for the budget. A relevance threshold removes weak items and dedupe removes copies, but neither stops five slightly different chunks from the same section from filling the evidence cap while the second half of the question goes unanswered. Maximal marginal relevance (MMR) is the standard graded fix. It picks items one at a time and scores each candidate as λ · relevance − (1 − λ) · (highest similarity to any item already picked), with λ somewhere around 0.5 to 0.8 (illustrative; tune it on your evaluation set). Use it when questions have several facets ("how many PTO days carry over, and by when must I use them?") or when the corpus holds many near-copies. Skip it for single-fact lookups. There, diversity pushes the second copy of the right answer out in favor of something irrelevant. The builder's Jaccard dedupe is the threshold form of the same idea. Graded diversity belongs upstream of the builder, as a step after reranking (Chapter 12 builds it as `MMRDiversifier`, an optional `diversify` stage of `RetrievalPipeline`). That step hands the builder priorities that already account for diversity, so the builder's allocation logic stays unchanged.
+Selection is more than a threshold. Stages 3 and 4 decide which candidates compete for the budget. A relevance threshold removes weak items and dedupe removes copies, but neither stops five slightly different chunks from the same section from filling the evidence cap while the second half of the question goes unanswered. Maximal marginal relevance (MMR) is the standard graded fix. It picks items one at a time and scores each candidate as λ · relevance − (1 − λ) · (highest similarity to any item already picked), where similarity is typically the cosine similarity of embeddings (Chapter 8) and λ sits somewhere around 0.5 to 0.8 (illustrative; tune it on your evaluation set). A candidate that repeats something already picked loses points; one that covers new ground gains them.
+
+Use it when questions have several facets ("how many PTO days carry over, and by when must I use them?") or when the corpus holds many near-copies. Skip it for single-fact lookups. There, diversity pushes the second copy of the right answer out in favor of something irrelevant.
+
+The builder's dedupe, which drops an item whose word-set Jaccard similarity (shared words divided by total distinct words) with a kept item is above a threshold, is the threshold form of the same idea. Graded diversity belongs upstream of the builder, as a step after reranking (Chapter 12 builds it as `MMRDiversifier`, an optional `diversify` stage of `RetrievalPipeline`). That step hands the builder priorities that already account for diversity, so the builder's allocation logic stays unchanged.
 
 ### Budget allocation
 
 Allocation turns the input budget into decisions. Spend it in this order.
 
-**Reserve the output first.** The output reserve equals the `max_tokens` you will request. It comes off the top before any input is admitted. If you let input crowd out output, the answer is cut off mid-sentence, structured output stops with `finish_reason = "length"`, and the repair loop in Chapter 6 runs on every request. Then subtract a safety margin. Your token count comes from a tokenizer that may not match the provider's (Chapter 2), and message framing adds overhead you can only estimate.
+**Reserve the output first.** The output reserve equals the `max_tokens` you will request. It comes off the top before any input is admitted. If you let input crowd out output, the answer is cut off mid-sentence, structured output stops with `finish_reason = "length"`, and the repair loop in Chapter 6 runs on every request. Then subtract a safety margin, because your token count comes from a tokenizer that may not match the provider's (Chapter 2), and message framing adds overhead you can only estimate.
 
 **Admit pinned content next.** Pinned content is what the request is wrong without: the system contract, the current request, and exact facts. If pinned content alone does not fit, the build must fail with an error that names the cause. Do not truncate it silently. Something upstream is too large, and the fix is upstream: compact the state, shrink the system prompt, or route to a model with a larger window.
 
 **Allocate the rest by section, with floors and caps.** A single global priority list looks simpler, but it lets one section starve another. Twenty high-scoring evidence chunks will push out the two most recent turns that explain what "it" refers to in "can I get it this week?". Per-section limits encode the product's judgment:
 
-- a **floor** reserves tokens for a section when it has candidates. A history floor of 1,500 tokens means recent turns survive any amount of evidence;
+- a **floor** reserves tokens for a section when it has candidates. A history floor of 1,500 tokens means recent turns survive any amount of evidence (pinned turns count toward the floor, so keep pinned turns short);
 - a **cap** limits a section even when the budget has room. An evidence cap stops the prompt from growing just because retrieval returned more.
 
 Within those limits, items are admitted in priority order. Priority comes from wherever relevance is known: the retrieval or rerank score for evidence, recency for turns, a constant for tool results the current step depends on. Northwind's RAG answer path uses this allocation. The numbers are illustrative.
@@ -104,7 +110,7 @@ Within those limits, items are admitted in priority order. Priority comes from w
 | Evidence | cap 5,000 | remainder up to 5,000 |
 | Request | pinned | ≈ 200 |
 
-Retrieval should aim for expected answer value, not for filling the space. The evidence cap is a maximum, not a target. The evaluation section shows how to find the point where more evidence stops helping. For most question types it arrives well before any cap.
+Retrieval should aim for expected answer value, not for filling the space. The evidence cap is a ceiling; the evaluation section shows how to find the point where more evidence stops helping. For most question types it arrives well before any cap.
 
 ### Ordering and lost in the middle
 
@@ -116,7 +122,7 @@ The second concerns evidence order. Evidence goes in ranked order, not reading o
 
 - `ranked` puts the best item first;
 - `best_last` puts the best item immediately before the request;
-- `edges` alternates, with the best item first, the second-best last, the third second, and so on, so the weakest items end up in the middle.
+- `edges` alternates, with the best item first, the second-best last, the third second, and so on, so the weakest items end up in the middle. Five items ranked 1 to 5 render as 1, 3, 5, 4, 2.
 
 `edges` is the default because it spends both reliable positions on high-ranked items and gives the weak position to the items you would drop first anyway. It only helps if the ranking is good. With a poor retriever, `edges` puts a random chunk at each end. That is no worse than reading order, but it is not better either.
 
@@ -128,17 +134,17 @@ Do not assume any of this about your model. Position sensitivity varies by model
 
 The advertised window answers one question: will the provider accept the request? It does not tell you whether the model will use what is in it. Three effects put the effective length for a task below the advertised one, and each needs its own test.
 
-- **Finding is easier than using.** Needle-in-a-haystack tests ask the model to locate one distinctive sentence, and many models pass them close to the full window. Tasks that must combine several facts degrade at much shorter lengths. Examples are aggregating three clauses, comparing two versions of a policy, or counting occurrences. Each additional required fact is another chance to miss one. Published long-context benchmarks and most teams' own measurements show the same pattern, so test with questions shaped like your traffic, not with a single needle. The position harness in this chapter is a single-needle test. It tells you about placement, not about multi-fact reasoning.
+- **Finding is easier than using.** Needle-in-a-haystack tests ask the model to locate one distinctive sentence, and many models pass them close to the full window. Tasks that must combine several facts, such as aggregating three clauses, comparing two versions of a policy, or counting occurrences, degrade at much shorter lengths, because each additional required fact is another chance to miss one. Published long-context benchmarks and most teams' own measurements show the same pattern, so test with questions shaped like your traffic, not with a single needle. The position harness in this chapter is a single-needle test. It tells you about placement, not about multi-fact reasoning.
 - **Distractor similarity matters more than distractor count.** Unrelated filler is easy to ignore. Text that looks like the answer is not: last year's PTO policy next to this year's, or the logistics runbook next to the retail one. Retrieved context consists of near-misses by construction, so production degrades faster than a filler benchmark predicts. The fixes are upstream: version and authority metadata, dedupe, a reranker that prefers authoritative sources (Chapter 12), and an explicit conflict rule in the contract (Chapter 13).
 - **Instructions decay with distance.** A constraint stated once at the top of a long prompt is followed less reliably at the end of it, and long outputs drift from the format the contract set. This is the reason for the short restatement before the request, and for checking structure mechanically after generation (Chapter 6).
 
-Latency closes the question before quality does. With the illustrative numbers from the budget section, a 100,000-token prompt needs about 12.5 s of prefill at p95, six times Northwind's TTFT target, before anyone measures accuracy. Prefix caching helps only when the same large body is reused across requests. So the builder's rule is short: the evidence cap comes from your length sweep, and a request that needs more than the cap signals an architecture change, not a bigger cap. The alternatives are putting a whole document in on purpose, retrieving slices of it, or processing it in pieces with map-reduce or a recursive reader. Chapter 37 compares them with a cost calculator.
+Latency closes the question before quality does. With the illustrative numbers from the budget section, a 100,000-token prompt needs about 12.5 s of prefill at p95, six times Northwind's TTFT target, before anyone measures accuracy. Prefix caching helps only when the same large body is reused across requests. So the builder's rule is short: the evidence cap comes from your length sweep, and a request that needs more than the cap signals an architecture change, not a bigger cap. The alternatives are putting a whole document in on purpose, retrieving slices of it, or processing it in pieces with map-reduce (process each piece separately, then combine the partial answers) or a recursive reader (the model navigates the document section by section). Chapter 37 compares them with a cost calculator.
 
 ### Labeling, trust, and attribution
 
-Every item is either trusted or untrusted. Trusted items are text your team wrote and reviewed: the system contract, schemas, policies the application enforces. Untrusted items are anything a user, a document author, a web page, or a tool could influence. That includes retrieved documents, tool results, user-stated facts, and model-written summaries of user text. The builder rejects an "instructions" item marked untrusted when it is constructed. An instruction you did not write is data pretending to be an instruction.
+Every item is either trusted or untrusted. Trusted items are text your team wrote and reviewed: the system contract, schemas, policies the application enforces. Untrusted items are anything a user, a document author, a web page, or a tool could influence. That includes retrieved documents, tool results, user-stated facts, and model-written summaries of user text. Each item also has a kind, such as instructions, evidence, or turn. The builder refuses to construct an instructions item marked untrusted, because text you did not write must never act as an instruction.
 
-Untrusted items are rendered inside explicit blocks that carry their source id:
+Untrusted items are rendered inside explicit blocks that carry their source id. Conversation turns and the request are the exception, because their message role already marks them as user text:
 
 ```text
 <untrusted_data source="kb:laptop-replacement-runbook#2" kind="evidence">
@@ -156,7 +162,7 @@ Attribution is the record that makes context debuggable. For every candidate, th
 
 Long conversations and agent runs outgrow any budget. Compaction replaces old, verbose history with something smaller that preserves what future steps need. Done well, it keeps cost and latency flat as the session grows. Done badly, it is the fourth incident.
 
-Compaction is lossy, so the first design decision is what must not pass through it. Some state is precision-sensitive: identifiers, amounts, dates, codes, legal clauses, code patches, configuration values, credentials, and any commitment made to the user. A summarizer is a sampling process. It can drop, round, transpose, or invent any of these, and the loss is invisible because the summary reads fluently. Such state belongs in **structured facts**: typed key/value records with provenance, set by application code. A tool result sets `ticket = INC-4821`, and an extraction step sets `refund_amount = 1,250.00 USD`. Facts are rendered verbatim on every request and pinned, so the builder cannot drop them. They never pass through the summarizer. The summarizer receives only their keys and refers to them by name.
+Compaction is lossy, so the first design decision is what must not pass through it. Some state is precision-sensitive: identifiers, amounts, dates, codes, legal clauses, code patches, configuration values, credentials, and any commitment made to the user. A summarizer is a sampling process. It can drop, round, transpose, or invent any of these, and the loss is invisible because the summary reads fluently. Such state belongs in **structured facts**: typed key/value records with provenance, set by application code. A tool result sets `ticket = INC-4821`, and an extraction step sets `refund_amount = 1,250.00 USD`. Facts are rendered verbatim on every request and pinned, so the builder cannot drop them. The model writing the summary never sees fact values: `LLMSummarizer` sends only their keys and asks the model to refer to them by name. The folded turns that first stated a value may still mention it, which is why the summary guard below exists.
 
 Narrative history goes into a **summary**: the user's goal, what was tried, what was decided, what is still open. This content tolerates paraphrase. The summary is treated as untrusted. A model wrote it from user text, so it can carry anything the user said, including injected instructions.
 
@@ -165,8 +171,8 @@ The mechanics follow a few rules.
 - **Keep the last N turns verbatim.** Recent turns hold the referents of pronouns and the exact phrasing of the current problem. Summarizing them saves little and costs a lot.
 - **Never compact pinned turns.** The user's original goal statement is often worth keeping verbatim for the whole session.
 - **Trigger high, compact low.** Compact when history exceeds a trigger, and compact down to the verbatim window, well below the trigger. Each compaction changes the state part of the prompt and invalidates the cached prefix after it. Compacting rarely and deeply is cheaper than trimming a little on every turn.
-- **Guard the summary.** Before a candidate summary replaces anything, check it mechanically. Any number or identifier it contains must appear in its sources: the previous summary, the folded turns, or the fact values. A summary that invents "300 dollars" or "INC-9999" is rejected, and the state stays unchanged. A summary longer than what it replaces is also rejected, because it costs tokens and buys nothing. These checks do not prove the summary is faithful. They catch the cheap, dangerous failures at no model cost.
-- **Keep the log.** The turn log is append-only and is the source of truth. Compaction moves a watermark and deletes nothing. Raw turns stay available for audit, for on-demand rehydration ("what exactly did I say about the docking station?"), and for regenerating the summary.
+- **Guard the summary.** Before a candidate summary replaces anything, check it mechanically. Any number or identifier it contains must appear in its sources: the previous summary, the folded turns, the fact keys and values, or the folded turns' numbers. A summary that invents "300 dollars" or "INC-9999" is rejected, and the state stays unchanged. A summary that is not shorter than what it replaces is also rejected, because it costs tokens and buys nothing. These checks do not prove the summary is faithful. They catch the cheap, dangerous failures at no model cost.
+- **Keep the log.** The turn log is append-only and is the source of truth. Compaction moves a watermark, the index of the last turn folded into the summary, and deletes nothing. Raw turns stay available for audit, for on-demand rehydration, meaning loading raw turns back into context when a question needs them ("what exactly did I say about the docking station?"), and for regenerating the summary.
 - **Rebuild periodically.** Incremental summaries are summaries of summaries, and errors compound. A periodic rebuild from the log resets the drift.
 
 For agents, the same rules apply to tool output, which is usually the largest consumer of context. A search returns 3,000 tokens of results, and the agent uses one id from them. Compact tool output aggressively once its step is done. Preserve identifiers, errors, and decisions as facts, and keep a reference to the full result so it can be rehydrated. The growth difference is large. Take an illustrative agent with a 3,000-token base prompt that adds 1,200 tokens of tool output per step. Over 25 steps it sends about 465,000 input tokens without compaction. With compaction keeping the last four steps verbatim plus a 600-token summary, every step stays under about 8,400 tokens, which is under 210,000 in total. Replayed history grows with the square of the step count. Compacted history grows linearly.
@@ -187,9 +193,17 @@ The model is stateless. Every call must carry whatever the model should remember
 3. **Window plus summary** keeps recent turns verbatim and summarizes older ones. It is the common default, and the risky one when exact data lives only in the summary.
 4. **Structured state plus window plus summary, with retrieval over the log**, is what this chapter builds. Facts are exact, the summary is narrative, recent turns are verbatim, and older detail can be fetched on demand.
 
-It helps to separate **ephemeral** context from **persistent** context. Ephemeral context is assembled for one request and then discarded: retrieved evidence, tool results, the rendered prompt. Persistent context outlives the request: the turn log, facts, the summary, and user preferences. Persistent context needs the same rules as any other stored data. It needs a write policy (who may set a fact, and from what evidence), a retention period, a permission scope, and deletion semantics. A user who says "forget my phone number" expects it gone from the facts and the summary, and the summary can only be cleaned by rebuilding it. Cross-session memory, meaning what the assistant should know about this user next week, is a separate store with its own retrieval. Chapter 21 owns it. From the builder's point of view, a memory is just another untrusted item with a source id and a priority.
+It helps to separate **ephemeral** context from **persistent** context. Ephemeral context is assembled for one request and then discarded: retrieved evidence, tool results, the rendered prompt. Persistent context outlives the request: the turn log, facts, the summary, and user preferences.
 
-Persistent state also needs storage semantics, because one conversation is rarely served by one process. Two failures are common. In the first, a client times out and retries, the same user message is appended twice, and the model answers a question the user asked once. In the second, two workers load the same session. One appends the assistant's answer while the other finishes a background compaction, and the later save silently overwrites the earlier one. A turn vanishes from a log that was supposed to be append-only. The chapter's `ConversationState` handles both. `add_turn` accepts a client `message_id` and ignores a repeat. Every write increments `version`, and `InMemoryStateStore.save` is a compare-and-set. It refuses to save a state loaded at a version the store has since moved past, and raises `StaleStateError`. A SQL store implements the same check with `WHERE version = :expected`. The retry rule depends on the writer. A turn append reloads and re-applies, which is safe because the append is idempotent. A background compaction that loses the race discards its work and runs again at the next trigger, since it is off the critical path anyway.
+Persistent context needs the same rules as any other stored data. It needs a write policy (who may set a fact, and from what evidence), a retention period, a permission scope, and deletion semantics. A user who says "forget my phone number" expects it gone from the facts and the summary, and the summary can only be cleaned by rebuilding it.
+
+Cross-session memory, meaning what the assistant should know about this user next week, is a separate store with its own retrieval. Chapter 21 owns it. From the builder's point of view, a memory is just another untrusted item with a source id and a priority.
+
+Persistent state also needs storage semantics, because one conversation is rarely served by one process. Two failures are common. In the first, a client times out and retries, the same user message is appended twice, and the model answers a question the user asked once. In the second, two workers load the same session. One appends the assistant's answer while the other finishes a background compaction, and the later save silently overwrites the earlier one. A turn vanishes from a log that was supposed to be append-only.
+
+The chapter's `ConversationState` handles both. The first is fixed by idempotency: `add_turn` accepts a client `message_id` and ignores a repeat. The second is fixed by compare-and-set: a save succeeds only if the stored version still equals the version you loaded. Every write increments `version`, and `InMemoryStateStore.save` performs that check. It refuses to save a state loaded at a version the store has since moved past, and raises `StaleStateError`. A SQL store implements the same check with `WHERE version = :expected`.
+
+The retry rule depends on the writer. A turn append reloads and re-applies, which is safe because the append is idempotent. A background compaction that loses the race discards its work and runs again at the next trigger, since it is off the critical path anyway.
 
 ### Cache-friendly layout
 
@@ -198,14 +212,14 @@ Providers and serving engines can reuse the computation for a prompt prefix they
 The layout rule follows: **stable first, volatile last**. The builder renders in this order:
 
 1. the system section: instructions, policies, schemas, examples, and the constant untrusted-data notice. This part is byte-identical across all requests that use this prompt version;
-2. the conversation state, which changes only on compaction or when a fact changes;
-3. history turns, which are append-only between compactions, so the previous turn's prompt is a prefix of this turn's;
+2. the conversation state, which changes only on compaction or when a fact changes. It goes at the end of the system message, after the hashed prefix, because it changes more often than the instructions but far less often than the turns. Its untrusted parts are still tagged; the tags, not the role, carry their trust;
+3. history turns, which are append-only between compactions, so the previous prompt, up to its volatile tail, is a prefix of this one;
 4. tool results and evidence, which are new each request;
 5. the request.
 
 The usual cache-breakers are a timestamp in the system prompt ("Today is ..."), a request id or user name interpolated into the instructions, tool definitions in a non-deterministic order, and an A/B experiment that edits the top of the prompt. When the model needs the date, put it in the volatile tail. The layout module includes a lint that flags timestamps, UUIDs, and request ids inside items marked stable.
 
-Caching must not distort the instruction hierarchy. If correctness needs a constraint near the end, for example a restated citation rule, keep it there and accept the cost. Track two numbers. The first is the prefix repeat rate the builder can see, from the hash of the stable prefix. The second is the cached-token count the provider reports in `usage.cached_input_tokens`. If the repeat rate is high and the provider reports few cached tokens, the provider's caching conditions are not being met. Typical causes are a minimum prefix length or a cache that expired between requests. Chapter 30 turns these numbers into cost.
+Caching must not distort the instruction hierarchy. If correctness needs a constraint near the end, for example a restated citation rule, keep it there and accept the cost. Track two numbers. The first is the prefix repeat rate the builder can see, from the hash of the stable prefix. The second is the cached-token count the provider reports in `usage.cached_input_tokens`. If the repeat rate is high and the provider reports few cached tokens, the provider's caching conditions are not being met. Typical causes are a minimum prefix length, a cache that expired between requests, or caching that the request must opt into explicitly. Chapter 30 turns these numbers into cost.
 
 ## How it works
 
@@ -239,7 +253,9 @@ sequenceDiagram
     API->>SS: save, only if store still at v
 ```
 
-History is over the trigger, so an `LLMSummarizer`, running through the same gateway as everything else, folds turns 1 through 3 into a summary that passes the guard. Turn 0, the user's original problem statement, is pinned and stays verbatim. The builder then receives about fifteen items. One evidence chunk belongs to the logistics tenant and is dropped for permission, one is a duplicate, and one scores below the relevance threshold. Facts and the query are pinned; the rest is admitted by priority within section limits. The rendered prompt has a system message (contract, notice, state), the verbatim turns as real user and assistant messages, and a final user message with the labeled tool result and evidence followed by the request. The manifest and the prefix hash go into the trace. The gateway call uses `max_tokens` equal to the output reserve the budget assumed.
+Turn 0 states the problem, turns 1 through 3 are the diagnosis, and turns 4 and 5 are the most recent exchange. History is over the trigger, so an `LLMSummarizer`, running through the same gateway as everything else, folds turns 1 through 3 into a summary that passes the guard. Turn 0, the user's original problem statement, is pinned and stays verbatim.
+
+The builder then receives about fifteen items. One evidence chunk belongs to the logistics tenant and is dropped for permission, one is a duplicate, and one scores below the relevance threshold. Facts and the query are pinned; the rest is admitted by priority within section limits. The rendered prompt has a system message (contract, notice, state), the verbatim turns as real user and assistant messages, and a final user message with the labeled tool result and evidence followed by the request. The manifest and the prefix hash go into the trace. The gateway call uses `max_tokens` equal to the output reserve the budget assumed.
 
 ## Architecture
 
@@ -338,7 +354,7 @@ uv pip install --python .venv/bin/python -e book/projects/aie_core   # or: pip i
 .venv/bin/python -m pytest book/projects/examples/ch05 -q
 cd book/projects/examples/ch05
 ../../../../.venv/bin/python demo.py
-../../../../.venv/bin/python -m context.experiments.position --trials 60
+../../../../.venv/bin/python -m context.experiments.position
 ```
 
 Configuration is only needed for live runs of the experiment. The builder itself reads no environment.
@@ -351,6 +367,8 @@ Configuration is only needed for live runs of the experiment. The builder itself
 | `TRACE_SINK`, `TRACE_PATH` | `none`, `traces.jsonl` | pass `get_tracer()` to the builder to export manifests |
 
 ### Items, trust, and sections
+
+The data model comes first: every candidate is a `ContextItem` with a kind, a source id, a trust level, a priority, and metadata, and it belongs to a section (floors and caps come later, in the builder). Watch the validator: it enforces the invariants the Code walkthrough describes.
 
 ```python
 # path: book/projects/examples/ch05/context/items.py
@@ -450,6 +468,8 @@ __all__ = ["Trust", "Section", "Kind", "ContextItem", "KIND_TO_SECTION", "STABLE
 
 ### Filters and labels
 
+Permission and relevance filters are plain functions that return a drop reason or `None`. Labels render untrusted items inside tagged blocks and neutralize forged tags.
+
 ```python
 # path: book/projects/examples/ch05/context/filters.py
 """Filter hooks: permission first, relevance second.
@@ -487,7 +507,8 @@ def acl_filter(item: ContextItem, scope: RequestScope) -> str | None:
     """Tenant and group check against metadata the indexer attached (Chapter 15 owns ACL design).
 
     Items with no ACL metadata pass only if we wrote them (trusted) or they belong to the
-    session. An untrusted document or tool result without ACL metadata fails closed.
+    session. An untrusted document or tool result without ACL metadata fails closed, and so
+    does one with groups but no tenant tag.
     """
     tenant = item.metadata.get("tenant")
     groups = item.metadata.get("acl_groups")
@@ -495,6 +516,8 @@ def acl_filter(item: ContextItem, scope: RequestScope) -> str | None:
         if item.trust is Trust.TRUSTED or item.kind in SESSION_KINDS:
             return None
         return "no_acl_metadata"
+    if tenant is None and item.trust is not Trust.TRUSTED and item.kind not in SESSION_KINDS:
+        return "no_acl_metadata"  # groups alone would make the item visible to every tenant
     if tenant not in (None, "shared", scope.tenant):
         return f"tenant:{tenant}"
     if groups is not None and "all" not in groups and not set(groups) & set(scope.groups):
@@ -569,6 +592,8 @@ __all__ = ["render_item", "neutralize", "UNTRUSTED_NOTICE", "UNTRUSTED_TAG"]
 ```
 
 ### The builder
+
+The builder runs the pipeline from the Architecture diagram as private stages: `_dedupe`, `_measure`, `_allocate`, `_order`, `_render`. Read `_allocate` first; it is where the budget rules live. The Code walkthrough covers each stage.
 
 ```python
 # path: book/projects/examples/ch05/context/builder.py
@@ -938,6 +963,8 @@ __all__ = [
 ```
 
 ### Conversation state and compaction
+
+`ConversationState` holds the append-only log, the facts, the summary, and the watermark. Look for `_check`, the summary guard, and for the version checks in the store.
 
 ```python
 # path: book/projects/examples/ch05/context/state.py
@@ -1314,6 +1341,8 @@ __all__ = [
 
 ### Layout checks
 
+Three small tools protect caching: a lint that flags volatile values in stable items, `shared_prefix_tokens` to measure how much two prompts share, and `PrefixStabilityTracker` for the prefix repeat rate.
+
 ```python
 # path: book/projects/examples/ch05/context/layout.py
 """Cache-friendly layout checks.
@@ -1399,6 +1428,8 @@ __all__ = ["serialize", "shared_prefix_tokens", "lint_stable_items", "PrefixStab
 ```
 
 ### The position experiment
+
+The harness builds a long prompt with one needle at a chosen position, using the production builder, and measures accuracy per position. The simulated reader exists only to test the harness offline.
 
 ```python
 # path: book/projects/examples/ch05/context/experiments/position.py
@@ -1618,7 +1649,7 @@ __all__ = [
 ]
 ```
 
-The offline run uses the simulated reader with 20 trials per position. The planted curve has 0.95 accuracy at the edges and 0.55 in the middle. Note that the 0.25 row comes out below the 0.50 row: at this trial count, sampling noise is as large as the effect between neighboring positions.
+The offline run (the default command above) uses the simulated reader with 20 trials per position. The planted curve has 0.95 accuracy at the edges and 0.55 in the middle. Note that the 0.25 row comes out below the 0.50 row: at this trial count, sampling noise is as large as the effect between neighboring positions.
 
 ```text
 position  index  accuracy  trials  mean_prompt_tokens
@@ -1746,9 +1777,11 @@ drop reasons: {'duplicate_of': 1, 'permission': 1, 'irrelevant': 1}
 prefix hash: 38865783d0a752bd
 ```
 
+The summary id `state:summary:0-3` names the range up to the watermark; pinned turn 0 stays verbatim in history and is not folded into it.
+
 ### Tests
 
-The three test files contain 38 tests and run in under a second, offline. Most use a word-count token counter, so the assertions about budgets are exact and do not depend on whether a tokenizer vocabulary is cached on the machine. A selection:
+The three test files contain 39 tests and run in under a second, offline. Most use a word-count token counter, so the assertions about budgets are exact and do not depend on whether a tokenizer vocabulary is cached on the machine. A selection:
 
 ```python
 # path: book/projects/examples/ch05/tests/test_ch05_builder.py  (excerpt)
@@ -1803,7 +1836,7 @@ def test_exact_facts_are_never_summarized_and_always_rendered_verbatim():
     summ = RecordingSummarizer("User asked for a refund (see refund_amount) on the VPN license.")
     s.compact(summ)
     prev, folded, fact_keys = summ.calls[0]
-    assert fact_keys == ["refund_amount", "ticket"]  # keys only reach the summarizer
+    assert fact_keys == ["refund_amount", "ticket"]  # the recording fake keeps only fact keys
     items = s.to_items()
     facts = [i for i in items if i.kind == "fact"]
     assert all(i.pinned for i in facts)
@@ -1847,7 +1880,7 @@ def test_sweep_detects_a_planted_u_curve():
 
 **Items are validated at construction.** `ContextItem` computes a deterministic id from kind, source, and content, so the same chunk retrieved twice has the same id and the manifest can be joined with retrieval logs. Two invariants are checked when an item is created rather than later. A `turn` must have a role, and an instruction-like kind must be trusted. Trust defaults to untrusted, so a developer who forgets the field gets the safe behavior.
 
-**Permission runs before everything and cannot be bypassed by pinning.** `_build` applies permission filters to every item. A pinned item that fails raises `PermissionError` instead of being dropped. Pinning means "the request is wrong without this", so a pinned item the user may not see points to a bug upstream, and the request should fail where someone will notice. Relevance filters, on the other hand, skip pinned items. `acl_filter` fails closed: an untrusted item with no ACL metadata is dropped with reason `no_acl_metadata`. Items that come from the session itself pass, because the session boundary is their permission check.
+**Permission runs before everything and cannot be bypassed by pinning.** `_build` applies permission filters to every item. A pinned item that fails raises `PermissionError` instead of being dropped. Pinning means "the request is wrong without this", so a pinned item the user may not see points to a bug upstream, and the request should fail where someone will notice. Relevance filters, on the other hand, skip pinned items. `acl_filter` fails closed: an untrusted item with no ACL metadata, or with groups but no tenant tag, is dropped with reason `no_acl_metadata`. Items that come from the session itself pass, because the session boundary is their permission check.
 
 **Dedupe keeps the better copy.** `_dedupe` walks items in priority order and compares each against the survivors, first by normalized text and then by word-set Jaccard similarity. Only evidence, tool results, and memories are deduplicated. A user who says "yes" twice in a conversation said it twice. The dropped copy's manifest reason names the item that was kept, so a reviewer can see both.
 
@@ -1859,7 +1892,7 @@ def test_sweep_detects_a_planted_u_curve():
 
 **Rendering keeps the stable prefix stable.** `_render` builds the system message as instructions plus the constant notice and hashes exactly that text. That hash is `prefix_hash`. Conversation state is appended after the hashed prefix. Turns become real user and assistant messages. Tool results, evidence, and the request share the final user message, with the request last.
 
-**The summary guard is cheap and mechanical.** `ConversationState._check` extracts identifiers and multi-digit numbers from the candidate summary with a regular expression. It rejects the summary if any of them appear nowhere in the sources, if the summary is empty, or if it is not smaller than what it replaces. A rejected compaction leaves the state unchanged and returns a report. The application can retry, alert, or carry on with a longer prompt. All of these are better than storing a wrong number. `LLMSummarizer` sends fact keys and never fact values, and the test asserts this: the summarizer cannot corrupt a value it never sees.
+**The summary guard is cheap and mechanical.** `ConversationState._check` extracts identifiers and multi-digit numbers from the candidate summary with a regular expression. It rejects the summary if any of them appear nowhere in the sources, if the summary is empty, or if it is not smaller than what it replaces. A rejected compaction leaves the state unchanged and returns a report. The application can retry, alert, or carry on with a longer prompt. All of these are better than storing a wrong number. `LLMSummarizer` sends fact keys and never fact values, and a test asserts this: the summarizer cannot corrupt a fact record it never sees, and the guard catches a value the model miscopies from a folded turn.
 
 **State is saved with compare-and-set.** `snapshot()` produces a pydantic `StateSnapshot`, which is the row a real store writes. `version` increases on every write, and `loaded_version` remembers what the store held at load time. `InMemoryStateStore.save` compares the two under a lock and raises `StaleStateError` on a mismatch. `add_turn(message_id=...)` returns the existing turn on a repeat, so a client retry is a no-op. The in-memory store is a reference implementation of the contract a database adapter must keep.
 
@@ -1933,7 +1966,7 @@ def test_sweep_detects_a_planted_u_curve():
 | Cache layout | strict stable-first | constraint repeated near the end | always A for the order of sections; add B's short restatement when evaluation shows it helps |
 | Section limits | floors and caps | single global priority | more than one section competes; a global list is fine for single-section prompts |
 
-The deepest tradeoff is between loss and size. Every compression step buys tokens with fidelity. Structured facts and the append-only log keep the loss bounded and reversible. A design that cannot get back to the original data has made the loss permanent.
+The deepest tradeoff is between loss and size. Every compression step buys tokens with fidelity. Structured facts and the append-only log keep the loss bounded and reversible.
 
 ## Evaluation and testing
 
@@ -1941,13 +1974,13 @@ Context engineering decisions are claims about quality, so they are tested like 
 
 **Deterministic builder tests** come first, and the chapter's suite is the model. Use a word-count token counter so budget arithmetic is exact. Test every reason code: permission, relevance, duplicate, cap, budget, reserved, history gap, and pinned overflow. Assert ordering properties: system first, request last, evidence by placement. Assert that the manifest accounts for every input item exactly once. No model is involved.
 
-**Position sweeps** measure how your model responds to placement at your lengths. Run the harness with `--live` at two or three context sizes you actually send, with distractors drawn from your corpus. Use enough trials that the confidence intervals separate. With 20 trials per position, the noise alone can move accuracy by ten points. The simulated output earlier in this chapter shows a quarter-position row below the middle row for exactly that reason. If the curve is flat for your model at your lengths, placement matters less than you thought. Spend the effort on ranking and length instead.
+**Position sweeps** measure how your model responds to placement at your lengths. Run the harness with `--live` at two or three context sizes you actually send, with distractors drawn from your corpus. Use enough trials that the confidence intervals separate. With 20 trials per position, the noise alone can move accuracy by twenty points. The simulated output earlier in this chapter shows a quarter-position row below the middle row for exactly that reason. If the curve is flat for your model at your lengths, placement matters less than you thought. Spend the effort on ranking and length instead.
 
 **Length sweeps** find the soft limit for your task. Fix a set of questions with known supporting evidence, vary k, the number of evidence items, from small to large, and plot answer accuracy and cost against k. Accuracy usually rises, flattens, and then falls as distractors accumulate. The knee is where the evidence cap belongs.
 
 **Ablation** measures what each section contributes. Run the evaluation set with a section removed, or with an item type removed, and compare against the full build. If removing the few-shot examples does not lower the score, remove them from production. If removing history does not hurt single-turn questions but hurts follow-ups, the history floor is justified by follow-up traffic, so weight the evaluation set by real traffic mix.
 
-**Attribution** checks which included items influenced the answer. The cheap signal is citations: the source ids the answer cites, compared with the manifest. Included items that are never cited across many requests are candidates for a tighter threshold. The more expensive signal is leave-one-out. For a sample of requests, drop each included item in turn and see whether the answer changes. Items whose removal never changes anything are paying rent for nothing. Context precision (the fraction of included evidence that was needed) and context recall (the fraction of needed evidence that was included) are formalized in Chapter 14. The manifest provides the inclusion side of both.
+**Attribution** checks which included items influenced the answer. The cheap signal is citations: the source ids the answer cites, compared with the manifest. Included items that are never cited across many requests are candidates for a tighter threshold. The more expensive signal is leave-one-out. For a sample of requests, drop each included item in turn and see whether the answer changes. Items whose removal never changes the answer are candidates for exclusion. Context precision (the fraction of included evidence that was needed) and context recall (the fraction of needed evidence that was included) are formalized in Chapter 14. The manifest provides the inclusion side of both.
 
 **Compaction evaluation** is a fact-retention test. Script long conversations that establish facts, constraints, and decisions early. Run them through compaction with the production summarizer. Then ask questions whose answers depend on those early statements. Score exact facts by string match against the fact store, and narrative constraints with a rubric judge. Track the guard's rejection rate as a health metric. A rising rate after a summarizer change is a regression you caught for free.
 

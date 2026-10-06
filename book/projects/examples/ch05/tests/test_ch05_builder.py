@@ -81,6 +81,14 @@ def test_permission_filter_drops_other_tenant_and_missing_acl():
     assert "logistics doc" not in "".join(m.text for m in result.messages)
 
 
+def test_groups_without_tenant_fail_closed_for_untrusted_items():
+    b = builder()
+    tenantless = ContextItem(kind="evidence", content="no tenant tag", source_id="kb:tenantless",
+                             metadata={"acl_groups": ["all"]})
+    result = b.build([system(), query(), tenantless], SCOPE)
+    assert {e.source_id: e.reason for e in result.dropped} == {"kb:tenantless": "permission:no_acl_metadata"}
+
+
 def test_pinned_item_failing_permission_is_an_error_not_a_silent_drop():
     b = builder()
     leaked = doc("kb:theirs", "logistics doc", tenant="logistics").model_copy(update={"pinned": True})

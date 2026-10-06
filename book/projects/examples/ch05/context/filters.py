@@ -34,7 +34,8 @@ def acl_filter(item: ContextItem, scope: RequestScope) -> str | None:
     """Tenant and group check against metadata the indexer attached (Chapter 15 owns ACL design).
 
     Items with no ACL metadata pass only if we wrote them (trusted) or they belong to the
-    session. An untrusted document or tool result without ACL metadata fails closed.
+    session. An untrusted document or tool result without ACL metadata fails closed, and so
+    does one with groups but no tenant tag.
     """
     tenant = item.metadata.get("tenant")
     groups = item.metadata.get("acl_groups")
@@ -42,6 +43,8 @@ def acl_filter(item: ContextItem, scope: RequestScope) -> str | None:
         if item.trust is Trust.TRUSTED or item.kind in SESSION_KINDS:
             return None
         return "no_acl_metadata"
+    if tenant is None and item.trust is not Trust.TRUSTED and item.kind not in SESSION_KINDS:
+        return "no_acl_metadata"  # groups alone would make the item visible to every tenant
     if tenant not in (None, "shared", scope.tenant):
         return f"tenant:{tenant}"
     if groups is not None and "all" not in groups and not set(groups) & set(scope.groups):

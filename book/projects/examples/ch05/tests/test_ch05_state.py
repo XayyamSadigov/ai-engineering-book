@@ -56,7 +56,7 @@ def test_exact_facts_are_never_summarized_and_always_rendered_verbatim():
     summ = RecordingSummarizer("User asked for a refund (see refund_amount) on the VPN license.")
     s.compact(summ)
     prev, folded, fact_keys = summ.calls[0]
-    assert fact_keys == ["refund_amount", "ticket"]  # keys only reach the summarizer
+    assert fact_keys == ["refund_amount", "ticket"]  # the recording fake keeps only fact keys
     items = s.to_items()
     facts = [i for i in items if i.kind == "fact"]
     assert all(i.pinned for i in facts)

@@ -8,7 +8,7 @@ scripted `FakeModel`; no API keys.
 workflow_engine.py   Graph, Step, RetryPolicy, Checkpointer, pause/resume (handle bound to state hash),
                      replay, step_key() idempotency keys, optional per-node tracer spans
 patterns.py          sequence, branch, fan_out, map_reduce, retry, fallback
-triage_domain.py     TriageState (pydantic), the five step functions, FakeModel
+triage_domain.py     TriageState (pydantic), the six step functions, FakeModel
 triage_pipeline.py   classify -> policy -> draft -> validate -> approve/send as a function
 triage_graph.py      the same workflow as a Graph with routers and a paused approval node
 compare.py           orchestration overhead measured separately from model time

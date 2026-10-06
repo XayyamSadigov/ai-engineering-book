@@ -28,7 +28,7 @@ Status = Literal["completed", "paused", "failed"]
 
 # --- error classes a step may raise ---------------------------------------
 class StepError(Exception):
-    """Base class. `retryable` tells the engine whether a retry can help."""
+    """Base class. `retryable` documents whether a retry can help; a node's `retry_on` decides."""
 
     retryable: bool = False
 

@@ -6,7 +6,7 @@ After this chapter you will be able to place any proposed AI feature on the spec
 
 Most AI features that survive contact with production are workflows, not agents. A support reply that is classified, grounded in a policy, drafted, checked, and approved is five steps whose order never changes. The model does real work in three of them, but it never decides what happens next. Teams that build this as an autonomous agent pay for the freedom every day: the model rediscovers the same five steps on each ticket, sometimes in a different order, sometimes skipping validation, and every incident review starts with "what did it decide to do this time?"
 
-The opposite mistake is just as expensive. A workflow with a hard-coded path breaks the moment a case needs a step the designer did not anticipate, and the usual repair is a growing thicket of special-case branches that nobody can test. Knowing where a given problem sits on the spectrum, and being able to show the evidence for that placement, is the core skill of this chapter. The playbook in the source material puts it bluntly: build the simplest non-agent baseline first, measure, and add an agent loop only when the action sequence cannot be predetermined.
+The opposite mistake is just as expensive. A workflow with a hard-coded path breaks the moment a case needs a step the designer did not anticipate, and the usual repair is a growing thicket of special-case branches that nobody can test. Knowing where a given problem sits on the spectrum, and being able to show the evidence for that placement, is the core skill of this chapter. A useful rule of thumb: build the simplest non-agent baseline first, measure, and add an agent loop only when the action sequence cannot be predetermined.
 
 Orchestration is also where reliability is engineered. Retries, fallbacks, checkpoints, approval gates, and budgets live between the model calls, not inside them. Chapter 3 gave you a client that retries one call. This chapter gives you the layer that decides what a failed call means for the whole job.
 
@@ -22,13 +22,13 @@ A second framing that pays off in implementation: a workflow is a state machine 
 
 ### The spectrum, with precise definitions
 
-The five positions below differ in exactly one thing: how much of the control flow the model owns. The definitions are operational, so you can classify a design by reading its code. "Deterministic" and "probabilistic" describe the *path*, not the outputs: a deterministic workflow may contain a model step whose text varies from run to run, as long as that text never changes which step runs next. They are listed here in the order the source material uses; the order of increasing complexity, which is the order you should try them in, starts with the LLM-enhanced application and is given in the next section.
+The five positions below differ in exactly one thing: how much of the control flow the model owns. The definitions are operational, so you can classify a design by reading its code. "Deterministic" and "probabilistic" describe the *path*, not the outputs: a deterministic workflow may contain a model step whose text varies from run to run, as long as that text never changes which step runs next. They are listed in order of increasing complexity, which is also the order you should try them in.
+
+**LLM-enhanced application.** Ordinary software that calls the model as a function: `summary = summarize(ticket)` inside a request handler, `tags = suggest_tags(doc)` inside a save hook. Control flow belongs entirely to the application; the model returns a value that the application uses or discards. It is often the right choice. What separates it from the deterministic workflow below is architectural rather than logical: there is no separate orchestration layer at all, and the model call is typically synchronous, in the request path, and subject to the application's own timeout. Properties: simplest to build and operate; latency is bounded by one call; the whole AI surface is one function with one contract to test.
 
 **Deterministic workflow.** Either no model is involved, or the model runs inside a fixed step whose output is validated against a schema before anything else happens. The path through the steps is fully known at design time. Example: Northwind's nightly job that reads new tickets, asks the model for a category from a closed enum, rejects anything outside the enum, and writes the result to a column. The model is a classifier; the workflow would be the same shape with a regex in its place. Properties: reproducible path, failures are local to one step, tests are ordinary unit tests plus a golden set for the model step.
 
 **Probabilistic workflow.** The graph of steps is fixed, but at one or more points the model's output selects which edge is taken. The set of possible paths is finite and enumerable; which one a given input takes is not known until runtime. Example: the triage workflow in this chapter. A validation step returns `ok`, `fixable`, or `escalate`, and code maps those three values to three edges. The model influences the route, but it cannot invent a fourth destination. Properties: every path can be drawn and tested, but path distribution becomes a production metric you must watch, because a prompt change can silently shift traffic from the cheap edge to the expensive one.
-
-**LLM-enhanced application.** Ordinary software that calls the model as a function: `summary = summarize(ticket)` inside a request handler, `tags = suggest_tags(doc)` inside a save hook. Control flow belongs entirely to the application; the model returns a value that the application uses or discards. This is the first position on the spectrum in terms of complexity and often the right one. The distinction from a deterministic workflow is architectural rather than logical: there is no separate orchestration layer at all, and the model call is typically synchronous, in the request path, and subject to the application's own timeout. Properties: simplest to build and operate; latency is bounded by one call; the whole AI surface is one function with one contract to test.
 
 **Agent.** The model chooses actions in a loop. At each iteration it reads the current state and observations, picks a tool or decides to stop, and the harness executes the choice and feeds back the result. The action sequence is not known at design time, and termination is itself a judgment. Chapter 19 builds this loop. Properties: handles paths nobody anticipated; cost and latency are variable per task; failures include loops, drift, and wrong stopping, which are failures of control rather than of any single step.
 
@@ -77,7 +77,7 @@ flowchart TD
     I --> M
 ```
 
-The last node is not decoration. The framework is applied at least twice: once before building, once after a few weeks of failure data. Section "When to graduate to an agent" describes what that evidence looks like.
+Note the final node. The framework is applied at least twice: once before building, once after a few weeks of failure data. Section "When to graduate to an agent" describes what that evidence looks like.
 
 **The rule: start at the simplest position that can meet the acceptance bar, and move one position at a time on evidence.** The ladder, from least to most control flow owned by the model, is: LLM-enhanced application, deterministic workflow, probabilistic workflow, single agent, multi-agent. Each step to the right buys flexibility and costs predictability, latency, money, and debuggability, so each step needs a reason you can write down: a failure the current position cannot fix, measured on real cases. "The model is smart enough to figure out the steps" is not a reason; it describes every position on the ladder. The default answer for a new feature is the leftmost position the flowchart allows, and a proposal further right carries the burden of proof.
 
@@ -126,9 +126,9 @@ Every workflow in practice is composed of seven patterns. Naming them lets a rev
 
 **Map-reduce over documents.** The same prompt applied to each of many chunks, followed by one reduce call over the mapped outputs. It is fan-out with a uniform mapper. The failure semantics differ from general fan-out: a summary over a partial set of documents is a different and usually wrong answer, so the implementation raises on the first mapper failure instead of reducing a subset.
 
-**Retry with policy.** Bounded attempts, backoff, and above all a list of which errors are retryable. Retrying a validation failure with the same input is the most common waste in production workflows. Chapter 29 covers backoff and circuit breakers in depth; here the pattern is the per-step policy object.
+**Retry with policy.** Bounded attempts, backoff, and above all a list of which errors are retryable. Retrying a validation failure with the same input is a common waste in production workflows. Chapter 29 covers backoff and circuit breakers in depth; here the pattern is the per-step policy object.
 
-**Fallback.** A second path when the primary fails for a listed reason: a cheaper model, a cached answer, a deterministic template, or a human. The listed reasons matter. Falling back on a bug in your own code hides the bug.
+**Fallback.** A second path when the primary fails for a listed reason: a cheaper model, a cached answer, a deterministic template, or a human. The listed reasons matter. Falling back on a bug in your own code hides the bug. (The `retry` and `fallback` helpers below default to catching every exception to keep the listing short; in production, pass the retryable classes explicitly.)
 
 **Human approval as a paused state.** The workflow reaches a state, persists it, and stops. A person decides later, in another process, and the workflow resumes from the persisted state. This cannot be done with a function call that blocks until someone clicks, because the process may not live that long. It is the pattern that forces the state-machine view, and it is why the triage pipeline cannot do it and the triage graph can.
 
@@ -248,7 +248,9 @@ Rules for designing the state record:
 
 A checkpoint is the serialized state plus two pieces of control information: which node just ran and which node runs next. The engine writes one after every node. That cadence gives three capabilities.
 
-**Resume after a crash.** If the process dies between nodes, a new process loads the latest checkpoint and continues from `next_node`. Earlier steps, including their model calls, are not repeated. If the process dies inside a node, the node is repeated; this is at-least-once execution per node, which is harmless for pure steps and dangerous for side effects. Side-effecting nodes must therefore be idempotent, exactly as Chapter 16 describes for tool calls. The engine provides the key: `step_key()` returns `run_id:node:visit`, where `visit` counts how many times that node already completed in this run. The sequence number would be the wrong ingredient, because a failed attempt writes its own checkpoint and consumes a sequence number, so the re-execution after a crash would get a different key and the duplicate would go through. With the visit count, a re-executed `send` presents the same key and the sender suppresses it, while a node legitimately visited twice, such as `draft` in a redraft loop, gets a new key each time.
+**Resume after a crash.** If the process dies between nodes, a new process loads the latest checkpoint and continues from `next_node`. Earlier steps, including their model calls, are not repeated. If the process dies inside a node, the node is repeated. This is at-least-once execution: a node may run more than once, but never zero times, which is harmless for pure steps and dangerous for side effects. Side-effecting nodes must therefore be idempotent, exactly as Chapter 16 describes for tool calls.
+
+The engine provides the key: `step_key()` returns `run_id:node:visit`, where `visit` counts how many times that node already completed in this run. The sequence number would be the wrong ingredient, because a failed attempt writes its own checkpoint and consumes a sequence number, so the re-execution after a crash would get a different key and the duplicate would go through. With the visit count, a re-executed `send` presents the same key and the sender suppresses it, while a node legitimately visited twice, such as `draft` in a redraft loop, gets a new key each time.
 
 **Pause for a human.** A paused checkpoint is a checkpoint whose `next_node` is the approval node and whose status says so. Resuming applies the human's decision to the state and continues. The decision must be bound to the exact state the human saw. The `ResumeHandle` therefore carries the paused checkpoint's sequence number and a hash of its state, and `resume` refuses with `StaleHandleError` if the latest checkpoint is no longer that pause or if the stored state no longer hashes to the same value. Show the approver the state the hash was computed from, and the approval cannot be applied to a draft they never read.
 
@@ -258,32 +260,37 @@ Checkpoints must be written by the engine, not by steps, and must be written aft
 
 ### Error classes per step
 
-A step can fail in five distinct ways, and the orchestration policy differs for each. Collapsing them into one `except Exception` is the single most common source of runaway cost in workflows.
+A step can fail in five distinct ways, and the orchestration policy differs for each. Collapsing them into one `except Exception` is a common source of runaway cost in workflows.
 
 | Error class | Example | Right response | Wrong response |
 |---|---|---|---|
 | Transient | Timeout, rate limit, provider 5xx | Retry with backoff, bounded | Fail the whole run on first hit |
 | Validation | Output fails schema or business check | Route: re-draft with the error in context, or escalate | Retry with the same input |
 | Semantic | Output is valid but wrong (misread the ticket) | Detect with a validator step; route | Nothing, because no exception was raised |
-| Fatal | Bug in our code, bad configuration, unknown label | Stop, keep state, alert | Retry; fallback that masks the bug |
+| Fatal | Bug in our code, bad configuration | Stop, keep state, alert | Retry; fallback that masks the bug |
 | Impossible | Task cannot be done with available tools or data | Escalate to a human with context | Loop until budget is gone |
 
-The engine encodes the first, second, and fourth as exception classes with a `retryable` flag; the retry policy on a node decides which are retried. Semantic errors do not raise; they are caught by a validation node that writes a verdict into the state, and a router acts on the verdict. Impossible tasks surface as repeated validation failures and are caught by an attempt counter in the router. The pattern is consistent: exceptions are for the engine, verdicts are for the graph.
+The engine encodes the first, second, and fourth as exception classes; their `retryable` flag documents intent, and the retry policy's `retry_on` on each node decides what is actually retried. Semantic errors do not raise; they are caught by a validation node that writes a verdict into the state, and a router acts on the verdict. Impossible tasks surface as repeated validation failures and are caught by an attempt counter in the router. The pattern is consistent: exceptions are for the engine, verdicts are for the graph.
 
 ## How it works
 
 The engine's run loop is short enough to hold in your head, which is the point of writing it before adopting a library that hides it.
 
 1. `run` creates a `run_id` and calls `_execute` at the entry node with a step counter at zero.
-2. For the current node: if it is marked `pause_before` and this is not a resume, write a paused checkpoint whose `next_node` is this node and return a `RunResult` with status `paused` and a `ResumeHandle`.
+2. For the current node: if it is marked `pause_before` and the run was not resumed with a human decision, write a paused checkpoint whose `next_node` is this node and return a `RunResult` with status `paused` and a `ResumeHandle`.
 3. Otherwise run the node under its retry policy. Each attempt calls the step, awaits it if it returned an awaitable, and on an exception checks two conditions: is this exception type in `retry_on`, and are attempts left. If either is false the node fails; the engine writes a failed checkpoint that still points at this node and returns `failed` with the error.
 4. On success, evaluate the edge. A static edge is a string; a router is a function of the new state that returns a node name or `END`. The target is validated against the node table, so a router bug surfaces as a `ValueError` at the edge, not as a silent end.
-5. Write a checkpoint recording this node, the chosen next node, and the serialized state. Increment the sequence and the step counter. If the counter exceeds `max_steps`, fail: a graph with a cycle must still terminate.
+5. Write a checkpoint recording this node, the chosen next node, and the serialized state. Increment the sequence and the step counter. If the counter reaches `max_steps`, fail: a graph with a cycle must still terminate.
 6. Repeat until the current node is `END`.
 
 Two details of step 3 matter. Each attempt receives a deep copy of the state, so a step that mutates a field and then raises cannot leak a half-applied change into the retry or into the failed checkpoint. And while a node runs, `step_key()` returns its idempotency key, and the node runs inside a `workflow.node` span when the graph was given a tracer (any object with `span(name, **attributes)`, such as `aie_core`'s tracers), carrying attempts, status, and the chosen next node.
 
-`resume` loads the latest checkpoint, verifies it is paused at the node the handle names and that its sequence number and state hash match the handle, rebuilds the state through pydantic validation, applies the node's `on_decision` function with the human's decision, and re-enters `_execute` at that node with `skip_pause=True` so the approval node runs once instead of pausing again. `resume_from_checkpoint` does the same without a decision for the crash case. Both have async twins, `aresume` and `aresume_from_checkpoint`, for callers that already run an event loop, such as a FastAPI handler; the sync versions call `asyncio.run` and fail inside a running loop. `replay` reads the history and validates each stored state back into the state type.
+Four entry points use the checkpoint log:
+
+- `resume` loads the latest checkpoint, verifies it is paused at the node the handle names and that its sequence number and state hash match the handle, rebuilds the state through pydantic validation, applies the node's `on_decision` function with the human's decision, and re-enters `_execute` at that node with `skip_pause=True` so the approval node runs once instead of pausing again.
+- `resume_from_checkpoint` continues from the latest checkpoint without a decision, for the crash case.
+- `aresume` and `aresume_from_checkpoint` are async twins for callers that already run an event loop, such as a FastAPI handler; the sync versions call `asyncio.run` and fail inside a running loop.
+- `replay` reads the history and validates each stored state back into the state type.
 
 ```mermaid
 flowchart LR
@@ -333,7 +340,7 @@ The chapter's code is six files plus tests. The engine knows nothing about ticke
 book/projects/examples/ch17/
 ├── workflow_engine.py   # Graph, Step, RetryPolicy, Checkpointer, pause/resume, replay, step_key
 ├── patterns.py          # sequence, branch, fan_out, map_reduce, retry, fallback
-├── triage_domain.py     # TriageState, five step functions, FakeModel, policies
+├── triage_domain.py     # TriageState, six step functions, FakeModel, policies
 ├── triage_pipeline.py   # fixed pipeline with synchronous approval
 ├── triage_graph.py      # the same workflow as a Graph with routers and a pause
 ├── compare.py           # orchestration overhead vs model time
@@ -348,6 +355,8 @@ Run from the repository root:
 ```
 
 ### The engine
+
+Read it in the order of the run loop above: the error classes, the idempotency key, the retry policy, checkpoints, then `Graph` itself.
 
 ```python
 # path: book/projects/examples/ch17/workflow_engine.py
@@ -380,7 +389,7 @@ Status = Literal["completed", "paused", "failed"]
 
 # --- error classes a step may raise ---------------------------------------
 class StepError(Exception):
-    """Base class. `retryable` tells the engine whether a retry can help."""
+    """Base class. `retryable` documents whether a retry can help; a node's `retry_on` decides."""
 
     retryable: bool = False
 
@@ -760,7 +769,7 @@ class FakeModel:
         return replies[idx]
 
 
-# --- the five steps, as pure functions of (state, model) --------------------
+# --- the six steps, as pure functions of (state, model) ---------------------
 def classify(state: TriageState, model: Model) -> TriageState:
     raw = model("classify", f"Classify this support ticket into refund/shipping/account/other:\n{state.text}")
     category = raw.strip().lower()
@@ -836,6 +845,8 @@ def escalate(state: TriageState) -> TriageState:
 
 ### The same workflow as a fixed pipeline
 
+Watch where approval happens; it is the one thing this version cannot do well.
+
 ```python
 # path: book/projects/examples/ch17/triage_pipeline.py
 """Ticket triage as a fixed pipeline: classify -> retrieve policy -> draft ->
@@ -910,6 +921,8 @@ def _apply_decision(state: TriageState, approved: bool) -> TriageState:
 ```
 
 ### The same workflow as a graph
+
+Compare the approval node and the two routers with the pipeline's inline branches.
 
 ```python
 # path: book/projects/examples/ch17/triage_graph.py
@@ -1074,13 +1087,13 @@ def test_send_reexecuted_after_ambiguous_failure_delivers_once() -> None:
 
 **Checkpoints carry `next_node`, and a failed checkpoint points at the failing node.** This is what makes `resume_from_checkpoint` correct after a crash: the engine redoes the node that did not complete and nothing before it. The replay test shows `classify` called exactly once across the crash and the resume.
 
-**The pipeline's approval is the tell.** `run_pipeline` takes an `approver` callable and blocks on it. In a test that is a lambda; in production it would have to be a blocking HTTP call to a human, which is absurd for anything that takes longer than a request timeout. The pipeline is not wrong for the shipping path, which has no approval, and it is simpler to read. It is wrong for the refund path, and the fix is the graph.
+**The pipeline blocks on approval.** `run_pipeline` takes an `approver` callable and waits for it. In a test that is a lambda; in production it would have to be a blocking HTTP call to a human, which is absurd for anything that takes longer than a request timeout. The pipeline is not wrong for the shipping path, which has no approval, and it is simpler to read. It is wrong for the refund path, and the fix is the graph.
 
 **`max_steps` is the loop guard.** The `validate` to `draft` cycle is bounded by `draft_attempts` in the router, but a bug in a router could still cycle. The engine refuses to run more than `max_steps` nodes and records why. Every graph with a cycle needs both guards: a domain-level counter the router reads, and an engine-level ceiling.
 
 ## Measuring orchestration overhead separately from model quality
 
-A workflow has two latency components: time waiting for the model and time spent in everything else, including your step code, serialization, checkpoint writes, queue hops, and the retry sleeps. Reporting them as one number hides regressions in the one you control. `compare.py` runs both implementations over twenty tickets with a scripted model whose latency is simulated and prints the two components separately. On a laptop the result looks like this (illustrative, from one run):
+A workflow has two latency components: time waiting for the model and time spent in everything else, including your step code, serialization, checkpoint writes, queue hops, and the retry sleeps. Reporting them as one number hides regressions in the one you control. `compare.py` runs both implementations over twenty tickets with a scripted model whose latency is simulated and prints the two components separately (run it from `book/projects/examples/ch17` with `../../../../.venv/bin/python compare.py`). On a laptop the 5 ms-latency block looks like this (illustrative, from one run; the 0 ms block is omitted):
 
 ```
 simulated model latency 5 ms per call, 20 tickets
@@ -1089,7 +1102,7 @@ pipeline       369.3     366.7          2.5     60      0
 graph          383.9     368.0         15.9     60    100
 ```
 
-Three things to read off. The graph wrote one hundred checkpoints for twenty runs, five per run, which is the price of being resumable. Its overhead is under a millisecond per run (the per-attempt state copy and the checkpoint serialization dominate), which is nothing next to a real model call measured in hundreds of milliseconds, but it is a number you can put an alert on. And both made the same sixty model calls on the same path, so a comparison of their quality is meaningless; the model and the prompts are identical. Quality is measured with the golden set from Chapter 24 against the step functions; overhead is measured here. Keep the two dashboards apart, because the same engineer rarely owns both.
+Three things to read off. The graph wrote one hundred checkpoints for twenty runs, five per run, which is the price of being resumable. Its overhead is about a millisecond per run (the per-attempt state copy and the checkpoint serialization dominate), which is nothing next to a real model call measured in hundreds of milliseconds, but it is a number you can put an alert on. And both made the same sixty model calls on the same path, so a comparison of their quality is meaningless; the model and the prompts are identical. Quality is measured with the golden set from Chapter 24 against the step functions; overhead is measured here. Keep the two dashboards apart, because the same engineer rarely owns both.
 
 In production, instrument these per run and per node, using the tracer from Chapter 31:
 
@@ -1101,17 +1114,17 @@ In production, instrument these per run and per node, using the tracer from Chap
 
 ## When to graduate to an agent
 
-The decision to replace a workflow, or one node of it, with an agent loop should come from failure analysis, not from the availability of a new framework. The procedure is the one the source material's lab prescribes: build the fixed version, run it, and look at how it fails.
+The decision to replace a workflow, or one node of it, with an agent loop should come from failure analysis, not from the availability of a new framework. The procedure: build the fixed version, run it, and look at how it fails.
 
 Collect a few weeks of runs and classify every failure. Two buckets matter. In the first, a step did the wrong thing: the classifier mislabeled, the draft violated policy, retrieval returned the wrong document. These are fixed inside the step with better prompts, better retrieval, or a validator, and they argue for keeping the workflow. In the second, the path was wrong: the case needed a step the graph does not have, or needed a step in an order the graph does not allow, or needed information from a system the graph never consults. If the second bucket is small, add a branch. If it is large and its contents are heterogeneous, the action sequence genuinely cannot be predetermined, and that is the evidence an agent requires.
 
-Then run the comparison the lab describes. Implement the open-ended part as a bounded agent (Chapter 19) inside one node, keep the rest of the graph, and measure against the fixed version on the same cases: success rate, average model calls per case, p95 latency, cost per successful case, and the time your team spends diagnosing a failure. The last one is rarely measured and usually decisive; a trace of a graph run reads top to bottom, while a trace of an agent run has to be reconstructed. Graduate only if the agent wins on success rate by enough to pay for what it loses on the other four, and graduate the smallest possible part. A triage workflow that needs an agent to gather context from three systems in a case-dependent order still does not need an agent to send the reply.
+Then run a comparison. Implement the open-ended part as a bounded agent (Chapter 19) inside one node, keep the rest of the graph, and measure against the fixed version on the same cases: success rate, average model calls per case, p95 latency, cost per successful case, and the time your team spends diagnosing a failure. The last one is rarely measured and usually decisive; a trace of a graph run reads top to bottom, while a trace of an agent run has to be reconstructed. Graduate only if the agent wins on success rate by enough to pay for what it loses on the other four, and graduate the smallest possible part. A triage workflow that needs an agent to gather context from three systems in a case-dependent order still does not need an agent to send the reply.
 
 ## How LangGraph-style libraries map onto this
 
-Graph-based orchestration libraries, of which LangGraph is the best known at the time of writing, are this chapter's engine with a persistence layer, streaming, and tooling attached. The mapping is nearly one to one. A typed state with reducers corresponds to `TriageState`; nodes are functions from state to state updates; static and conditional edges are `add_edge` and `add_router`; a checkpointer with pluggable backends is the `Checkpointer` protocol; an interrupt before a node is `pause_before`, and resuming with a command is `resume` with a decision. What a library adds is real: durable checkpoint stores, token streaming out of nodes, parallel branches with state merging, subgraphs, visualization, and time-travel debugging over the checkpoint log.
+Graph-based orchestration libraries, of which LangGraph is the best known at the time of writing, are this chapter's engine with a persistence layer, streaming, and tooling attached. The mapping is nearly one to one. A typed state with reducers (functions that merge a node's partial update into the state) corresponds to `TriageState`; nodes are functions from state to state updates; static and conditional edges correspond to this engine's `add_edge` and `add_router`; a checkpointer with pluggable backends is the `Checkpointer` protocol; an interrupt before a node is `pause_before`, and resuming with a command is `resume` with a decision. What a library adds is real: durable checkpoint stores, token streaming out of nodes, parallel branches with state merging, subgraphs, visualization, and time-travel debugging over the checkpoint log.
 
-What a library does not change is where the decisions live. If a node lets model output name the next node directly, the graph is an agent with extra steps, no matter what the library calls it. Evaluate any such library on the criteria the source material lists: whether you can see the state, the prompts, and the retry behavior; whether checkpoints are durable and portable; how it tests; how it deploys; and how hard it is to leave. Chapter 23 applies those criteria across the major frameworks. Having built the two-hundred-line version, you can read a framework's checkpoint schema and know whether it is doing something you could not.
+What a library does not change is where the decisions live. If a node lets model output name the next node directly, the graph is an agent with extra steps, no matter what the library calls it. Evaluate any such library on five criteria: whether you can see the state, the prompts, and the retry behavior; whether checkpoints are durable and portable; how it tests; how it deploys; and how hard it is to leave. Chapter 23 applies those criteria across the major frameworks. Having built the 250-line version, you can read a framework's checkpoint schema and know whether it is doing something you could not.
 
 ## Production considerations
 
@@ -1121,7 +1134,7 @@ What a library does not change is where the decisions live. If a node lets model
 
 **Security.** The model's text becomes control flow only through validated enums. Tool-like nodes (`send`) enforce authorization in code and bind approvals to a persisted state that includes the exact arguments; the approver sees the same draft the sender will send. Tenant identity travels in the state and is checked by every node that reads or writes tenant data; a checkpoint is data, and resuming it must re-establish the caller's identity, not trust the stored one. Checkpoint stores contain drafts and ticket text, so they inherit the retention and access rules of the source data. Chapter 26 covers the injection paths through retrieved policy text; a validator node is a reasonable place for an output guardrail from Chapter 27.
 
-**Operations.** Replace `InMemoryCheckpointer` with a durable store keyed by `run_id` (a relational table is enough: run_id, seq, node, next_node, status, state JSON, timestamp). Give every run an idempotency key at submission so a retried HTTP request does not start two runs. Version the graph definition and store the version in the checkpoint; resuming a run paused under graph version 3 with graph version 4 must be a deliberate decision with a migration, because node names and state fields may have changed. Expire paused runs and route expired ones to a dead-letter queue with the state attached. Emit one span per node with the attributes listed in the measurement section (the engine's `workflow.node` span is the starting point), and a run-level span that carries the path. Two concurrency rules apply once runs live in a shared store. Make `(run_id, seq)` unique, so two workers resuming the same paused run cannot both write the next checkpoint: the loser's insert fails and it abandons the run. And compute the visit counts behind `step_key()` from the store, as the engine does from `history`, never from process memory.
+**Operations.** Replace `InMemoryCheckpointer` with a durable store keyed by `run_id` (a relational table is enough: run_id, seq, node, next_node, status, state JSON, timestamp). Give every run an idempotency key at submission (a client-supplied key, distinct from the per-node `step_key`) so a retried HTTP request does not start two runs. Version the graph definition and store the version in the checkpoint; resuming a run paused under graph version 3 with graph version 4 must be a deliberate decision with a migration, because node names and state fields may have changed. Expire paused runs and route expired ones to a dead-letter queue (a holding table for runs that need manual attention) with the state attached. Emit one span per node with the attributes listed in the measurement section (the engine's `workflow.node` span is the starting point), and a run-level span that carries the path. Two concurrency rules apply once runs live in a shared store. Make `(run_id, seq)` unique, so two workers resuming the same paused run cannot both write the next checkpoint: the loser's insert fails and it abandons the run. And compute the visit counts behind `step_key()` from the store, as the engine does from `history`, never from process memory.
 
 ## Common mistakes
 
@@ -1129,7 +1142,7 @@ What a library does not change is where the decisions live. If a node lets model
 - **Letting the model name the next node.** A router that returns whatever string the model emitted turns a graph into an agent without any of an agent's safeguards. Routers map validated values to a closed set of edges.
 - **One `except Exception` with a retry.** Validation and fatal errors get retried with the same input; cost climbs and nothing improves. Classify errors and retry only transient ones.
 - **Retrying side effects.** A `send` wrapped in a retry policy double-sends on a timeout after delivery. Make the sender idempotent and give the node no retry.
-- **Approval as a blocking call.** It works in tests and in demos and fails the first time a reviewer goes to lunch. Approval is a persisted paused state.
+- **Approval as a blocking call.** It works in tests and in demos and fails as soon as a reviewer takes longer than the request timeout. Approval is a persisted paused state.
 - **Writing the checkpoint before the step.** The log claims progress that did not happen, and a resume skips the step. Checkpoint after completion; pause is the only exception.
 - **Reporting one latency number.** Model time and orchestration time have different owners and different fixes.
 - **Unbounded cycles.** A redraft loop with no counter in the router and no ceiling in the engine runs until the budget is gone. Use both.
@@ -1144,7 +1157,7 @@ Each entry names the failure, how it appears in telemetry, and the test that cat
 
 **Stale approval.** The draft is regenerated between pause and resume (for example a redeploy re-runs the draft node) and the human's "yes" is applied to text they never saw. Telemetry: `StaleHandleError` count on resume, and the state hash recorded at pause next to the one presented at resume. Test: `test_resume_refuses_a_stale_approval_handle` pauses, mutates the stored draft, resumes, and asserts the refusal and that nothing was sent.
 
-**Retry storm on a provider incident.** Three model nodes with three attempts each and jittered backoff turn a rate-limit incident into nine times the traffic per run. Telemetry: attempts per node rising before failures do. Test: a model fake that raises `TransientError` for a window and an assertion on total calls per run with the circuit breaker from Chapter 29 engaged.
+**Retry storm on a provider incident.** Three model nodes with three attempts each turn a rate-limit incident into up to three times the model traffic per run, and 27 calls instead of 3 once the gateway's own retries are counted (see Tradeoffs). The engine's backoff is plain exponential; add jitter before relying on it under load. Telemetry: attempts per node rising before failures do. Test: a model fake that raises `TransientError` for a window and an assertion on total calls per run with the circuit breaker from Chapter 29 engaged.
 
 **Checkpoint schema mismatch.** A field is renamed in `TriageState`; runs paused under the old schema fail pydantic validation on resume. Telemetry: resume failures grouped by graph version. Test: a stored checkpoint fixture from the previous version resumed by the current graph, asserting either success through a migration or a clean, labeled refusal.
 
@@ -1158,7 +1171,7 @@ Each entry names the failure, how it appears in telemetry, and the test that cat
 
 **Deterministic validator versus model validator versus both.** Code checks are cheap, fast, and auditable but catch only what you anticipated. A model judge catches more and costs a call per draft. The chapter layers them and lets code override the model, which is the usual production compromise; Chapter 24 covers calibrating the model judge.
 
-**Retry in the gateway versus retry in the engine.** The gateway's retry (Chapter 3) handles a single call's transient errors and is invisible to the workflow. The engine's retry handles the step as a unit and is visible in the trace. Having both is correct as long as the total attempt count is bounded and understood; nine gateway attempts inside three engine attempts is twenty-seven calls.
+**Retry in the gateway versus retry in the engine.** The gateway's retry (Chapter 3) handles a single call's transient errors and is invisible to the workflow. The engine's retry handles the step as a unit and is visible in the trace. Having both is correct as long as the total attempt count is bounded and understood: three gateway attempts inside each of three engine attempts is nine calls per node, twenty-seven across the three model nodes.
 
 **Flexibility versus auditability.** Every router you replace with model judgment widens the set of possible paths and narrows what you can promise an auditor. For a regulated process the enumerable graph is a feature, and the cost is handling the unanticipated case by escalation to a human rather than by model improvisation.
 
@@ -1166,11 +1179,11 @@ Each entry names the failure, how it appears in telemetry, and the test that cat
 
 Test the three layers separately, because they fail separately.
 
-**Step functions** are tested with a scripted model and a hand-built state, one behavior per test: `classify` rejects an unknown label; `validate` downgrades `ok` to `fixable` when code finds a reason; `retrieve_policy` falls back to the generic policy for `other`. These are unit tests and run in milliseconds.
+**Step functions** are tested with a scripted model and a hand-built state, one behavior per test. Write tests such as: `classify` rejects an unknown label; `validate` downgrades `ok` to `fixable` when code finds a reason; `retrieve_policy` falls back to the generic policy for `other`. These are unit tests and run in milliseconds.
 
-**Routers** are tested exhaustively against hand-built states. Every edge out of every router gets at least one test, including the boundary of the attempt counter. This is the cheapest and highest-value suite in the chapter, because it encodes the product rules.
+**Routers** are tested exhaustively against hand-built states. Every edge out of every router gets at least one test, including the boundary of the attempt counter. This suite is cheap and encodes the product rules, so write it first.
 
-**The engine** is tested with toy state types, as `test_engine_*` does: sequence and branch produce the expected path; retry exhaustion records attempts and writes a failed checkpoint; validation errors are not retried; `max_steps` terminates a cycle; pause returns a handle and resume continues; a crash resumes without repeating completed nodes; replay returns the states in order.
+**The engine** is tested with toy state types, as the `test_engine_*` tests do: sequence and branch produce the expected path; retry exhaustion records attempts and writes a failed checkpoint; validation errors are not retried; `max_steps` terminates a cycle. Pausing and resuming, crash recovery without repeating completed nodes, and replay are covered on the triage graph by the `test_graph_*` and `test_checkpoint_*` tests.
 
 **The whole graph** is tested end to end with the fake model on a golden set of tickets, each with an expected path and an expected outcome. The assertion is on the path, not only the outcome, so that drift is caught. Run this in CI on every change to a prompt, a router, or the graph definition.
 
@@ -1210,7 +1223,7 @@ Quality of the model steps is evaluated separately, with the evaluation harness 
 
 **P3.** Add a `path` attribute to `RunResult` (the list of node names visited) and extend `compare.py` to print the path distribution over a set of twenty mixed tickets (shipping, refund, account, and one with a scripted `escalate` verdict). Write a golden-path test that asserts the expected path for each ticket.
 
-**P4.** Build the "deterministic workflow versus agent graph" comparison from the source lab in miniature: implement a bounded three-step agent node (Chapter 19 style, with the fake model choosing between "retrieve more" and "draft") and run both designs over the same twenty tickets, reporting success rate, average model calls, and total simulated latency.
+**P4.** Build a miniature "deterministic workflow versus agent graph" comparison: implement a bounded three-step agent node (Chapter 19 style, with the fake model choosing between "retrieve more" and "draft") and run both designs over the same twenty tickets, reporting success rate, average model calls, and total simulated latency.
 
 ### Debugging exercises
 

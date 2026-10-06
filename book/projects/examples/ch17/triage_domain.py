@@ -79,7 +79,7 @@ class FakeModel:
         return replies[idx]
 
 
-# --- the five steps, as pure functions of (state, model) --------------------
+# --- the six steps, as pure functions of (state, model) ---------------------
 def classify(state: TriageState, model: Model) -> TriageState:
     raw = model("classify", f"Classify this support ticket into refund/shipping/account/other:\n{state.text}")
     category = raw.strip().lower()

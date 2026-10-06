@@ -109,6 +109,8 @@ SAMPLES: dict[str, Callable[[TraceStore], int]] = {
     "quality.context_truncation_rate": lambda st: sum(len(t.find(SpanName.CONTEXT)) for t in st),
     "quality.guardrail_block_rate": lambda st: sum(len(t.find(SpanName.GUARDRAIL)) for t in st),
     "errors.tool_failure_rate": lambda st: sum(len(t.find(SpanName.TOOL)) for t in st),
+    # the completion SLI counts served requests only, so its sample size must too
+    "slo.completion_burn_rate": lambda st: sum(1 for t in st if not (t.root is not None and t.root.is_error)),
 }
 
 
@@ -199,15 +201,21 @@ def evaluate(rules: list[AlertRule], store: TraceStore, now: float) -> list[Aler
     with [now - window - baseline_window, now - window). Too few samples never fires: a noisy
     alert on ten requests trains people to ignore the pager. A rule with `confirm_window` fires
     only when the short window [now - confirm_window, now) breaches as well: the long window
-    proves it is not a blip, the short one proves it is still happening (SLO burn-rate alerts)."""
+    proves it is not a blip, the short one proves it is still happening (SLO burn-rate alerts).
+    A baseline needs `min_samples` too, and the confirm window at least a quarter of them, so a
+    thin window never decides an alert."""
     results = []
     for rule in rules:
         # Telemetry-health and error-class rules must also see traces that lost their root span:
         # those are the ones that reveal fragmentation or contamination.
+        # Error-class rules also keep request fragments that lost their root, but not other kinds
+        # of trace (background jobs, legacy single spans), which would dilute the rates.
         loose = rule.metric.startswith(("telemetry.", "errors."))
-        current = store.filter(since=now - rule.window, until=now, require_root=not loose)
+        keep = (None if rule.metric.startswith("telemetry.") else
+                (lambda t: t.root is None or t.root.name == SpanName.REQUEST or t.root.parent_span_id is not None))
+        current = store.filter(since=now - rule.window, until=now, require_root=not loose, predicate=keep)
         baseline = store.filter(since=now - rule.window - rule.baseline_window, until=now - rule.window,
-                                require_root=not loose)
+                                require_root=not loose, predicate=keep)
         base_groups = _groups(baseline, rule.group_by)
         for group, cur in _groups(current, rule.group_by).items():
             value = compute(rule.metric, cur)
@@ -224,8 +232,8 @@ def evaluate(rules: list[AlertRule], store: TraceStore, now: float) -> list[Aler
                 continue
             fired = value > reference if rule.op == ">" else value < reference
             if fired and rule.confirm_window is not None:
-                recent = _groups(store.filter(since=now - rule.confirm_window, until=now, require_root=not loose),
-                                 rule.group_by).get(group)
+                recent = _groups(store.filter(since=now - rule.confirm_window, until=now, require_root=not loose,
+                                              predicate=keep), rule.group_by).get(group)
                 # the short window also needs enough samples: one failed request must not confirm a page
                 min_short = max(1, rule.min_samples // 4)
                 short = (compute(rule.metric, recent)

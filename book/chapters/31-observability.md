@@ -1,6 +1,6 @@
 # Chapter 31 — Observability for AI Systems
 
-After this chapter you will be able to instrument an AI application so that any single answer can be reconstructed and any population-level regression can be localized to a stage, a version, or a tenant. You will define a tracing schema for model calls, retrieval, tools, agent steps, guardrails, and evaluations. You will capture prompts and responses under an explicit privacy policy, wire the result into OpenTelemetry, and derive metrics, dashboards, and alerts from the same names. Then you will debug a real-looking quality incident with a small set of trace queries. The code lives in `book/projects/examples/ch31/`. It builds on `aie_core.observability` from Chapter 3, and every test runs offline.
+After this chapter you will be able to instrument an AI application so that any single answer can be reconstructed and any population-level regression can be localized to a stage, a version, or a tenant. You will define a tracing schema for model calls, retrieval, tools, agent steps, guardrails, and evaluations. You will capture prompts and responses under an explicit privacy policy, wire the result into OpenTelemetry (the vendor-neutral standard and SDK for traces, metrics, and logs), and derive metrics, dashboards, and alerts from the same names. Then you will debug a real-looking quality incident with a small set of trace queries. The code lives in `book/projects/examples/ch31/`. It builds on `aie_core.observability` from Chapter 3, and every test runs offline.
 
 ## Why this matters
 
@@ -52,7 +52,7 @@ For Northwind Assist the span vocabulary is fixed in `semconv.py`:
 | `guardrail.check` | one policy or validator decision (Chapter 27) | name, stage, decision, reason, policy version |
 | `eval.score` | an evaluation run inline, such as an online judge | eval name, score, passed, source |
 
-The split between `llm.generate` and `llm.complete` is deliberate. A logical generation may take several provider attempts because of retries or fallbacks, each with its own latency, error, and possibly model. Cost belongs to the attempts. Prompt identity and the captured content belong to the logical call. Merging them either double-counts tokens or loses the record of retries.
+The split between `llm.generate` and `llm.complete` is deliberate. A logical generation may take several provider attempts because of retries or fallbacks, each with its own latency, error, and possibly model. Cost belongs to the attempts. Prompt identity and the captured content belong to the logical call. Merging them either double-counts tokens or loses the record of retries. Two earlier chapters use their own names: Chapter 7's router emits `router.complete`, and Chapter 27's guardrail pipeline writes `guardrail.action`, `guardrail.blocked_by`, and `guardrail.errors`. `semconv.py` does not normalize these keys yet, so either emit this chapter's names from those components or extend `normalize()` to rename them (span names and non-gateway keys are not covered by the legacy map). Keep `guardrail.errors`, because Chapter 27 alerts on its rate.
 
 ### What to record, stage by stage
 
@@ -64,11 +64,13 @@ The question for every attribute is: which debugging question does it answer, an
 
 **Retrieval results.** Record ids and scores, not text. Ids are small, they are not content, and they are joinable: against the gold evidence in an evaluation set, against the index manifest to recover the text, and against ACL metadata to audit permissions. Also record the tenant of each returned item. Chapter 28's requirement of zero cross-tenant leakage then becomes a query over telemetry ("any retrieval span whose returned tenants include one that is neither the requester's nor `shared`") rather than a code audit. The instrumentation in this chapter goes one step further and marks such a span with the `retrieval_contamination` error class as it is recorded.
 
-**Context assembly.** Record which evidence ids were included, in what order, which were dropped, and why. This one attribute resolves an entire family of incidents. The context manifest from Chapter 5 belongs here, in full.
+**Context assembly.** Record which evidence ids were included, in what order, which were dropped, and why. It separates evidence that was retrieved but never shown to the model from evidence that was shown and ignored, the distinction the incident at the end of this chapter turns on. The context manifest from Chapter 5 belongs here, in full.
 
 **Tool calls.** Record name, call id, a keyed fingerprint of the arguments, status, whether the tool has side effects, the approval state, an idempotency key, and result size. The fingerprint is enough to detect loops (the same tool called repeatedly with the same arguments) without storing arguments. Arguments and results are content and follow the capture policy.
 
-**Tokens, latency, cost.** Record these on the stage that spent them, so they can be attributed. Request-level totals are derivable. Stage-level attribution is not, if you only record totals. Cache hits need care. A hit costs nothing, but its value is real: the price of the call it replaced. The current `aie_core` gateway records `cost_usd=0` and `avoided_cost_usd=<price>` on a cache-hit span. Older versions put the original call's `cost_usd` on the hit, and logs written by them would bill every hit twice, so a better cache would look like a cost increase. The chapter's normalization handles those legacy logs. For any cache-hit span without an avoided-cost key, it moves the cost into `llm.avoided_cost_usd` and sets the spend to zero, both at export and at load. Chapter 30's `chargeback()` applies the same rule and reports avoided spend next to actual spend.
+**Tokens, latency, cost.** Record these on the stage that spent them, so they can be attributed. Request-level totals are derivable. Stage-level attribution is not, if you only record totals.
+
+Cache hits need care. A hit costs nothing, but its value is real: the price of the call it replaced. The current `aie_core` gateway records `cost_usd=0` and `avoided_cost_usd=<price>` on a cache-hit span. Older versions put the original call's `cost_usd` on the hit, and logs written by them would bill every hit twice, so a better cache would look like a cost increase. The chapter's normalization handles those legacy logs. For any cache-hit span without an avoided-cost key, it moves the cost into `llm.avoided_cost_usd` and sets the spend to zero, both at export and at load. Chapter 30's `chargeback()` applies the same rule and reports avoided spend next to actual spend.
 
 **Evaluation results and feedback.** Offline evaluations, online judges, probe results, human reviews, and user feedback all carry the trace id or a client-visible response id that resolves to it. They arrive minutes to days later and are joined, not emitted inline. The exception is an inline judge running in the request path.
 
@@ -78,7 +80,7 @@ The question for every attribute is: which debugging question does it answer, an
 
 `status=error` says that something failed. It does not say what to fix. Chapter 24 starts every evaluation from a failure taxonomy because named classes turn findings into engineering work, and the same holds for telemetry. Every span that fails, whether through an exception or a semantic check, carries an `error.class` from a closed vocabulary: retrieval miss, retrieval contamination, permission denied, context truncation, unsupported claim, citation mismatch, format error, bad refusal, tool selection, tool argument, tool failure, loop, premature stop, budget exceeded, timeout, rate limited, provider error, content filter, unsafe content. Exceptions are mapped automatically by class name, so `aie_core`'s `RateLimitError` becomes `rate_limited`. Semantic failures are marked explicitly with `mark_error(span, ErrorClass.LOOP, ...)`.
 
-One distinction matters a great deal in practice. A provider attempt that failed with a rate limit and was retried successfully is a reliability event, not a quality failure. The trace store separates the two: `error_classes` lists failures that affected the outcome, and `recovered_errors` lists those absorbed by retries or fallbacks. Without the separation, every retry inflates the error rate, and on-call engineers learn to ignore it.
+A provider attempt that failed with a rate limit and was retried successfully is a reliability event, not a quality failure. The trace store separates the two: `error_classes` lists failures that affected the outcome, and `recovered_errors` lists those absorbed by retries or fallbacks. Without the separation, every retry inflates the error rate, and on-call engineers learn to ignore it.
 
 ### Privacy and redaction of telemetry
 
@@ -93,7 +95,9 @@ Observability data is a copy of your users' data with weaker access controls, lo
 
 Four controls compose. A default mode applies to all traffic. A sample rate upgrades a deterministic fraction of traces, chosen by hashing the trace id so every service makes the same choice and a trace is never half-captured. An on-error mode upgrades spans that failed, because those are the ones you will debug. A per-tenant ceiling is applied last and caps everything. A tenant whose contract forbids content leaving the request path stays at `hashed` even on errors. The ceiling is last by design: contractual and residency constraints override debugging convenience.
 
-The hash is keyed. A plain SHA-256 of an email address can be reversed by hashing a list of likely addresses. An HMAC with a secret salt cannot, as long as the salt stays in the secret store. The same keyed digest produces the `user.hash` attribute, so you can count distinct users and follow one user's session without storing who they are. Regex redaction (emails, phone numbers, card numbers, API-key shapes, Northwind employee ids) is a floor, not a guarantee. Names, addresses, and free-text descriptions of medical situations pass straight through pattern matching. Production systems put a PII detector behind the same `redactor` function and wrap the tracer in Chapter 27's `RedactingTracer`. Exception messages and stack traces obey the same capture mode and tenant ceiling: in `hashed` or `off` mode they leave only as a keyed digest. They also keep a second line of defense in the collector: the Chapter 28 collector configuration deletes every attribute whose key ends in `.content` before export, so a misconfigured capture policy on one route cannot push content into the shared store. Routes that are allowed to keep redacted content export through a separate, restricted pipeline.
+The hash is keyed. A plain SHA-256 of an email address can be reversed by hashing a list of likely addresses. An HMAC with a secret salt cannot, as long as the salt stays in the secret store. The same keyed digest produces the `user.hash` attribute, so you can count distinct users and follow one user's session without storing who they are.
+
+Regex redaction (emails, phone numbers, card numbers, API-key shapes, Northwind employee ids) is a floor, not a guarantee. Names, addresses, and free-text descriptions of medical situations pass straight through pattern matching. Production systems put a PII detector behind the same `redactor` function and wrap the tracer in Chapter 27's `RedactingTracer`. Exception messages and stack traces obey the same capture mode and tenant ceiling: in `hashed` or `off` mode they leave only as a keyed digest. Production systems also keep a second line of defense in the collector: the Chapter 28 collector configuration deletes every attribute whose key ends in `.content` before export, so a misconfigured capture policy on one route cannot push content into the shared store. Routes that are allowed to keep redacted content export through a separate, restricted pipeline.
 
 Telemetry also needs its own access control and retention, covered under production considerations. And a deletion request must reach it: every trace keyed by an erased user's hashed id must be findable and deletable.
 
@@ -127,9 +131,13 @@ All of these join to traces through ids. The client never sees trace ids, so the
 
 ## How it works
 
-The handler opens the root span with `trace_request`. `AITracer` keeps the current span in a context variable, so every span opened deeper in the call stack, in any module, becomes a child without anyone passing span objects around. Stage helpers open child spans and record each stage's decision. The gateway, built with the same tracer, nests one `llm.complete` span per provider attempt under the logical `llm.generate`.
+The handler opens the root span with `trace_request`. `AITracer`, the chapter's tracer in `instrument.py`, keeps the current span in a context variable, so every span opened deeper in the call stack, in any module, becomes a child without anyone passing span objects around. Stage helpers open child spans and record each stage's decision. The gateway, built with the same tracer, nests one `llm.complete` span per provider attempt under the logical `llm.generate`.
 
-Three details make this composition work with code written before this chapter. The first is the tree itself. Older `aie_core` versions wrote spans with no trace id or parent id, and those spans cannot be assembled into requests. Chapter 30 attributes cost with `AttributingTracer` and `bind()`, which stamp tenant, request id, and feature onto every span. That is enough for chargeback, but not for a tree. The current `aie_core` links its spans through a context variable, and the trace store reads those ids directly. `AITracer` goes further: it propagates ids together with baggage and the capture policy, and under `OTelAITracer` it uses OpenTelemetry's ids, so they match auto-instrumented clients and cross-service `traceparent` propagation. Spans from older versions still load. Each becomes its own single-span trace, and `completeness()` reports them. Second, `aie_core`'s gateway writes unprefixed keys (`model`, `input_tokens`). The tracer normalizes them to the book's names when the span opens and again when it closes, because the gateway sets most of them after opening. The trace store normalizes once more at load, so JSONL files written before this chapter remain queryable. Third, the gateway's `llm.complete` span cannot see `CompletionRequest.metadata`. Chapter 4's `traced_complete` works around this with a parent `prompt.call` span. The tracer generalizes the fix. Lineage keys (the version manifest, prompt id, version and hash, tenant, route) are copied into a baggage dictionary when a span sets them, children inherit the baggage, and every `llm.complete` span is stamped with them. A query over provider attempts alone can then group by prompt version or index version.
+Three details make this composition work with code written before this chapter. The first is the tree itself. Older `aie_core` versions wrote spans with no trace id or parent id, and those spans cannot be assembled into requests. Chapter 30 attributes cost with `AttributingTracer` and `bind()`, which stamp tenant, request id, and feature onto every span. That is enough for chargeback, but not for a tree. The current `aie_core` links its spans through a context variable, and the trace store reads those ids directly. `AITracer` goes further: it propagates ids together with baggage and the capture policy, and under `OTelAITracer` it uses OpenTelemetry's ids, so they match auto-instrumented clients and cross-service `traceparent` propagation. Spans from older versions still load. Each becomes its own single-span trace, and `completeness()` reports them.
+
+The second detail is key names. `aie_core`'s gateway writes unprefixed keys (`model`, `input_tokens`). The tracer normalizes them to the book's names when the span opens and again when it closes, because the gateway sets most of them after opening. The trace store normalizes once more at load, so JSONL files written before this chapter remain queryable.
+
+The third detail is lineage on provider attempts. The gateway's `llm.complete` span cannot see `CompletionRequest.metadata`. Chapter 4's `traced_complete` works around this with a parent `prompt.call` span. The tracer generalizes the fix. Lineage keys (the version manifest, prompt id, version and hash, tenant, route) are copied into baggage, a dictionary of key-value pairs that travels with the trace context, when a span sets them, children inherit the baggage, and every `llm.complete` span is stamped with them. A query over provider attempts alone can then group by prompt version or index version.
 
 When a span ends, the tracer applies the capture policy to any pending content, classifies exceptions, optionally dual-writes GenAI-convention aliases, and hands the finished span to a sink. The sink can be any `aie_core` tracer: `JsonlTracer` for local files, `InMemoryTracer` for tests, or `NoopTracer`. `OTelAITracer` additionally opens a real OpenTelemetry span for each stage, so ids, context propagation, sampling, and export follow the OpenTelemetry SDK.
 
@@ -197,14 +205,15 @@ book/projects/examples/ch31/
   incident_sim.py         synthetic workload driven through the real instrumentation
   incident_walkthrough.py the playbook, end to end
   pyproject.toml, .env.example, README.md
-  tests/                  test_instrument.py, test_otel.py, test_analysis.py, test_slo_alerts.py
+  tests/                  test_instrument.py, test_otel.py, test_analysis.py, test_slo_alerts.py,
+                          test_hardening.py
 ```
 
 Configuration comes from environment variables, documented in the README and `.env.example`: `TRACE_SINK` (`none`, `jsonl`, `otel`), `TRACE_PATH`, `OTEL_SERVICE_NAME`, `OTEL_EXPORTER`, `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_SAMPLE_RATIO`, `EMIT_GENAI_ALIASES`, `CAPTURE_MODE`, `CAPTURE_SAMPLE_RATE`, and `CAPTURE_SALT`. The salt is a secret.
 
 ### Semantic conventions
 
-One module owns every name. Instrumentation, store, analysis, metrics, and alert rules import from it, so they cannot drift. The full file is on disk; the parts that matter are the vocabulary, the taxonomy, normalization of legacy keys, and the GenAI mapping:
+A semantic convention is an agreed name and meaning for each span and attribute, so that every tool reading the telemetry interprets it the same way. One module owns every name. Instrumentation, store, analysis, metrics, and alert rules import from it, so they cannot drift. The full file is on disk; the parts that matter are the vocabulary, the taxonomy, normalization of legacy keys, and the mapping to OpenTelemetry's GenAI semantic conventions, the standard's proposed attribute names for model calls:
 
 ```python
 # path: book/projects/examples/ch31/semconv.py  (excerpt; full file on disk)
@@ -322,7 +331,9 @@ class AITracer(Tracer):
             self.sink.export(s)
 ```
 
-`_propagate` copies lineage keys found on a span into its baggage, and stamps every key in the baggage onto an `llm.complete` span that does not set it. It is a separate method because the gateway's streaming path does not use `span()`: it builds its span by hand, because the span must outlive the call that opened it, and hands it to `tracer.export()` when the stream ends. `export()` adopts that span into the current trace and calls `_propagate` too, so a streamed attempt carries tenant, prompt identity, and versions exactly like a non-streamed one. An earlier version skipped this, and streamed attempts in the capstone could not be grouped by prompt version; `test_streamed_attempt_gets_the_same_propagated_attributes` pins it with `ModelGateway.stream`. Consume the stream inside the request's spans: a stream drained after its parent span closed is adopted with no parent and no baggage.
+`_propagate` copies lineage keys found on a span into its baggage, and stamps every key in the baggage onto an `llm.complete` span that does not set it. It is a separate method because the gateway's streaming path does not use `span()`: it builds its span by hand, because the span must outlive the call that opened it, and hands it to `tracer.export()` when the stream ends. `export()` adopts that span into the current trace and calls `_propagate` too, so a streamed attempt carries tenant, prompt identity, and versions exactly like a non-streamed one. Without that call, streamed attempts could not be grouped by prompt version; `test_streamed_attempt_gets_the_same_propagated_attributes` pins the behavior with `ModelGateway.stream`.
+
+Consume the stream inside the request's spans: a stream drained after its parent span closed is adopted with no parent and no baggage.
 
 The capture policy decides how much content to keep when the span ends, which is why content is offered with `tracer.capture(span, key, value)` rather than written as an attribute:
 
@@ -556,7 +567,7 @@ rules:
     severity: page
 ```
 
-Service-level objectives get burn-rate rules rather than plain thresholds (Chapter 29 owns the arithmetic). `slo.availability_burn_rate` is the share of failed requests divided by the error budget, so 1.0 spends a 30-day budget in exactly 30 days. A rule with a `confirm_window` fires only when a short window breaches as well as the long one: the hour proves it is not a blip, the last five minutes prove it is still happening, and the page stops by itself once the incident ends.
+Service-level objectives get burn-rate rules rather than plain thresholds (Chapter 29 owns the arithmetic). A burn rate measures how fast you are spending the error budget, the share of requests the objective allows to fail. `slo.availability_burn_rate` is the share of failed requests divided by that budget, so 1.0 spends a 30-day budget in exactly 30 days. A rule with a `confirm_window` fires only when a short window breaches as well as the long one: the hour proves it is not a blip, the last five minutes prove it is still happening, and the page stops by itself once the incident ends.
 
 ```yaml
 # path: book/projects/examples/ch31/alerts.yaml  (excerpt)
@@ -570,7 +581,9 @@ Service-level objectives get burn-rate rules rather than plain thresholds (Chapt
     runbook: "Chapter 29: breaker states, admission rejections, provider errors; then error_distribution()"
 ```
 
-A burn rate of 14.4 for an hour spends 2% of a 30-day budget. Against the 99.5% availability objective that means 7.2% failed requests. Against the 95% completion objective the same burn would need 72% of requests over 8 seconds, so latency gets a slower ticket-level rule (a burn of 6 over six hours, confirmed over thirty minutes), and the p95 threshold rule stays the fast latency signal. Loose objectives tolerate a lot before they page; that is the objective's decision, not the alert's. The full file also covers negative feedback, guardrail block surges, cost per request, trace error rate, agent loops, and telemetry gaps. `dashboards.md` defines every metric by panel: quality, latency, cost, errors and safety, and telemetry health. A test asserts that every metric an alert references exists in the registry.
+A burn rate of 14.4 for an hour spends 2% of a 30-day budget. Against the 99.5% availability objective that means 7.2% failed requests. Against the 95% completion objective the same burn would need 72% of requests over 8 seconds, so latency gets a slower ticket-level rule (a burn of 6 over six hours, confirmed over thirty minutes), and the p95 threshold rule stays the fast latency signal. A loose objective tolerates many failures before it pages, and the place to tighten it is the objective, not the alert.
+
+The full file also covers negative feedback, guardrail block surges, cost per request, trace error rate, agent loops, and telemetry gaps. `dashboards.md` defines every metric by panel: quality, latency, cost, errors and safety, and telemetry health. A test asserts that every metric an alert references exists in the registry.
 
 ### Joining signals
 
@@ -629,7 +642,7 @@ cd book/projects/examples/ch31
 
 ## Code walkthrough
 
-Follow one request through `incident_sim.py`, which plays the application. The root span carries the version manifest. `retrieval_span` hashes the query (redacted on the five percent of sampled traces) and records ids, scores, and per-item tenants. `context_span` records what fit the 3,000-token budget and what was dropped. `traced_generation` opens `llm.generate` and calls the gateway. The gateway's `llm.complete` span nests under it. Its legacy keys are renamed at span end, and it is stamped with the inherited prompt and index versions. On the one percent of calls where the scripted model raises a rate limit, the trace shows two attempts, the first one recovered. The simulator then writes probe evals with gold ids, deliberately imperfect judge verdicts, and feedback keyed by `response.id`. The analysis functions never see the simulator's state. Every conclusion comes from spans and joined labels, so the same conclusions must be reachable from production telemetry.
+Follow one request through `incident_sim.py`, which plays the application. The root span carries the version manifest. `retrieval_span` hashes the query (and keeps a redacted copy on the 5% of traces the capture policy samples) and records ids, scores, and per-item tenants. `context_span` records what fit the 3,000-token budget and what was dropped. `traced_generation` opens `llm.generate` and calls the gateway. The gateway's `llm.complete` span nests under it. Its legacy keys are renamed at span end, and it is stamped with the inherited prompt and index versions. On the one percent of calls where the scripted model raises a rate limit, the trace shows two attempts, the first one recovered. The simulator then writes probe evals with gold ids, deliberately imperfect judge verdicts, and feedback keyed by `response.id`. The analysis functions never see the simulator's state. Every conclusion comes from spans and joined labels, so the same conclusions must be reachable from production telemetry.
 
 ## Production considerations
 
@@ -639,7 +652,7 @@ Follow one request through `incident_sim.py`, which plays the application. The r
 
 **Security.** Telemetry stores need the same access model as the data they contain. Restrict who can read content-bearing spans, audit those reads, and keep the capture salt in the secret store. Never log provider API keys or tool credentials. The redaction patterns include key shapes as a last line of defense, not as the plan. Per-tenant ceilings enforce contractual limits. For a tenant with data-residency requirements, the telemetry pipeline itself must stay in-region, which is a deployment decision as much as a code decision. Trace data used for fine-tuning (Chapter 33) needs consent filtering at export time.
 
-**Operations.** Treat the schema as an API. Version it, review changes, and add a contract test that a representative request produces the required keys. `completeness()` and the `telemetry_gaps` alert catch the deploy that silently stopped stamping `index.version`. Propagate trace context across every hop: queues (put `traceparent` in message headers), background workers, and tool executors in other services. A missing hop shows up as orphans or as traces that end abruptly. Keep dashboards stable, with quality on top. Give every alert a runbook pointer. Alert on rates with minimum sample sizes and baselines, except for events that are incidents by definition, such as cross-tenant retrieval.
+**Operations.** Treat the schema as an API. Version it, review changes, and run the schema contract test described under Evaluation and testing. `completeness()` and the `telemetry_gaps` alert catch the deploy that silently stopped stamping `index.version`. Propagate trace context across every hop: queues (put `traceparent` in message headers), background workers, and tool executors in other services. A missing hop shows up as orphans or as traces that end abruptly. Keep dashboards stable, with quality on top. Give every alert a runbook pointer. Alert on rates with minimum sample sizes and baselines, except for events that are incidents by definition, such as cross-tenant retrieval.
 
 ## Common mistakes
 
@@ -647,23 +660,23 @@ Follow one request through `incident_sim.py`, which plays the application. The r
 
 **Recording text instead of ids.** Storing retrieved chunk text in every span is expensive, a privacy problem, and less useful than ids, which join to gold labels, ACLs, and the index manifest.
 
-**Not recording versions.** This is the most common reason an AI incident takes days instead of hours.
+**Not recording versions.** Without versions on traces, the playbook's version-diff step is impossible, and every incident starts with guessing what changed.
 
 **Totals only.** A trace that records total tokens and total latency cannot attribute either to a stage. Record per stage and derive totals.
 
 **Capturing full content by default.** It feels safe during development and becomes a breach surface in production. Start at hashed, sample redacted, and gate full capture behind an approval and a time limit.
 
-**Plain hashes of personal data.** Unkeyed hashes of emails and user ids are reversible by dictionary. Use an HMAC with a secret salt.
+**Plain hashes of personal data.** Unkeyed hashes of emails and user ids can be reversed by hashing a list of guesses; the keyed hash described under privacy cannot.
 
 **Treating thumbs-down rate as quality.** It is a biased, sparse trend signal. Probes and calibrated judges carry the quality measurement, and feedback corroborates it.
 
-**Counting recovered retries as failures.** Error rates inflated by absorbed rate limits train people to ignore the error panel.
+**Counting recovered retries as failures.** Keep `recovered_errors` separate from `error_classes`, as described under errors as a taxonomy; otherwise the error panel trains people to ignore it.
 
 **Tuning prompts before reading traces.** The RAG debugging tree from Chapters 10 and 14 exists to prevent this. Most "the model ignored the evidence" reports turn out to be evidence that never reached the model.
 
 ## Failure modes
 
-**Telemetry gaps.** A service stops propagating context, so traces fragment into orphans. A deploy drops a version attribute. A full export queue drops spans. These show up in telemetry as a rising orphan rate, a rising missing-key fraction in `completeness()`, rising unmatched feedback in `join_signals`, and an exporter dropped-span counter above zero. Test for them with a contract test that runs one representative request through every service and asserts the required keys and a single trace id.
+**Telemetry gaps.** A service stops propagating context, so traces fragment into orphans. A deploy drops a version attribute. A full export queue drops spans. These show up in telemetry as a rising orphan rate, a rising missing-key fraction in `completeness()`, rising unmatched feedback in `join_signals`, and an exporter dropped-span counter above zero. The schema contract test under Evaluation and testing catches them before deploy; add an assertion that the request produces a single trace id.
 
 **Sampling bias.** Head sampling at a low ratio misses rare failures. Sampling that is not trace-consistent produces half-traces. Tail sampling that keeps only errors hides semantic failures, which are not errors. The symptom is an incident that metrics show but no sampled trace illustrates. Mitigate by keeping all probe traces, all traces with negative feedback or error classes, and a uniform sample of the rest.
 
@@ -693,7 +706,7 @@ A vendor platform for LLM tracing is a reasonable choice. Instrument through you
 
 Observability code is tested at three levels.
 
-**Mechanics.** Unit tests assert that spans form one tree across library boundaries, that required keys appear, that legacy keys normalize, that the capture policy produces exactly what each mode promises, that the tenant ceiling cannot be exceeded, and that redaction removes the patterns it claims to remove. These are the tests in `test_instrument.py` and `test_otel.py`.
+**Mechanics.** Unit tests assert that spans form one tree across library boundaries, that required keys appear, that legacy keys normalize, that the capture policy produces exactly what each mode promises, that the tenant ceiling cannot be exceeded, and that redaction removes the patterns it claims to remove. `test_hardening.py` adds the edge cases: exception text under the capture ceiling, current API-key shapes, completeness that requires keys on the root, telemetry alerts that see rootless traces, thin baselines that never decide an alert, and a completion burn over served requests only. These are the tests in `test_instrument.py` and `test_otel.py`.
 
 **Schema contracts.** A contract test runs a representative request of each route, through the real service boundaries where possible, and asserts the schema. Every request root has the required keys, every `llm.complete` has prompt and index versions, and no content key appears above the configured mode. Run it in CI. It is the cheapest protection against telemetry gaps.
 
@@ -728,7 +741,7 @@ flowchart TD
 1. **Scope.** Split the signal by tenant, route, and traffic source. A regression confined to one tenant points at tenant-specific data or configuration. A regression across all routes points at something shared, such as the model, the gateway, or a common prompt fragment.
 2. **Timeline.** List everything that changed near the onset: code deploys, prompt publications, index builds, flag flips, provider model updates. The version attributes on traces make this list checkable rather than remembered.
 3. **Version diff.** Within the incident window, split traffic by each version key that has more than one value, and compare pass rate, feedback, tokens, latency, and cost with confidence intervals. If quality follows a version, roll it back first and explain it second.
-4. **Stage triage.** On labeled traces, compare the evidence funnel before and after. The first stage whose conditional survival rate drops is where to look. For agents, use the trajectory checks instead: tool selection, arguments, loops, approvals, and stop reasons, from the agent debugging tree.
+4. **Stage triage.** On labeled traces, compare the evidence funnel before and after. The first stage whose conditional survival rate drops is where to look. For agents, use the trajectory checks instead: tool selection, arguments, loops, approvals, and stop reasons, from Chapter 19's agent debugging tree.
 5. **Exemplars.** Pull concrete traces that show the mechanism. Render their trees and read them. A hypothesis is confirmed when the traces show it, not when the aggregates are consistent with it.
 6. **Collateral.** Check latency, cost, and side effects for the same population. Quality incidents often carry a cost signature, and fixes can move it.
 7. **Close the loop.** Fix the cause, add the failing cases to the evaluation set (Chapter 25), add or tune the alert that should have caught it earlier, and record the incident.
@@ -739,7 +752,7 @@ The telemetry below comes from `incident_walkthrough.py`. It is synthetic, and e
 
 On 1 October at 09:00, a Northwind release shipped two changes. The retrieval index was rebuilt as `idx-2026-10-01` with a new chunker, `c3`, which produces chunks of roughly 900 tokens instead of 380 so that policy sections stay together. In the same release, prompt `rag-answer` v8, with a reworded answer style, went to a 50% canary. By 15:00 the pager had fired.
 
-**Step 1, what fired.** The alert evaluator, run at 15:00 over the six-hour window:
+**Step 1, what fired.** The alert evaluator, run at 15:00 with each rule over its own window (six hours for the quality rules, one hour for context truncation):
 
 ```
 FIRED page   answer_quality_drop        group=logistics  quality.eval_pass_rate=0.6379 < 0.7769  (n=58)
@@ -749,7 +762,7 @@ FIRED ticket context_truncation_high    group=all        quality.context_truncat
 quiet: agent_loops, availability_fast_burn, completion_slow_burn, cost_per_request_jump, cross_tenant_retrieval, guardrail_block_surge, request_p95_slo, telemetry_gaps, trace_error_rate
 ```
 
-The quiet list matters as much as the fired one. Latency, cost, error rate, SLO burn, and telemetry health are all within bounds. A dashboard built only on HTTP signals would show a healthy service. The pass rate rests on 58 and 77 labeled traces respectively, not on the full request counts. That is why the rule's sample size is computed per metric.
+The quiet list matters as much as the fired one. Latency, cost, error rate, SLO burn, and telemetry health are all within bounds. A dashboard built only on HTTP signals would show a healthy service. The pass rates rest on 58 labeled traces for logistics and 77 for retail, not on the full request counts. That is why the rule's sample size is computed per metric.
 
 **Step 2, scope.** Both tenants regressed on the RAG route. The agent route is unlabeled, and its feedback is flat:
 
@@ -780,7 +793,7 @@ neg-feedback diff (b-a): +0.033  95% CI [-0.132, +0.198]
 
 Both prompt versions sit at the same depressed pass rate, and the interval straddles zero. Rolling back the prompt, which is the reflex, would not have helped. The comparison does surface a separate, real finding: v8 produces about 17% more output tokens and a higher p50 latency. That is worth a ticket for the canary owner, but it is not this incident. The index change is not a clean split, because all post-deploy traffic uses the new index and time is confounded with it. Stage triage resolves that.
 
-**Step 4, stage triage.** On probe traces, which carry gold evidence ids, comparing the 24 hours before the deploy with the window after:
+**Step 4, stage triage.** On probe traces, the only labeled traces that carry gold evidence ids (the output header says "labeled"), comparing the 24 hours before the deploy with the window after:
 
 ```
 stage           baseline  candidate  cond. drop
@@ -804,7 +817,7 @@ Retrieval still finds the gold document; the 0.03 difference is within noise for
   74b753578c9c gold=['it-password-reset-runbook'] rank=4 in_context=False dropped=True cited=['prod-logistics-tracking-api']
 ```
 
-Every packer drop has gold at rank 4 or lower. The third row is a different failure: gold was in context at rank 2, and the model cited something else. That is the background rate of unsupported answers, present before the deploy too, and it should not be conflated with the incident. One exemplar tree:
+Every packer drop has gold at rank 4 or beyond, the positions that no longer fit once three chunks fill the budget. The third row is a different failure: gold was in context at rank 2, and the model cited something else. That is the background rate of unsupported answers, present before the deploy too, and it should not be conflated with the incident. One exemplar tree:
 
 ```
 request                  4241.1 ms index.version=idx-2026-10-01
@@ -844,7 +857,7 @@ agent=incident-research max_steps=6 stop=max_steps
 issues: loop: search_tickets called 6x with identical arguments (8b29dbc4f1a1); terminated by max_steps after 6 steps
 ```
 
-The arguments appear only as a keyed hash, because logistics has a `hashed` capture ceiling. The loop is still unambiguous, because identical fingerprints mean identical arguments. Observability under a strict privacy policy remains useful when the schema records structure.
+The arguments appear only as a keyed hash, because logistics has a `hashed` capture ceiling. The loop is still unambiguous, because identical fingerprints mean identical arguments. Recording structure, such as tool names, argument fingerprints, and step counts, is what keeps traces useful under a strict privacy policy.
 
 ## Exercises
 

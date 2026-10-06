@@ -19,7 +19,7 @@ from pydantic import BaseModel, Field, ValidationError, field_validator
 from ..config import Settings
 from ..domain.context import RequestContext
 
-KNOWN_ROLES = frozenset({"employee", "agent", "lead", "admin"})
+KNOWN_ROLES = frozenset({"employee", "agent", "lead", "admin", "platform"})
 
 
 class AuthError(Exception):
@@ -114,7 +114,8 @@ DEV_PERSONAS: dict[str, dict[str, Any]] = {
     "lee": {"tenant": "logistics", "groups": ["it-oncall"], "roles": ["employee"], "title": "Logistics on-call engineer"},
     "kai": {"tenant": "logistics", "groups": ["support", "contractor"], "roles": ["agent"],
             "title": "Logistics contractor (may not send)"},
-    "ops": {"tenant": "retail", "groups": [], "roles": ["admin"], "title": "Platform operator (cost reports)"},
+    "rio": {"tenant": "logistics", "groups": [], "roles": ["admin"], "title": "Logistics tenant admin"},
+    "ops": {"tenant": "retail", "groups": [], "roles": ["platform"], "title": "Platform operator (all tenants)"},
 }
 
 __all__ = ["AuthError", "ForbiddenTenant", "Claims", "TokenValidator", "issue_dev_token", "DEV_PERSONAS", "KNOWN_ROLES"]

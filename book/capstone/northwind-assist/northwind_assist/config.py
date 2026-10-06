@@ -15,6 +15,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 TENANTS = ("retail", "logistics")
 
 
+DEV_JWT_SECRET = "dev-only-secret-change-me-0123456789abcdef"    # published in this repository
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="NA_", env_file=".env", extra="ignore")
 
@@ -24,7 +27,7 @@ class Settings(BaseSettings):
 
     # ------------------------------------------------------------------ auth (JWT)
     auth_mode: Literal["hs256", "rs256", "jwks"] = "hs256"
-    jwt_secret: SecretStr = SecretStr("dev-only-secret-change-me-0123456789abcdef")
+    jwt_secret: SecretStr = SecretStr(DEV_JWT_SECRET)
     jwt_public_key: str | None = None          # PEM, for rs256
     jwks_url: str | None = None                # for jwks (keys rotate at the IdP)
     jwt_issuer: str = "https://sso.northwind.example"
@@ -90,11 +93,16 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _check(self) -> Settings:
+        if self.environment in ("staging", "prod"):
+            # Staging is reachable by more people than a laptop: a secret printed in the repository and
+            # a login stub would let anyone mint an admin token for any tenant.
+            if self.auth_mode == "hs256" and self.jwt_secret.get_secret_value() == DEV_JWT_SECRET:
+                raise ValueError("NA_JWT_SECRET is the published development secret; set a real one")
+            if self.dev_login:
+                raise ValueError("NA_DEV_LOGIN must be false outside dev and test")
         if self.environment == "prod":
             if self.auth_mode == "hs256":
                 raise ValueError("NA_AUTH_MODE=hs256 is for development; use rs256 or jwks in prod")
-            if self.dev_login:
-                raise ValueError("NA_DEV_LOGIN must be false in prod")
             if not self.rag_enforce_acl:
                 raise ValueError("NA_RAG_ENFORCE_ACL=false is only allowed in eval and test runs")
         if self.auth_mode == "rs256" and not self.jwt_public_key:

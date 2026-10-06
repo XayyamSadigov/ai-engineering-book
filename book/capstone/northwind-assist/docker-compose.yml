@@ -66,11 +66,11 @@ services:
     image: otel/opentelemetry-collector-contrib:0.104.0
     command: ["--config=/etc/otel/config.yaml"]
     volumes: ["./otel-collector.yaml:/etc/otel/config.yaml:ro"]
-    ports: ["4318:4318"]
+    ports: ["127.0.0.1:4318:4318"]   # loopback only: the collector accepts unauthenticated spans
 
   api:
     <<: *app
-    ports: ["8000:8000"]
+    ports: ["127.0.0.1:8000:8000"]   # loopback only: the dev login stub mints platform-operator tokens
 
   worker:
     <<: *app

@@ -41,7 +41,9 @@ Emit = Callable[[ServerEvent], None]
 class ChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=4000)
     session_id: str | None = Field(default=None, max_length=64, pattern=r"^[A-Za-z0-9_.-]+$")
-    document: str | None = Field(default=None, max_length=50_000, description="text to extract fields from")
+    # 8,000 characters is the input guard's size limit; a longer document fails here as 422 instead of
+    # passing validation and then being refused by policy.
+    document: str | None = Field(default=None, max_length=8_000, description="text to extract fields from")
     doc_type: str | None = Field(default=None, pattern=r"^(invoice|support_ticket)$")
 
 
@@ -223,7 +225,7 @@ class Orchestrator:
             elif intent.intent is Intent.ACTION:
                 ok = self._act(ctx, text, client, plan, gctx, out, result, conversation, intent.task)
             elif intent.intent is Intent.EXTRACT:
-                ok = self._extract(ctx, req, client, out, result)
+                ok = self._extract(ctx, req, text, gctx, client, out, result)
             elif intent.intent is Intent.MEMORY:
                 ok = self._memory(ctx, text, out, result)
             else:
@@ -307,8 +309,20 @@ class Orchestrator:
         result.status = "awaiting_approval" if activity.approvals else ("completed" if run.ok else f"stopped:{reason}")
         return run.ok
 
-    def _extract(self, ctx: RequestContext, req: ChatRequest, client: Any, out: _Emitter, result: TurnResult) -> bool:
-        document = req.document or req.message.split(":", 1)[1]
+    def _extract(self, ctx: RequestContext, req: ChatRequest, text: str, gctx: Any, client: Any, out: _Emitter,
+                 result: TurnResult) -> bool:
+        if req.document:
+            # An attached document crosses the provider boundary too, so it gets the same input guard
+            # as the message: personal data is tokenized and injection text is scanned first.
+            g = self.c.guards.input(req.document, gctx)
+            if not g.allowed:
+                msg = "The document was withheld by policy."
+                result.answer, result.status = msg, "blocked"
+                out("delta", {"text": msg})
+                return False
+            document = g.text
+        else:
+            document = text.split(":", 1)[1]           # the message itself, already guarded above
         res = self.c.extraction.extract(document, tenant=ctx.tenant, request_id=ctx.request_id, client=client,
                                         doc_type=req.doc_type)
         data = res.model_dump(mode="json")

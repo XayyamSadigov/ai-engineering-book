@@ -2,13 +2,18 @@
 # API and ingestion worker. A sketch: storage classes, network policies and the ingress
 # controller's SSE settings (proxy buffering off, read timeout above the longest stream) are
 # environment-specific.
+#
+# Before running more than one API replica: approvals, request ownership and the default
+# idempotency store are per-process in this build (SQLite or memory). An approval that lands on
+# another pod is unknown there, and a retry on another pod is not deduplicated. Move them to a
+# shared store (Postgres or Redis) first; until then run one replica.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: northwind-assist-api
   labels: { app: northwind-assist, role: api }
 spec:
-  replicas: 3
+  replicas: 1                                # see the note above; 3 once state is shared
   strategy: { type: RollingUpdate, rollingUpdate: { maxSurge: 1, maxUnavailable: 0 } }
   selector: { matchLabels: { app: northwind-assist, role: api } }
   template:

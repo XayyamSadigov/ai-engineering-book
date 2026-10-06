@@ -47,7 +47,7 @@ class FeedbackIn(BaseModel):
 
 
 class ExtractIn(BaseModel):
-    text: str = Field(min_length=1, max_length=50_000)
+    text: str = Field(min_length=1, max_length=8_000)       # the input guard's size limit
     doc_type: str | None = Field(default=None, pattern=r"^(invoice|support_ticket)$")
 
 
@@ -125,7 +125,10 @@ def create_app(container: Container | None = None) -> FastAPI:
             result = c.orchestrator.run(prepared)
             done = next((e.data for e in reversed(result.events) if e.event == "done"), {})
             return {**done, "events": [e.model_dump() for e in result.events]}
-        return StreamingResponse(_sse(c, prepared), media_type="text/event-stream",
+        # Start the turn now, not on the first read: prepare() already holds an admission slot and a
+        # spend reservation, and only run() releases them. A client that disconnects before the
+        # body is read would otherwise leak both.
+        return StreamingResponse(_sse(prepared, _start_turn(c, prepared)), media_type="text/event-stream",
                                  headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no",
                                           "X-Request-Id": prepared.ctx.request_id})
 
@@ -206,18 +209,19 @@ def create_app(container: Container | None = None) -> FastAPI:
     def cost_daily(day: str | None = Query(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$"),
                    ctx: RequestContext = Depends(current)) -> dict[str, Any]:
         need(ctx, "cost:read")
-        return c.ledger.daily_report(day)
+        everyone = "platform:operate" in ctx.scopes            # a tenant admin sees only its own tenant
+        return c.ledger.daily_report(day, tenant=None if everyone else ctx.tenant)
 
     @app.get("/v1/admin/status")
     def status(ctx: RequestContext = Depends(current)) -> dict[str, Any]:
-        need(ctx, "admin:reindex")
+        need(ctx, "platform:operate")                          # breakers, caches and admission are shared
         return {"manifest": c.base_manifest.model_dump(mode="json"), "index": c.kb.fingerprint(),
                 "breakers": c.models.breakers.snapshot(), "admission": c.resilience.admission.snapshot(),
                 "caches": c.caches.stats(), "feedback": len(feedback)}
 
     @app.post("/v1/admin/reindex")
     def reindex(ctx: RequestContext = Depends(current)) -> dict[str, Any]:
-        need(ctx, "admin:reindex")
+        need(ctx, "platform:operate")                          # rebuilds every tenant's index
         before = c.kb.index_version
         after = c.kb.reindex()
         purged = c.caches.purge_tenant("retail") + c.caches.purge_tenant("logistics")
@@ -226,6 +230,10 @@ def create_app(container: Container | None = None) -> FastAPI:
     @app.delete("/v1/admin/documents/{doc_id}")
     def delete_document(doc_id: str, ctx: RequestContext = Depends(current)) -> dict[str, Any]:
         need(ctx, "admin:reindex")
+        owner = c.kb.doc_tenant(doc_id)
+        if owner is None or (owner != ctx.tenant and "platform:operate" not in ctx.scopes):
+            # another tenant's document does not exist for a tenant admin
+            raise HTTPException(404, "unknown document")
         removed = c.kb.delete(doc_id)
         purged = c.caches.purge_tenant("retail") + c.caches.purge_tenant("logistics")
         return {"doc_id": doc_id, "chunks_removed": removed, "index_version": c.kb.index_version,
@@ -242,7 +250,7 @@ def _dev_login(c: Container) -> bool:
     return c.settings.dev_login and c.settings.auth_mode == "hs256" and c.settings.environment != "prod"
 
 
-def _sse(c: Container, prepared: Prepared) -> Iterator[str]:
+def _start_turn(c: Container, prepared: Prepared) -> queue.Queue[ServerEvent | None]:
     q: queue.Queue[ServerEvent | None] = queue.Queue()
 
     def work() -> None:
@@ -254,6 +262,10 @@ def _sse(c: Container, prepared: Prepared) -> Iterator[str]:
             q.put(None)
 
     threading.Thread(target=work, name=f"turn-{prepared.ctx.request_id}", daemon=True).start()
+    return q
+
+
+def _sse(prepared: Prepared, q: queue.Queue[ServerEvent | None]) -> Iterator[str]:
     try:
         while True:
             try:

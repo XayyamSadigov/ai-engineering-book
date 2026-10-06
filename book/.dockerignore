@@ -1,0 +1,13 @@
+# Build context for capstone/northwind-assist/Dockerfile is the book root.
+# Keep local secrets, state and caches out of the image.
+**/.env
+**/.env.*
+!**/.env.example
+**/*.sqlite
+**/*.sqlite-*
+**/__pycache__
+**/.pytest_cache
+**/.venv
+**/eval/out
+**/node_modules
+.DS_Store

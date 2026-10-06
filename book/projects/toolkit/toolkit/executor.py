@@ -260,8 +260,10 @@ class ToolExecutor:
         return self.execute(call, ctx, approval_id=approval_id)
 
     def default_idempotency_key(self, tool: Tool, h: str, ctx: ToolContext) -> str:
-        """Same principal + same session + same tool + same normalized args = same action."""
-        return f"{tool.name}:{ctx.tenant}:{ctx.session_id or ctx.user_id}:{h[:32]}"
+        """Same principal + same session + same tool + same normalized args = same action.
+        The user id is always part of the key: session ids are often chosen by the client, so
+        two users who send the same session id must not share each other's results."""
+        return f"{tool.name}:{ctx.tenant}:{ctx.user_id}:{ctx.session_id or '-'}:{h[:32]}"
 
     def close(self) -> None:
         self._pool.shutdown(wait=False, cancel_futures=True)

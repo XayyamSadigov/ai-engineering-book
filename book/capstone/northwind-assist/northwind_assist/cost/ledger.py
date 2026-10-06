@@ -66,8 +66,8 @@ class CostLedger:
         policies = {t: SpendPolicy(daily_limit_usd=v, mode="degrade", alert_thresholds=thresholds)
                     for t, v in daily_limits.items()}
         # Unknown tenants (eval principals, a tenant added before its budget) get the smallest limit.
-        default = SpendPolicy(daily_limit_usd=min(daily_limits.values(), default=1.0), mode="degrade",
-                              alert_thresholds=thresholds)
+        self.default_limit = min(daily_limits.values(), default=1.0)
+        default = SpendPolicy(daily_limit_usd=self.default_limit, mode="degrade", alert_thresholds=thresholds)
         self.guard = SpendGuard(policies, default_policy=default, on_alert=self.alerts.append, clock=clock)
         self.rows: list[CostRow] = []
         self.path = Path(path) if path else None
@@ -90,11 +90,12 @@ class CostLedger:
         ts = self._clock()
         return CostRow(ts=ts, day=utc_day(ts), **fields)
 
-    def daily_report(self, day: str | None = None) -> dict[str, Any]:
+    def daily_report(self, day: str | None = None, *, tenant: str | None = None) -> dict[str, Any]:
+        """One day's spend. `tenant` limits the report (and its alerts) to that tenant."""
         day = day or utc_day(self._clock())
         per: dict[str, TenantDay] = {}
         with self._lock:
-            rows = [r for r in self.rows if r.day == day]
+            rows = [r for r in self.rows if r.day == day and (tenant is None or r.tenant == tenant)]
         for r in rows:
             t = per.setdefault(r.tenant, TenantDay(r.tenant, day))
             t.requests += 1
@@ -102,8 +103,8 @@ class CostLedger:
             t.cache_hits += int(r.cache_hit)
             t.cost_usd += r.cost_usd
             t.by_intent[r.intent] += r.cost_usd
-        alerts = [asdict(a) for a in self.alerts if a.day == day]
-        return {"day": day, "tenants": [per[t].as_dict(self.limits.get(t)) for t in sorted(per)],
+        alerts = [asdict(a) for a in self.alerts if a.day == day and (tenant is None or a.tenant == tenant)]
+        return {"day": day, "tenants": [per[t].as_dict(self.limits.get(t, self.default_limit)) for t in sorted(per)],
                 "total_cost_usd": round(sum(r.cost_usd for r in rows), 6), "alerts": alerts}
 
 

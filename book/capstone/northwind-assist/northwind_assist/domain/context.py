@@ -23,7 +23,9 @@ ROLE_SCOPES: dict[str, frozenset[str]] = {
                         "replies:draft", "replies:send"}),
     "lead": frozenset({"directory:read", "status:read", "tickets:read", "tickets:write",
                        "replies:draft", "replies:send", "replies:approve"}),
+    # A tenant admin manages its own tenant; the platform operator acts across tenants.
     "admin": frozenset({"cost:read", "admin:reindex", "status:read"}),
+    "platform": frozenset({"cost:read", "admin:reindex", "status:read", "platform:operate"}),
 }
 
 

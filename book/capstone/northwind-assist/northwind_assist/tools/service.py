@@ -115,14 +115,16 @@ class GuardedTool:
         return out
 
 
-def idempotency_policy(header_key: str | None) -> Any:
+def idempotency_policy(header_key: str | None, *, tenant: str, user_id: str) -> Any:
     """agentkit `executor_tools(idempotency=...)`: with a client Idempotency-Key, writes are keyed by
-    it plus the action; without one, "content" lets toolkit derive its session-scoped content key."""
+    it plus the action; without one, "content" lets toolkit derive its session-scoped content key.
+    The client's key is scoped by tenant and user: two callers who pick the same header value must
+    not receive each other's results."""
     if not header_key:
         return "content"
 
     def key(tool_name: str, arguments: dict[str, Any], ctx: Any) -> str:
-        return f"{header_key}:{tool_name}:{args_hash(tool_name, arguments)[:16]}"
+        return f"{tenant}:{user_id}:{header_key}:{tool_name}:{args_hash(tool_name, arguments)[:16]}"
 
     return key
 
@@ -177,7 +179,8 @@ class ToolLayer:
     def tools_for(self, ctx: RequestContext, gctx: GuardContext, activity: ToolActivity, *,
                   allow_side_effects: bool) -> list[GuardedTool]:
         tctx = ctx.tool_context()
-        inner = executor_tools(self.executor, tctx, idempotency=idempotency_policy(ctx.idempotency_key))
+        policy = idempotency_policy(ctx.idempotency_key, tenant=ctx.tenant, user_id=ctx.user_id)
+        inner = executor_tools(self.executor, tctx, idempotency=policy)
         return [GuardedTool(t, self, tctx, gctx, activity) for t in inner
                 if allow_side_effects or t.side_effect is AgentSideEffect.READ]
 

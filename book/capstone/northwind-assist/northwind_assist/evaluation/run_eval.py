@@ -109,6 +109,11 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--suites", default="rag,tools,security")
     ap.add_argument("--set", dest="sets", action="append", default=[], help="settings override key=value")
     args = ap.parse_args(argv)
+    requested = {s.strip() for s in args.suites.split(",") if s.strip()}
+    unknown = requested - {"rag", "tools", "security"}
+    if unknown or not requested:          # a typo must not silently drop a suite from the gate
+        print(f"eval setup error: unknown or empty --suites {sorted(unknown) or args.suites!r}", file=sys.stderr)
+        return 2
     try:
         settings = Settings(environment="test", **_overrides(args.sets))
         summary = run_suites(settings, args.out, [s.strip() for s in args.suites.split(",") if s.strip()])

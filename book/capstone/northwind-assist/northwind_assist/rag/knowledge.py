@@ -52,6 +52,7 @@ class Knowledge(Protocol):
     def pipeline(self, *, rerank: bool, principal: Principal) -> RetrievalPipeline: ...
     def get_chunks(self, chunk_ids: list[str], principal: Principal) -> list[Chunk]: ...
     def doc_visible(self, doc_id: str, tenant: str, groups: Iterable[str]) -> bool: ...
+    def doc_tenant(self, doc_id: str) -> str | None: ...
     def delete(self, doc_id: str) -> int: ...
     def reindex(self) -> str: ...
     def fingerprint(self) -> dict[str, str]: ...
@@ -124,7 +125,10 @@ class KnowledgeBase:
     def _index_document(self, doc: Document) -> dict[str, int]:
         new_chunks = [self._prepare(c) for c in self.authority.annotate_chunks(chunk_documents([doc], self.chunker))]
         diff = diff_chunks(self._doc_chunks.get(doc.id, []), new_chunks)
-        if diff.added or diff.removed:
+        # Chunk ids hash the document id and content, so a permission or metadata change keeps every id.
+        # Compare the whole chunk: an ACL edit must reach the index even when no text changed.
+        changed = any(self.chunks.get(c.id) != c for c in new_chunks)
+        if diff.added or diff.removed or changed:
             self.bm25.replace_document(doc.id, new_chunks)
             self.dense.index(new_chunks)          # one atomic replace per document version
         for cid in diff.removed:
@@ -170,7 +174,10 @@ class KnowledgeBase:
 
     # ------------------------------------------------------------------ retrieval
     def _refresh_pipelines(self) -> None:
-        digest = hashlib.sha256("\n".join(sorted(self.chunks)).encode()).hexdigest()[:10]
+        # Who may read a chunk is part of the version: an ACL change must retire cached results too.
+        digest = hashlib.sha256("\n".join(
+            f"{cid}|{c.tenant}|{','.join(sorted(c.acl_groups))}" for cid, c in sorted(self.chunks.items())
+        ).encode()).hexdigest()[:10]
         self.index_version = f"{self.settings.index_name}@{digest}"
         s = self.settings
         retrievers = {"bm25": self.bm25, "dense": self.dense}
@@ -196,6 +203,11 @@ class KnowledgeBase:
         if doc is None:
             return False
         return doc.tenant in (None, "shared", tenant) and bool(set(doc.acl_groups) & set(groups))
+
+    def doc_tenant(self, doc_id: str) -> str | None:
+        """Owning tenant from the source document; None if the document is unknown."""
+        doc = self.documents.get(doc_id)
+        return None if doc is None else (doc.tenant or "shared")
 
     def fingerprint(self) -> dict[str, str]:
         return {"backend": self.backend, "index_version": self.index_version, "chunker": CHUNKER_VERSION,
@@ -254,6 +266,10 @@ class P3KnowledgeBase:
         if rec is None or rec.status != "active":
             return False
         return rec.tenant in ("shared", tenant) and bool(set(rec.acl_groups) & set(groups))
+
+    def doc_tenant(self, doc_id: str) -> str | None:
+        rec = self.p3.registry.get(doc_id)
+        return None if rec is None else rec.tenant
 
     def delete(self, doc_id: str) -> int:
         rec = self.p3.registry.get(doc_id)

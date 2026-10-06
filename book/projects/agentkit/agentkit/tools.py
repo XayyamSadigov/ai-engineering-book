@@ -273,7 +273,7 @@ def executor_tools(executor: Any, exec_ctx: Any, *, names: set[str] | None = Non
 
     `idempotency` decides which key the executor deduplicates on:
     - "content" (default): pass no key, so the executor derives its content-bound default
-      (toolkit: tool, tenant, session, normalized-argument hash). The same action proposed in
+      (toolkit: tool, tenant, user, session, normalized-argument hash). The same action proposed in
       two runs of one session executes once, and so does a re-execution after a crash.
     - "run": pass agentkit's `run_id:request_id`. Duplicates are suppressed only within one
       run (crash and resume); a new run repeats the action. This was the behavior before the

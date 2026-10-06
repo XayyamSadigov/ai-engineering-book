@@ -108,7 +108,7 @@ northwind-assist/
     worker.py            northwind-assist-worker --role ingest|eval
     prompt_files/        assist.agent@1.0.0 and aliases
   ops/alerts.yaml        alert rules (Chapter 31 format), evaluated on capstone traces in tests/test_alerts.py
-  tests/                 67 offline tests
+  tests/                 76 offline tests
 ```
 
 ## Quickstart (offline)
@@ -120,7 +120,7 @@ uv pip install --python .venv/bin/python -e book/projects/p3-rag-assistant -e bo
 # standalone: pip install -e each package under book/projects, then -e book/capstone/northwind-assist
 
 cd book/capstone/northwind-assist
-python -m pytest -q                                  # 67 tests, offline
+python -m pytest -q                                  # 76 tests, offline
 northwind-assist-eval --out eval/out                 # suites + release gate, exit 0
 northwind-assist-eval --out eval/out-broken --set rag_enforce_acl=false   # leaks, exit 1
 LLM_PROVIDER=fake uvicorn --factory northwind_assist.api.app:build_app --port 8000
@@ -152,10 +152,11 @@ Postgres and Redis is unverified here (Project 2's pgvector DDL carries the same
 | `GET /v1/memory`, `POST /v1/memory/{id}/confirm|reject`, `DELETE /v1/memory/{key}` | the user | profile memory |
 | `POST /v1/feedback` | the requester | thumbs on a response id (joined to traces by `response.id`) |
 | `POST /v1/extract` | any role | Project 1 extraction |
-| `GET /v1/cost/daily` | `admin` | per-tenant cost, cost per successful answer, alerts |
-| `GET /v1/admin/status`, `POST /v1/admin/reindex`, `DELETE /v1/admin/documents/{id}` | `admin` | manifest, breakers, admission, caches; reindex; delete |
+| `GET /v1/cost/daily` | `admin` (own tenant), `platform` (all) | per-tenant cost, cost per successful answer, alerts |
+| `GET /v1/admin/status`, `POST /v1/admin/reindex` | `platform` | manifest, breakers, admission, caches; reindex |
+| `DELETE /v1/admin/documents/{id}` | `admin` (own tenant), `platform` (any) | delete |
 | `GET /healthz`, `GET /readyz` | probes | liveness; readiness (index loaded, breaker states) |
-| `POST /v1/auth/dev-token`, `GET /v1/auth/personas` | dev only | login stub (hs256 and not prod) |
+| `POST /v1/auth/dev-token`, `GET /v1/auth/personas` | dev only | login stub (hs256, dev and test only; staging and prod refuse to start with it on) |
 
 SSE events: `meta`, `citation`, `delta`, `tool`, `approval`, `memory`, `notice`, `structured`,
 `done`, `error` (`northwind_assist/domain/events.py`). `meta` is always first, `done` always last,
@@ -172,7 +173,7 @@ ids increase, and a `citation` precedes the first sentence that cites it.
 | `NA_AUTH_MODE`, `NA_JWT_SECRET`, `NA_JWT_PUBLIC_KEY`, `NA_JWKS_URL` | `hs256` | JWT verification |
 | `NA_JWT_ISSUER`, `NA_JWT_AUDIENCE`, `NA_JWT_LEEWAY_S` | Northwind values, `30` | required claims |
 | `NA_ALLOWED_TENANTS` | `["retail","logistics"]` | tokens for other tenants get 403 |
-| `NA_DEV_LOGIN` | `true` | the login stub |
+| `NA_DEV_LOGIN` | `true` | the login stub; must be false in staging and prod, which also refuse the published `NA_JWT_SECRET` |
 | `NA_KNOWLEDGE_BACKEND`, `NA_KNOWLEDGE_SYNC_ON_START` | `local`, `true` | `p3` uses Project 3's tier (RAG_* variables) |
 | `NA_CHUNK_MAX_TOKENS`, `NA_CANDIDATE_K`, `NA_RERANK_K`, `NA_FINAL_K` | `200`, `30`, `12`, `6` | retrieval funnel |
 | `NA_RAG_ENFORCE_ACL` | `true` | `false` only for the gate's negative test |
@@ -262,7 +263,7 @@ owner; look first for a retry storm or a cache-hit collapse in `cache_hit_rate`.
 | Item | Evidence |
 |---|---|
 | Compose starts API, UI, worker, Postgres+pgvector, Redis, collector | `docker-compose.yml`: config validated, image built and API container smoke-tested; `up` blocked by Docker Hub 503 |
-| `pytest` offline | `tests/`, 67 passed |
+| `pytest` offline | `tests/`, 76 passed |
 | CI: lint, tests, eval gate blocks merge | `.github/workflows/ci.yml`, `.gitlab-ci.yml`; `test_gate_fails_when_acl_filter_is_disabled` |
 | Runbook | section above |
 | Gold set of 100+ with permission context and tags | `evaluation/datasets.py` `rag_dataset` (151 cases); `test_principal_variants_derive_expectations_from_acl` |

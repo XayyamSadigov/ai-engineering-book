@@ -9,8 +9,10 @@ metadata:
   name: northwind-assist-api
 spec:
   scaleTargetRef: { apiVersion: apps/v1, kind: Deployment, name: northwind-assist-api }
-  minReplicas: 3
-  maxReplicas: 20
+  # Pinned to one replica until approvals and idempotency move to a shared store (deployment.yaml);
+  # then minReplicas: 3, maxReplicas: 20.
+  minReplicas: 1
+  maxReplicas: 1
   metrics:
     - type: Pods
       pods:

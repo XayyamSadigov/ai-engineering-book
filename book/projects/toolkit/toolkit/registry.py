@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from enum import Enum
@@ -62,8 +63,8 @@ class Tool:
     reconcile: Callable[[Any, "ExecutionContext"], Any | None] | None = None
 
     def __post_init__(self) -> None:
-        if not self.name.replace("_", "").isalnum() or len(self.name) > 64:
-            raise ValueError(f"tool name must be [A-Za-z0-9_]{{1,64}}: {self.name!r}")
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", self.name):
+            raise ValueError(f"tool name must be [A-Za-z0-9_-]{{1,64}}: {self.name!r}")
         if not self.description.strip():
             raise ValueError(f"tool {self.name!r} needs a description; the model selects tools by it")
         if self.idempotent and self.reconcile is not None:

@@ -78,8 +78,11 @@ class ToolLoop:
             return LoopResult(final_text=text, stop_reason=reason, rounds=rounds, messages=history,
                               tool_results=results, pending_approvals=pending, usage=usage)
 
-        for round_no in range(1, self.max_rounds + 1):
-            # After an approval request, force a text turn so the model reports the wait.
+        round_no = 0
+        while round_no < self.max_rounds or pending:
+            round_no += 1
+            # After an approval request, force a text turn so the model reports the wait,
+            # even if the request arrived in the last round.
             choice = "none" if pending else "auto"
             req = CompletionRequest(messages=history, tools=specs or None, tool_choice=choice if specs else "auto",
                                     model=self.model, temperature=self.temperature, max_tokens=self.max_tokens,

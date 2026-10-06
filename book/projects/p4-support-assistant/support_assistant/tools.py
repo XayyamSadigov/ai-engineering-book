@@ -111,6 +111,8 @@ def build_registry(b: Backends) -> ToolRegistry:
                 "next_step": "Show the draft to the user. Sending requires send_reply and human approval."}
 
     def send_reply(args: SendReplyArgs, ex: ExecutionContext) -> dict:
+        if b.tickets.get(args.ticket_id, tenant=ex.tenant) is None:
+            raise ToolError.not_found("no_ticket", f"ticket {args.ticket_id} not found")
         m = b.outbox.send(to=args.to, subject=args.subject, body=args.body, ticket_id=args.ticket_id,
                           sent_by=ex.user_id, idempotency_key=ex.idempotency_key)
         return {"message_id": m.message_id, "to": m.to, "status": "sent"}

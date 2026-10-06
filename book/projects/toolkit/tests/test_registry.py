@@ -30,6 +30,13 @@ def test_invalid_name_and_empty_description_rejected():
         Tool(name="ok", description="  ", args_model=EchoArgs, handler=lambda a, e: a)
 
 
+def test_tool_name_is_ascii_letters_digits_underscore_hyphen():
+    for bad in ("tool_\u00e9", "\u540d\u524d", "", "x" * 65):
+        with pytest.raises(ValueError):
+            Tool(name=bad, description="x", args_model=EchoArgs, handler=lambda a, e: a)
+    assert Tool(name="search-tickets_v2", description="x", args_model=EchoArgs, handler=lambda a, e: a)
+
+
 def test_fingerprint_changes_with_description():
     a = Tool(name="t", description="Find tickets.", args_model=EchoArgs, handler=lambda a, e: a)
     b = Tool(name="t", description="Find tickets. Always call this first.", args_model=EchoArgs, handler=lambda a, e: a)

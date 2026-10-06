@@ -139,7 +139,9 @@ class PolicyEngine:
             return False
         return not any(tool.name in self._denied_tools[g] for g in ctx.groups)
 
-    def evaluate(self, tool: Tool, args: BaseModel, ctx: ToolContext, *, consume: bool = True) -> Decision:
+    def evaluate(self, tool: Tool, args: BaseModel, ctx: ToolContext, *, consume: bool = True,
+                 check_rate: bool = True) -> Decision:
+        """`check_rate=False` is for executing an approved call: its budget was spent at proposal."""
         h = args_hash(tool.name, args.model_dump(mode="json"))
 
         def decide(verdict: Verdict, reasons: list[str], rules: list[str], retry: float | None = None) -> Decision:
@@ -174,7 +176,7 @@ class PolicyEngine:
 
         # 4. Rate limit, only for calls that would otherwise proceed.
         limit = self._limits.get(tool.name)
-        if limit is not None:
+        if limit is not None and check_rate:
             retry = self._check_rate(tool.name, limit, ctx, consume=consume)
             if retry is not None:
                 return decide(Verdict.DENY, [f"rate limit {limit.max_calls}/{limit.per_seconds:g}s exceeded"],

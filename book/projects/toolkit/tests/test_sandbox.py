@@ -21,6 +21,13 @@ def test_wall_clock_timeout_kills_process():
     assert r.timed_out and not r.ok and r.duration_ms < 5000
 
 
+def test_timeout_fires_when_child_ignores_large_stdin():
+    # More stdin than a pipe buffer holds, and a child that never reads it.
+    r = SandboxRunner(SandboxLimits(timeout_s=0.5, cpu_s=5)).run_python("import time\ntime.sleep(30)",
+                                                                       stdin="x" * 100_000)
+    assert r.timed_out and not r.ok and r.duration_ms < 5000
+
+
 def test_environment_secrets_are_not_inherited(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "sk-should-not-leak")
     r = SandboxRunner().run_python("import os\nprint(sorted(os.environ))\nprint(os.environ.get('OPENAI_API_KEY'))")

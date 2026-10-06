@@ -29,6 +29,13 @@ def test_pending_approval_forces_text_turn(harness, ctx):
     assert llm.requests[1].tool_choice == "none" and harness["send"].calls == 0
 
 
+def test_pending_approval_in_last_round_still_gets_text_turn(harness, ctx):
+    llm = FakeLLM(responses=[[tc("1", "send", to="a@northwind.example", body="hi")], "Waiting for approval."])
+    result = ToolLoop(llm, harness["ex"], max_rounds=1).run([Message.user("send it")], ctx)
+    assert result.stop_reason == "pending_approval" and result.final_text == "Waiting for approval."
+    assert len(llm.requests) == 2 and llm.requests[1].tool_choice == "none"
+
+
 def test_tools_not_offered_are_never_executed(harness, ctx):
     reader = ctx.model_copy(update={"scopes": frozenset({"tickets:read"})})
     llm = FakeLLM(responses=[[tc("1", "send", to="a@northwind.example", body="hi")], "Cannot send."])

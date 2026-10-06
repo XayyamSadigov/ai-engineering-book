@@ -100,6 +100,19 @@ def test_rejected_approval_is_permission_error(harness, ctx):
     assert "tool.approval_rejected" in harness["audit"].types()
 
 
+def test_approved_call_consumes_rate_budget_once(harness, ctx):
+    ex, approvals, send = harness["ex"], harness["approvals"], harness["send"]
+    harness["policy"].set_rate_limit("send", 1, 3600)
+    r = ex.execute(call("send", to="a@northwind.example", body="hi"), ctx)
+    assert r.status == "pending_approval"
+    approvals.approve(r.approval_id, "lead1")
+    ok = ex.execute_approved(r.approval_id, ctx)
+    assert ok.ok and send.calls == 1
+    # The one budgeted action is spent: a new proposal is rate limited.
+    again = ex.execute(call("send", to="b@northwind.example", body="hi"), ctx)
+    assert again.error["code"] == "rate_limited"
+
+
 def _writer_executor(store, handler, *, timeout_s=5.0, reconcile=None):
     class TicketArgs(BaseModel):
         title: str

@@ -83,6 +83,14 @@ def test_rejected_send_never_reaches_outbox(make_assistant):
     assert a.c.backends.outbox.sent == [] and a.c.approvals.pending() == []
 
 
+def test_send_on_other_tenant_ticket_is_refused(make_assistant):
+    a = make_assistant([[tc("send_reply", **{**REPLY, "ticket_id": "TCK-2026-0003"})], "Awaiting approval."])
+    out = a.chat("ana", "send the reply on TCK-2026-0003")  # a logistics ticket; ana is retail
+    result = a.approve(out.pending_approvals[0].id, "sam")
+    assert result.error["category"] == "not_found" and result.error["code"] == "no_ticket"
+    assert a.c.backends.outbox.sent == []
+
+
 def test_four_eyes_blocks_self_approval(make_assistant):
     a = make_assistant([[tc("send_reply", **REPLY)], "Awaiting approval."], four_eyes=True)
     out = a.chat("sam", "send the reply")

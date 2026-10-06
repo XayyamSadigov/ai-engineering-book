@@ -105,15 +105,16 @@ class SandboxRunner:
                 )
                 timed_out = False
                 try:
-                    if stdin is not None:
-                        assert proc.stdin is not None
-                        proc.stdin.write(stdin.encode())
-                        proc.stdin.close()
-                    proc.wait(timeout=self.limits.timeout_s)
+                    # communicate() writes stdin without blocking and honours the timeout, so a child that never reads
+                    # it cannot block us past the deadline. stdout/stderr go to files, not pipes.
+                    proc.communicate(input=stdin.encode() if stdin is not None else None,
+                                     timeout=self.limits.timeout_s)
                 except subprocess.TimeoutExpired:
                     timed_out = True
                     self._kill_group(proc)
                     proc.wait()
+                    if proc.stdin:
+                        proc.stdin.close()
             duration = (time.monotonic() - start) * 1000
             stdout, t1 = self._read_capped(out_path)
             stderr, t2 = self._read_capped(err_path)

@@ -294,8 +294,10 @@ class ToolExecutor:
         self._emit("tool.proposed", tool.name, ctx, call_id=call.id, args_hash=h, tool=tool,
                    arguments=normalized, approval_id=approval_id)
 
-        # 3. policy
-        decision = self.policy.evaluate(tool, args, ctx)
+        # 3. policy. An approved call paid its rate budget when it was proposed; charge once.
+        decision = self.policy.evaluate(tool, args, ctx, check_rate=approval_id is None)
+        if approval_id is not None and decision.verdict == Verdict.ALLOW:
+            decision = self.policy.evaluate(tool, args, ctx)  # no approval gate here, so rate-check now
         if decision.verdict == Verdict.DENY:
             if "rate_limit" in decision.rules:
                 err = ToolError.transient("rate_limited", "; ".join(decision.reasons),

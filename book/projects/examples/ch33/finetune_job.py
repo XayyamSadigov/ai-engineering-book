@@ -30,9 +30,9 @@ TERMINAL: frozenset[str] = frozenset({"succeeded", "failed", "cancelled"})
 class Hyperparameters(BaseModel):
     """The knobs hosted APIs commonly expose. Open-weights trainers add LoRA rank, alpha, targets."""
 
-    n_epochs: int = 3
-    learning_rate_multiplier: float | None = None
-    batch_size: int | None = None
+    n_epochs: int = Field(default=3, ge=1)
+    learning_rate_multiplier: float | None = Field(default=None, gt=0)
+    batch_size: int | None = Field(default=None, ge=1)
 
 
 class FineTuneJob(BaseModel):
@@ -136,6 +136,7 @@ class FakeProvider:
         self.jobs: dict[str, FineTuneJob] = {}
         self.events: dict[str, list[JobEvent]] = {}
         self._polls: dict[str, int] = {}
+        self._suffixes: dict[str, str] = {}
         self.polls_per_stage = polls_per_stage
         self.fail_at = fail_at
         self.calls: list[str] = []
@@ -158,7 +159,7 @@ class FakeProvider:
                           created_at=datetime.now(timezone.utc))
         self.jobs[job_id] = job
         self._polls[job_id] = 0
-        self._suffix = suffix or "custom"
+        self._suffixes[job_id] = suffix or "custom"
         self.events[job_id] = [JobEvent(at=job.created_at, level="info", message="job created")]
         return job
 
@@ -182,7 +183,7 @@ class FakeProvider:
         if nxt == "succeeded":
             stats = self.files[job.training_file_id]
             job.trained_tokens = stats["approx_tokens"] * job.hyperparameters.n_epochs
-            job.fine_tuned_model = f"ft:{job.base_model}:{self._suffix}:{job.id[-6:]}"
+            job.fine_tuned_model = f"ft:{job.base_model}:{self._suffixes[job_id]}:{job.id[-6:]}"
         return job
 
     def cancel_job(self, job_id: str) -> FineTuneJob:
@@ -312,6 +313,22 @@ class FineTunePollTimeout(FineTuneFailed):
     or cancel it explicitly; never start a second job for the same dataset."""
 
 
+def _check_against_card(card_path: Path | None, train_path: Path, val_path: Path | None) -> None:
+    """With a data card, the train file must be the one the card describes, and neither the train
+    nor the val file may be the frozen test set."""
+    if card_path is None or not card_path.exists():
+        return
+    files = json.loads(card_path.read_text()).get("files", {})
+    digest = lambda p: hashlib.sha256(p.read_bytes()).hexdigest()   # noqa: E731
+    train_sha = digest(train_path)
+    if "train" in files and files["train"]["sha256"] != train_sha:
+        raise ValueError(f"{train_path} does not match the data card's train file; rebuild or pass the right file")
+    test_sha = files.get("test", {}).get("sha256")
+    for path in (train_path, val_path):
+        if path is not None and test_sha and digest(path) == test_sha:
+            raise ValueError(f"{path} is the frozen test set; it must never be uploaded for training")
+
+
 def run_fine_tune(
     provider: FineTuneProvider,
     train_path: Path,
@@ -335,9 +352,14 @@ def run_fine_tune(
     non-retryable ones (bad key, unknown job) raise at once. Pass ``resume_job_id`` after a crash
     to keep polling the job that already exists instead of uploading and paying for a second one.
     """
+    _check_against_card(data_card_path, train_path, val_path)   # right files, and never the test set
     train_stats = validate_chat_jsonl(train_path)
+    if val_path is not None:
+        validate_chat_jsonl(val_path)          # before any upload, so a bad val file orphans nothing
     if resume_job_id is not None:
         job = provider.get_job(resume_job_id)
+        if job.base_model != base_model:
+            raise ValueError(f"job {job.id} trains {job.base_model!r}, not {base_model!r}; resume with the original inputs")
         train_id = job.training_file_id
     else:
         train_id = provider.upload_training_file(train_path)
@@ -369,7 +391,7 @@ def run_fine_tune(
         raise FineTuneFailed(job, provider.list_events(job.id))
     card_hash = hashlib.sha256(data_card_path.read_bytes()).hexdigest() if data_card_path and data_card_path.exists() else None
     return FineTuneRecord(
-        fine_tuned_model=job.fine_tuned_model, base_model=base_model, job_id=job.id, training_file_id=train_id,
+        fine_tuned_model=job.fine_tuned_model, base_model=job.base_model, job_id=job.id, training_file_id=train_id,
         training_file_sha256=train_stats["sha256"], data_card_sha256=card_hash,
         hyperparameters=job.hyperparameters, trained_tokens=job.trained_tokens,
         finished_at=datetime.now(timezone.utc),

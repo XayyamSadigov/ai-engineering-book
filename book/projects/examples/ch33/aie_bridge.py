@@ -100,6 +100,7 @@ def run_classifier(
     expected_prompt_sha256: str | None = None,
     max_tokens: int = 16,
     confidence_fn: ConfidenceFn = _no_confidence,
+    expected_provider: str | None = None,
 ) -> SystemRun:
     """Classify every holdout row with ``model`` and return predictions for the protocol.
 
@@ -132,14 +133,19 @@ def run_classifier(
             predictions.append(Prediction(example_id=row.id, label=INVALID_LABEL, confidence=0.0))
             continue
         label = completion.text.strip()
-        valid = label in allowed
+        # With a fallback-capable gateway, pass expected_provider: an answer served by the fallback
+        # provider says nothing about the model under test, so it counts as invalid.
+        served_by_expected = expected_provider is None or completion.provider == expected_provider
+        valid = label in allowed and served_by_expected
         predictions.append(
             Prediction(
                 example_id=row.id,
                 label=label if valid else INVALID_LABEL,
                 confidence=confidence_fn(completion, label) if valid else 0.0,
                 latency_ms=completion.latency_ms,
-                cost_usd=float((completion.raw or {}).get("cost_usd", 0.0)),
+                # a cache hit is billed 0 but still costs what the model charges: compare full prices
+                cost_usd=float((completion.raw or {}).get("cost_usd", 0.0))
+                + float((completion.raw or {}).get("avoided_cost_usd", 0.0)),
             )
         )
     return SystemRun(name=name, predictions=predictions)

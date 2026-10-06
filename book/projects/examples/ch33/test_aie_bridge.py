@@ -9,6 +9,8 @@ import pytest
 pytest.importorskip("aie_core")
 
 from aie_core import FakeLLM, InvalidRequestError, ModelGateway, PricingTable, RetryPolicy
+from aie_core.llm.errors import ProviderUnavailableError
+from aie_core.llm.gateway import InMemoryResponseCache
 from aie_core.embeddings import CachedEmbeddings, FakeEmbeddings
 
 from aie_bridge import (
@@ -123,3 +125,22 @@ def test_logprob_confidence_reads_token_probabilities_from_raw():
         {"token": "v", "logprob": -0.1}, {"token": "pn", "logprob": -0.2}]}}]})
     assert logprob_confidence(with_lp, "vpn") == pytest.approx(math.exp(-0.3))
     assert logprob_confidence(Completion(message=Message.assistant("vpn")), "vpn") == 1.0
+
+
+def test_a_fallback_answer_does_not_count_for_the_model_under_test():
+    primary = FakeLLM(responses=[ProviderUnavailableError("503")] * 9)
+    backup = FakeLLM(handler=lambda r: "vpn")
+    backup.provider = "backup"
+    gw = ModelGateway(primary, fallbacks=[backup])
+    run = run_classifier(gw, _holdout()[:1], name="ft", model="nw-tickets-small-v3", system_prompt=SYSTEM,
+                         labels=LABELS, expected_provider=primary.provider)
+    assert run.predictions[0].label == INVALID_LABEL
+
+
+def test_a_cached_rerun_is_charged_at_full_price():
+    llm = _scripted({"h1": "vpn", "h2": "password", "h3": "billing"})
+    pricing = PricingTable({"nw-tickets-small": {"input_per_1m": 0.2, "output_per_1m": 0.8}})  # illustrative
+    gw = ModelGateway(llm, pricing=pricing, cache=InMemoryResponseCache())
+    first = run_classifier(gw, _holdout(), name="ft", model="nw-tickets-small-v3", system_prompt=SYSTEM, labels=LABELS)
+    again = run_classifier(gw, _holdout(), name="ft", model="nw-tickets-small-v3", system_prompt=SYSTEM, labels=LABELS)
+    assert [p.cost_usd for p in again.predictions] == [p.cost_usd for p in first.predictions]

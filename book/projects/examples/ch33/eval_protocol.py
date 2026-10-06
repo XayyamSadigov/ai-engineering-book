@@ -216,6 +216,10 @@ def decide_ship(
     The reference is normally the prompted strong model: the thing you are trying to replace.
     """
     reasons: list[str] = []
+    # Same frozen holdout, every row answered: otherwise the two reports measure different things.
+    if candidate.coverage < 1.0 or candidate.n != reference.n:
+        reasons.append(f"candidate answered {candidate.coverage:.0%} of the holdout (n={candidate.n}) "
+                       f"versus reference n={reference.n}; compare on the same complete holdout")
     if candidate.macro_f1 < reference.macro_f1 - rule.max_macro_f1_drop_vs_reference:
         reasons.append(f"macro-F1 {candidate.macro_f1:.3f} trails reference {reference.macro_f1:.3f} "
                        f"by more than {rule.max_macro_f1_drop_vs_reference:.3f}")

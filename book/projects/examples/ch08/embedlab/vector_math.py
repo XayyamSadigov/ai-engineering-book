@@ -74,7 +74,8 @@ def euclidean_from_cosine(cos: float) -> float:
 
 def truncate(vectors: ArrayLike, dims: int, renormalize: bool = True) -> np.ndarray:
     """Keep the first `dims` coordinates (Matryoshka-style). Re-normalize, because a prefix
-    of a unit vector is shorter than 1 and dot-product scores would otherwise shrink."""
+    of a unit vector is shorter than 1, by a different amount for each vector, and
+    un-normalized dot products would re-rank by prefix length."""
     m = as_matrix(vectors)
     if not 0 < dims <= m.shape[1]:
         raise ValueError(f"dims must be in 1..{m.shape[1]}, got {dims}")

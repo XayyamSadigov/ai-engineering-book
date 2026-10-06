@@ -36,11 +36,11 @@ class NamespacedStore(MutableMapping[str, bytes]):
     """Prefixes every cache key with this chapter's EmbeddingSpace fingerprint.
 
     aie_core's CachedEmbeddings already salts its keys with a fingerprint of what it can see
-    (inner client, model, dimensions, instruction, text-prep version). It cannot see the
-    normalization flag or post-processing recorded in EmbeddingSpace, and a client whose
-    dimensions are learned lazily contributes "unknown". Namespacing by the full space makes a
-    stale hit impossible after any field of the space changes, and lets one shared store
-    (dict, Redis) be listed and purged per space."""
+    (provider, model, dimensions, instruction, text-prep version), and a client whose
+    dimensions are learned lazily contributes "unknown". Namespacing by the full space means
+    two spaces never share an entry and lets one shared store (dict, Redis) be listed and
+    purged per space. The cost: a change to normalization or post-processing alone, which
+    happens after the cache, also forgoes otherwise valid hits."""
 
     def __init__(self, inner: MutableMapping[str, bytes], namespace: str) -> None:
         self.inner = inner

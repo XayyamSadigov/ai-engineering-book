@@ -27,8 +27,8 @@ class ClusterResult:
 
 
 def cluster(vectors: np.ndarray, k: int, seed: int = 0) -> ClusterResult:
-    """k-means minimizes Euclidean distance; on unit vectors that is equivalent to maximizing
-    cosine, so normalize first and the clusters follow angular similarity."""
+    """k-means minimizes Euclidean distance; on unit vectors that approximately follows cosine
+    (spherical k-means, which re-normalizes centroids, makes it exact), so normalize first."""
     x = l2_normalize_rows(vectors)
     km = KMeans(n_clusters=k, n_init=10, random_state=seed).fit(x)
     sil = float(silhouette_score(x, km.labels_, metric="cosine")) if 1 < k < len(x) else 0.0

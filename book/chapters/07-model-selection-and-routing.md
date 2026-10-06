@@ -1,10 +1,10 @@
 # Chapter 7 — Model Selection and Routing
 
-After this chapter you will be able to choose a model for a workload from evidence rather than reputation, and build the component that makes that choice again for every request. You will record model capabilities in a catalog, run one evaluation set across candidates and read the results as a Pareto front, and build a `Router` that combines policy rules, an optional classifier, and a confidence cascade, and that refuses fallbacks which would quietly break a request. Finally you will evaluate a cascade end to end, pricing in what a misrouted request costs. The code in `book/projects/examples/ch07/` runs offline against two `FakeLLM` instances acting as a small and a large model on the Northwind ticket set.
+After this chapter you will be able to choose a model for a workload from evidence rather than reputation, and build the component that makes that choice again for every request. You will record model capabilities in a catalog, run one evaluation set across candidates and read the results as a Pareto front, and build a `Router` that combines policy rules, an optional classifier, and a confidence cascade, and that refuses fallbacks which would quietly break a request. Finally you will evaluate a cascade end to end, pricing in what a misrouted request costs. The code in `book/projects/examples/ch07/` runs offline against `FakeLLM` instances acting as a small, a general, and a reasoning model on the Northwind ticket set.
 
 ## Why this matters
 
-Model choice is the largest single lever on the cost and latency of an AI feature, and it is usually pulled once, early, by intuition. A team prototypes with the strongest model it can reach, the prototype works, and that model becomes the production default for every request: the password-reset question, the 400-page contract, the ticket that only needs a category. Months later the bill arrives, or the p95 latency target is missed, and nobody can say which requests needed the expensive model, because nothing measured it.
+Model choice is often the largest lever on the cost and latency of an AI feature, and it is usually pulled once, early, by intuition. A team prototypes with the strongest model it can reach, the prototype works, and that model becomes the production default for every request: the password-reset question, the 400-page contract, the ticket that only needs a category. Months later the bill arrives, or the p95 latency target is missed, and nobody can say which requests needed the expensive model, because nothing measured it.
 
 The opposite mistake is just as common and harder to see. A team reads that a small model is "nearly as good" on a public benchmark, switches, and watches the aggregate quality score barely move. Meanwhile the hardest tenth of traffic, the requests where a wrong answer creates a human escalation or a customer complaint, quietly gets worse. Averages hide that, and benchmarks measure someone else's distribution.
 
@@ -37,7 +37,7 @@ Ten properties decide whether a model fits a workload. They split into two group
 | Reliability and availability | trade-off | error rate, rate-limit headroom, regional outages | a single provider incident takes the feature down |
 | Data residency | hard | where inference runs, retention terms | regulated data leaves its permitted zone |
 
-Two of these deserve a note. Price is not the price per token. A model that is cheaper per token but writes three times as many output tokens, or needs a repair round trip twice as often, can cost more per correct answer, which is the number that matters. And reliability is a property of the deployment, not the weights: the same model behind two providers, or self-hosted versus hosted, has different availability, rate limits, and latency tails.
+Two of these deserve a note. Price means cost per correct answer, not per token. A model that is cheaper per token but writes three times as many output tokens, or needs a repair round trip twice as often, can cost more per correct answer, which is the number that matters. And reliability is a property of the deployment, not the weights: the same model behind two providers, or self-hosted versus hosted, has different availability, rate limits, and latency tails.
 
 ### Model classes as workload shapes
 
@@ -59,9 +59,9 @@ Newer classes keep arriving. Recursive approaches let a model query a huge input
 
 Many models now expose a reasoning budget: an effort level, a thinking-token limit, or a separate reasoning mode. This turns inference compute into a per-request parameter. The same model asked to think longer gets better on hard multi-step problems and worse on latency and cost, often by large factors, because the extra deliberation is billed and generated serially as output tokens.
 
-Treat effort as a route attribute, not a global setting. The Northwind high-assurance route uses high effort for refund exceptions; the general route uses none; a classifier-selected reasoning route uses medium. Three rules keep the knob honest. Evaluate the outcome, not the length of the reasoning: long chains can be confidently wrong, and visible deliberation is not evidence of correctness. Cap the budget: an effort setting without a token ceiling is an unbounded cost on adversarial or degenerate inputs. And measure each effort level as a separate candidate in the selection harness, because "the reasoning model" at low and high effort are two points on the Pareto front, not one.
+Treat effort as a route attribute, not a global setting. The Northwind high-assurance route uses high effort for refund exceptions; the general route uses none; a classifier-selected reasoning route uses medium. Three rules keep the knob honest. Evaluate the outcome, not the length of the reasoning: long chains can be confidently wrong, and visible deliberation is not evidence of correctness. Cap the budget: an effort setting without a token ceiling is an unbounded cost on adversarial or degenerate inputs. And measure each effort level as a separate candidate in the selection harness, because "the reasoning model" at low and high effort are two points on the Pareto front (defined below), not one.
 
-The `aie_core` request type has no effort field, because providers expose it differently. The router passes `reasoning_effort` in `req.metadata`, and only to models whose catalog profile lists effort levels; adapters that support the knob read it from there. A request that asks for effort on a model without the knob gets a soft warning, not a silent drop.
+The `aie_core` request type has no effort field, because providers expose it differently. The router passes `reasoning_effort` in `req.metadata`, and only to models whose catalog profile lists the requested level; adapters that support the knob read it from there. A request that asks for an effort level the model does not offer, including a model with no knob at all, gets a soft warning instead of a silent drop.
 
 ### Multimodal inputs
 
@@ -80,7 +80,7 @@ The selection procedure is the same whether you are choosing a first model or de
 3. **Fix the constraints.** Latency SLO, cost ceiling, data zone, required capabilities. These come from the product, not from the candidates.
 4. **Filter candidates by hard constraints.** A model that cannot run in the required zone or lacks a required capability is not a candidate, however good its scores.
 5. **Run every candidate on the same set in the configuration you will ship:** same prompt, same parameters, same effort setting. Record quality, latency percentiles, cost, and failures per case.
-6. **Read the Pareto front.** Discard dominated candidates: anything another candidate beats or matches on quality, cost, and latency at once.
+6. **Read the Pareto front.** The Pareto front is the set of candidates you cannot improve on one axis without losing on another. Discard the rest, the dominated candidates: anything another candidate beats or matches on quality, cost, and latency at once.
 7. **Choose the cheapest candidate that meets the quality floor on the lower bound of its interval**, not on its point estimate, and within the latency ceiling.
 8. **Compare close candidates with paired counts.** On the same cases, how many does A get right that B gets wrong, and the reverse? Two models with similar averages can fail on entirely different cases, which is exactly the situation where routing pays.
 9. **Record the decision** (set version, prompt version, model versions, results) and re-run it on every model, prompt, or traffic change.
@@ -95,7 +95,9 @@ Here is the harness's output on the Northwind ticket set, with illustrative pric
 
 The 95% interval is a Wilson score interval on the pass rate; it stays honest at small sample sizes and near 0 or 1, where the textbook normal approximation does not (Chapter 24 covers intervals and paired tests in depth). The fakes report fixed latencies, so p50 equals p95 here; a real bake-off shows a gap between them, and the gap is often what disqualifies a candidate.
 
-All three are on the front: each is the best at something. The intervals overlap heavily between the reasoning and general models, so sixty cases cannot say the reasoning model is better at classification; they can say it costs five times as much and takes three and a half times as long. With a quality floor of 0.80 on the lower bound and a p95 ceiling of 3 seconds, the procedure picks `nw-general`: the small model's point estimate meets the floor but its lower bound (0.68) does not. The paired counts are the interesting line. The small model gets two tickets right that the general model misses, and the general model gets ten right that the small one misses. The two are not nested, and most of the small model's errors are concentrated in a recognizable slice: multi-topic tickets whose obvious keywords point the wrong way. That is the signature of a workload where a cascade might beat both single-model options. Whether it does depends on what an error costs, which is the subject of the cascade evaluation below.
+All three are on the front: each is the best at something. The intervals overlap heavily between the reasoning and general models, so sixty cases cannot say the reasoning model is better at classification; they can say it costs five times as much and takes more than three and a half times as long. With a quality floor of 0.80 on the lower bound and a p95 ceiling of 3 seconds, the procedure picks `nw-general`: the small model's point estimate meets the floor but its lower bound (0.68) does not.
+
+The harness also prints paired counts: the small model gets two tickets right that the general model misses, and the general model gets ten right that the small one misses. Neither model's correct set contains the other's, and most of the small model's errors are concentrated in a recognizable slice: multi-topic tickets whose obvious keywords point the wrong way. That is the signature of a workload where a cascade (cheap model first, escalate when unsure; see Routing strategies) might beat both single-model options. Whether it does depends on what an error costs, which is the subject of the cascade evaluation below.
 
 ### Routing strategies
 
@@ -134,11 +136,11 @@ Whatever the signal, measure its calibration on your distribution: bin the cases
 | 0.6-0.8 | 15 | 0.76 | 0.73 |
 | 0.8-1.0 | 37 | 0.96 | 0.86 |
 
-ECE is about 0.09. The signal is informative (higher bins are more accurate) but overconfident at the top. The top bin holds five wrong answers, four of them at 0.97, the highest confidence the model ever reports. No threshold short of escalating everything will catch those four. This is the most important number in cascade design. Escalation can only fix errors the signal can see. Confident mistakes pass straight through, and their price decides whether the cascade is worth building.
+ECE is about 0.09. The signal is informative (higher bins are more accurate) but overconfident at the top. The top bin holds five wrong answers, four of them at 0.97, the highest confidence the model ever reports. No threshold short of escalating everything will catch those four, and one of them is wrong on the large model too. Those confident errors are the number to watch in cascade design: escalation can only fix errors the signal can see. Confident mistakes pass straight through, and their price decides whether the cascade is worth building.
 
 ### Routing error cost
 
-A router makes two kinds of mistakes. A **false accept** (false "easy") lets a cheap model's wrong answer through. It costs quality, often silently, or a retry if something downstream catches it. A **false escalation** (false "hard") sends a request the cheap model had answered correctly to the expensive model anyway. It costs money and latency, never quality. Router accuracy counts these two equally. The business never does.
+A router makes two kinds of mistakes. A **false accept** (false "easy") lets a cheap model's wrong answer through. It costs quality, often silently, or a retry if something downstream catches it. A **false escalation** (false "hard") sends a request the cheap model had answered correctly to the expensive model anyway. It costs money and latency, never quality. Router accuracy, the share of requests where the escalate-or-not decision was right, counts these two equally. Their prices are nothing alike: at the illustrative Northwind prices a false escalation costs about $0.00017 extra, while a silent wrong answer can cost a re-triage worth hundreds of times that.
 
 The correct objective is end-to-end utility per request, in one currency:
 
@@ -151,9 +153,9 @@ utility = value of correct answers
         - cost of latency, if waiting has a price
 ```
 
-The misroute cost belongs in this sum even when the cheap answer is eventually fixed. A cheap model that fails, is caught by a validator downstream, and triggers a retry on the strong model costs both calls plus the rework, which can exceed calling the strong model once. That is the warning attached to every routing recipe: evaluate misroutes, not just routes.
+False accepts land in the two error terms; a false escalation shows up only as extra model spend and latency. The misroute cost belongs in this sum even when the cheap answer is eventually fixed. A cheap model that fails, is caught by a validator downstream, and triggers a retry on the strong model costs both calls plus the rework, which can exceed calling the strong model once. That is the warning attached to every routing recipe: evaluate misroutes, not just routes.
 
-The cascade sweep on the ticket set makes this concrete. Running each model once and simulating every threshold offline gives, for three illustrative prices of a silent error:
+The cascade sweep on the ticket set makes this concrete. Running each model once and simulating every threshold offline gives, for three illustrative prices of a silent error (the value of a correct answer and the caught share stay fixed):
 
 | cost of a silent error | best policy by utility | accuracy | $/request | escalated |
 |---|---|---|---|---|
@@ -161,7 +163,7 @@ The cascade sweep on the ticket set makes this concrete. Running each model once
 | 0.001 | cascade, threshold 0.78 | 0.883 | 0.000066 | 25% |
 | 0.05 | always large | 0.933 | 0.000186 | 100% |
 
-Three prices, three different winners. When errors are nearly free, the cheap model's savings dominate. In a middle band, the cascade beats both single models. When errors are expensive, the small model's confident mistakes cost more than every escalation saves, and calling the large model directly wins: the cascade at its best still pays for the small call and still lets those five through. Meanwhile the threshold that maximizes router accuracy is the same, about 0.53, in all three regimes, because router accuracy ignores prices. Tuning a router on its own accuracy optimizes the wrong thing.
+Three prices, three different winners. When errors are nearly free, the cheap model's savings dominate. In a middle band, the cascade beats both single models. When errors are expensive, the small model's confident mistakes cost more than every escalation saves, and calling the large model directly wins: the best cascade escalates everything, which makes it the large model plus a wasted small call on every request. Meanwhile the threshold that maximizes router accuracy is the same, about 0.53, in all three regimes, because router accuracy ignores prices.
 
 ### Fallbacks that change assumptions
 
@@ -173,15 +175,17 @@ A fallback is a second model used when the first is unavailable or unfit. The ga
 - **Data residency.** The only model allowed for restricted data is on-premises. Falling back to a cloud model during an outage is a compliance incident, not a reliability feature.
 - **Reasoning effort, tokenizer, and prompt format.** The fallback has no effort knob, counts tokens differently, or follows the system prompt differently. A prompt tuned for one model family can underperform on another (Chapter 4).
 
-The router therefore classifies every gap as hard or soft. Hard gaps (context, output length, tools, vision, data zone) remove a model from the candidate list. Soft gaps (no native schema mode, unsupported effort level) keep it but attach a warning to the decision, so a dashboard can show how often requests ran under changed assumptions. When every planned model has a hard gap, the router looks across the whole catalog for the cheapest compatible model and records the substitution. When nothing is compatible, it raises `NoCompatibleModelError` instead of sending the request somewhere it cannot succeed. Failing loudly is the correct behavior: the caller can shrink the context, drop the tools, or tell the user, all better than a wrong answer.
+The router therefore classifies every gap as hard or soft. Hard gaps (context, output length, tools, vision, data zone) remove a model from the candidate list. Soft gaps (no native schema mode, unsupported effort level) keep it but attach a warning to the decision, so a dashboard can show how often requests ran under changed assumptions.
+
+Two fallbacks remain when the plan fails. When every planned model has a hard gap, the router looks across the catalog, among models that have a registered client, for the cheapest compatible one and records the substitution. A model whose data zone is `any` makes no residency promise, so it never satisfies a request that requires a specific zone, and the substitution can never pick it for an on-prem request. When nothing is compatible, it raises `NoCompatibleModelError` instead of sending the request somewhere it cannot succeed. The caller can then shrink the context, drop the tools, or tell the user, all better than a wrong answer.
 
 ### Vendor neutrality and model pinning
 
 Every model reference in application code should be an alias owned by the catalog (`nw-small`, `nw-general`), never a provider's model name. The catalog resolves each alias to a pinned, versioned identifier. Swapping a provider or version becomes a one-line, reviewed catalog change. A provider updating a floating name cannot change your behavior without a deploy. And every trace records the exact version that served the request, so a regression can be tied to a version change.
 
-Repointing an alias is a release: run the selection harness on the new version, compare per-category deltas, canary it, and keep the old pin for rollback (Chapter 32). Provider-neutral `aie_core` types keep the router independent of any vendor SDK. Track deprecation dates for every pin, because a retired pin becomes an outage on a date you were told about months earlier.
+Repointing an alias is a release: run the selection harness on the new version, compare per-category deltas, canary it (serve it to a small share of traffic first), and keep the old pin for rollback (Chapter 32). Provider-neutral `aie_core` types keep the router independent of any vendor SDK. Track deprecation dates for every pin, because a retired pin becomes an outage on a date you were told about months earlier.
 
-A migration off a retired or superseded pin follows a fixed procedure, and it starts weeks before the retirement date, not on it:
+A migration off a retired or superseded pin follows a fixed procedure, and it starts weeks before the retirement date:
 
 1. **Add the new version as a separate alias** (`nw-general-next`) in the catalog, with its own profile. Capabilities change between versions too: a new version can have a different window, output limit, or schema support, and the router's capability check only protects you if the profile is accurate.
 2. **Run the selection harness** with both pins on the current evaluation set, in the shipped configuration. Read per-slice deltas and paired counts, not only the overall score, and re-run the cascade sweep if the alias is a cascade stage: a new version's confidence distribution can move every threshold.
@@ -197,10 +201,10 @@ Follow one Northwind request through the router.
 
 1. **Requirements are derived from the request, not declared by the caller.** `Requirements.from_request` counts prompt tokens plus `max_tokens`, and detects tools, a response schema, and image parts; data zone and effort come from metadata. A caller cannot forget to declare that its prompt is 150k tokens.
 2. **A route is selected.** Rules run in order: restricted data, high risk, long context, narrow task. If none matches and a classifier is configured, the classifier predicts a route; a prediction below its confidence floor falls through to the default route. The decision records which stage chose the route.
-3. **The route becomes a candidate list.** The primary model and its fallbacks are checked against the requirements. Models with hard gaps are skipped, each with a recorded reason. If none survive, the cheapest compatible model in the catalog is substituted; if there is none, the request fails with `NoCompatibleModelError`. Soft gaps become warnings. The escalation target, if any, is checked too and disabled if incompatible.
+3. **The route becomes a candidate list.** The primary model and its fallbacks are checked against the requirements. Models with hard gaps are skipped, each with a recorded reason. If none survive, the cheapest compatible model in the catalog that has a client is substituted; if there is none, the request fails with `NoCompatibleModelError`. Soft gaps become warnings. The escalation target, if any, is checked too and disabled if incompatible.
 4. **Candidates are called in order.** Each call goes through that alias's client, which in production is a `ModelGateway` with its own retries. The router sets `req.model` to the pinned identifier and passes the effort level where supported. A retryable error moves to the next candidate; a non-retryable one is raised, because a bad request will fail on every model.
 5. **The answer is checked for escalation.** If the route has an escalation target that did not already serve the request, the validator runs first and the confidence function second. A failed validator or low confidence triggers one call to the stronger model. If that call fails, or the escalation target was disabled because it cannot serve this request, the router returns the cheap answer marked `degraded`, so the caller knows it is below the route's quality bar.
-6. **Everything is recorded.** The result carries the decision, every attempt with its outcome, latency, cost, and confidence, and the model that finally served. The router also compares the model the completion reports with the pin it planned for; a difference means something below the router, usually a gateway with its own fallback list, served the request from a model the capability check never saw. A tracing span carries the route, stage, serving alias and pinned model id, attempts, warnings, escalation, degradation, mismatch, and cost as attributes.
+6. **Everything is recorded.** The result carries the decision, every attempt with its outcome, latency, cost, and confidence, and the model that finally served. The router also compares the model the completion reports with the pin it planned for; a difference means something below the router, usually a gateway with its own fallback list, served the request from a model the capability check never saw. A tracing span carries the route, stage, serving alias and the model id the completion reported, attempts, warnings, escalation, degradation, mismatch, and cost as attributes.
 
 ## Architecture
 
@@ -303,6 +307,8 @@ cd book/projects/examples/ch07 && ../../../../.venv/bin/python demo.py
 
 ### The catalog
 
+The catalog holds one `ModelProfile` per alias and derives a request's `Requirements`. Read `capability_gaps` first: it is the single definition of compatible.
+
 ```python
 # path: book/projects/examples/ch07/catalog.py
 """Model catalog: what each candidate model can do, what it costs, and where it may run.
@@ -345,7 +351,7 @@ class ModelProfile(BaseModel):
     supports_json_schema: bool = False           # native schema-constrained output
     supports_vision: bool = False
     reasoning_efforts: tuple[str, ...] = ()      # e.g. ("low", "medium", "high"); empty = no knob
-    data_zones: tuple[str, ...] = ("any",)       # where inference may run, e.g. ("eu",), ("onprem",)
+    data_zones: tuple[str, ...] = ("any",)       # where inference runs, e.g. ("eu",); "any" = no residency guarantee
     cost_tier: Tier = Tier.MEDIUM
     latency_tier: Tier = Tier.MEDIUM
     input_per_1m: float = 0.0                    # illustrative USD per million input tokens
@@ -412,7 +418,7 @@ def capability_gaps(profile: ModelProfile, need: Requirements) -> list[Gap]:
         gaps.append(Gap(capability="tools", detail="request carries tools; model has no tool calling"))
     if need.needs_vision and not profile.supports_vision:
         gaps.append(Gap(capability="vision", detail="request carries images; model is text-only"))
-    if need.data_zone and need.data_zone not in profile.data_zones and "any" not in profile.data_zones:
+    if need.data_zone and need.data_zone not in profile.data_zones:  # "any" never satisfies an explicit zone
         gaps.append(Gap(capability="data_zone",
                         detail=f"request must stay in {need.data_zone}; model runs in {list(profile.data_zones)}"))
     if need.needs_json_schema and not profile.supports_json_schema:
@@ -420,7 +426,7 @@ def capability_gaps(profile: ModelProfile, need: Requirements) -> list[Gap]:
         # (Chapter 6). The request still works, but its failure rate changes, so it is flagged.
         gaps.append(Gap(capability="json_schema", hard=False,
                         detail="no native schema mode; falls back to prompt+parse with repair"))
-    if need.reasoning_effort and profile.reasoning_efforts and need.reasoning_effort not in profile.reasoning_efforts:
+    if need.reasoning_effort and need.reasoning_effort not in profile.reasoning_efforts:
         gaps.append(Gap(capability="reasoning_effort", hard=False,
                         detail=f"effort {need.reasoning_effort!r} unsupported; model offers {list(profile.reasoning_efforts)}"))
     return gaps
@@ -502,6 +508,8 @@ __all__ = [
 ```
 
 ### The selection harness
+
+The harness runs every candidate on the same cases, scores each answer, and summarizes quality with a Wilson interval, latency percentiles, and cost. Look for how failures become scored zeros instead of crashes, and for the Pareto and paired-count helpers.
 
 ```python
 # path: book/projects/examples/ch07/selection.py
@@ -687,6 +695,8 @@ __all__ = [
 ```
 
 ### The router
+
+`route` does selection then capability filtering; `complete` executes the candidates; `_needs_escalation` is the cascade.
 
 ```python
 # path: book/projects/examples/ch07/router.py
@@ -1054,6 +1064,8 @@ __all__ = [
 
 ### Cascade evaluation
 
+The evaluator runs each model once per case, then replays every threshold offline. `_per_case` is where the utility formula above becomes code.
+
 ```python
 # path: book/projects/examples/ch07/cascade_eval.py
 """Offline evaluation of a two-stage confidence cascade.
@@ -1288,7 +1300,7 @@ __all__ = [
 
 `tasks.py` turns each ticket in `shared-data/tickets.jsonl` into an `EvalCase` holding the exact `CompletionRequest` a candidate receives (system prompt with the twelve allowed categories, a JSON schema for `{"category", "confidence"}`, `max_tokens=64`, and `metadata={"task": "classify_ticket"}`), plus the expected label. `score_label` returns 1.0 for an exact category match and 0.0 for anything else, including malformed output. `label_confidence` reads the confidence field and returns 0.0 for malformed output, so unparseable answers always escalate.
 
-`fakes.py` builds the two models as `FakeLLM(handler=...)` instances. The small model is a keyword scorer whose confidence comes from the margin between its top two categories: right on tickets that use the obvious words, unsure or wrong on tickets that mix topics. The large model returns the gold label except on a deterministic one-in-twenty subset. Both report fixed illustrative latencies. Both files are on disk in full. The tests below are the ones that demonstrate the chapter's claims; the full file has 35.
+`fakes.py` builds the models as `FakeLLM(handler=...)` instances. The small model is a keyword scorer whose confidence comes from the margin between its top two categories: right on tickets that use the obvious words, unsure or wrong on tickets that mix topics. The large model returns the gold label except on a deterministic hash-selected subset of roughly one in twenty (four of sixty here); the reasoning candidate is the same fake with a different subset and a longer latency. All three report fixed illustrative latencies. `tasks.py` and `fakes.py` are on disk in full. The tests below are the ones that demonstrate the chapter's claims; the full file has 36.
 
 ```python
 # path: book/projects/examples/ch07/test_ch07.py (excerpt; imports and fixtures omitted, full file on disk)
@@ -1401,21 +1413,25 @@ def test_online_router_matches_offline_simulation(catalog, gold, cases, pricing)
 
 **Degraded is a first-class outcome.** When escalation fails, the router returns the cheap answer with `degraded=True` and the caller decides: caveat, review queue, or retry. Raising would turn a quality problem into an availability problem.
 
-**The router checks what actually served the request.** `model_mismatch` compares `completion.model` with the pinned `model_id` of the alias that answered. It costs one string comparison and catches the most dangerous layering bug in this chapter: a capability-changing fallback configured inside a `ModelGateway`, below the router, where no capability check runs. `test_model_mismatch_below_the_router_is_detected` simulates exactly that. Alert on the attribute rather than raising, because the answer may be fine and the fix is configuration, not a failed request.
+**The router checks what actually served the request.** `model_mismatch` compares `completion.model` with the pinned `model_id` of the alias that answered. It costs one string comparison and catches a layering bug the capability check cannot see: a capability-changing fallback configured inside a `ModelGateway`, below the router, where no capability check runs. `test_model_mismatch_below_the_router_is_detected` simulates exactly that. Alert on the attribute rather than raising, because the answer may be fine and the fix is configuration, not a failed request.
 
 **A disabled cascade is still a cascade.** When a route's escalation target has a hard gap for this request (an image request on a route whose strong model is text-only), the router disables escalation and records why. It still runs the validator and confidence check on the answer, and marks a failing answer `degraded`, which `test_disabled_escalation_marks_low_confidence_answer_degraded` pins down. Otherwise the route's quality bar would silently not apply to exactly the requests that can least afford it.
 
-**The cascade evaluator separates collection from simulation.** `collect_outcomes` runs each model once per case. `simulate` applies a threshold to that table with no model calls, so `sweep` can evaluate every distinct confidence value as a threshold for the cost of two passes. `_per_case` is the only place utility is defined; the false-accept branch charges the share caught downstream for both model calls plus rework, which is how the warning about misroutes becomes a number. The final test, `test_online_router_matches_offline_simulation`, runs the real router over all sixty tickets and checks that its accuracy, escalation rate, and cost equal the offline prediction. Without that check, a sweep is a model of a router, not a measurement of one.
+**The cascade evaluator separates collection from simulation.** `collect_outcomes` runs each model once per case. `simulate` applies a threshold to that table with no model calls, so `sweep` can evaluate every distinct confidence value as a threshold for the cost of two passes. `_per_case` is the only place utility is defined; the false-accept branch charges the share caught downstream for both model calls plus rework, which is how the warning about misroutes becomes a number. The final test, `test_online_router_matches_offline_simulation`, runs the real router over all sixty tickets and checks that its accuracy, escalation rate, and cost equal the offline prediction.
 
 ## Production considerations
 
-**Latency.** A cascade's escalated path costs the cheap call plus the strong call, serially. In the sweep every cascade's p95 is the sum, 2,050 ms illustrative, though its mean is far below the large model's. If more than 5% of traffic escalates, the cascade's p95 exceeds the strong model's alone. Mitigations: stream the strong answer, put a tight timeout on the cheap stage, or send predicted-hard requests straight to the strong model. Route selection itself must be cheap: rules cost microseconds, an embedding classifier one cached embedding call, a model-as-router a full call per request.
+**Latency.** A cascade's escalated path costs the cheap call plus the strong call, serially. For every cascade in the sweep table, p95 is the sum, 2,050 ms illustrative, though its mean is far below the large model's. As a rule of thumb with steady latencies, once more than 5% of traffic escalates, the cascade's p95 exceeds the strong model's alone: p95 is the latency 95% of requests beat, so it lands on the two-stage path (2,050 ms against 1,800 ms). Mitigations: stream the strong answer, put a tight timeout on the cheap stage, or send predicted-hard requests straight to the strong model. Route selection itself must be cheap: rules cost microseconds, an embedding classifier one cached embedding call, a model-as-router a full call per request.
 
-**Cost.** Track spend per route, per serving model, and per escalation outcome, not only per tenant. The two numbers that explain a cost regression are the route mix (what share of traffic each route receives) and the escalation rate on cascade routes. A one-point rise in escalation on a high-volume route can cost more than a price change. Chapter 30 builds the cost model these numbers feed. Routing is also the natural place for budget enforcement: when a tenant or feature approaches its spend ceiling, a policy rule can move its traffic to a cheaper route (or a shorter context) and mark responses degraded, which is a better failure than a hard stop at the end of the month. Cap reasoning effort with a token ceiling per route, so the most expensive knob in the catalog has a bound.
+**Cost.** Track spend per route, per serving model, and per escalation outcome, not only per tenant. The two numbers that explain a cost regression are the route mix (what share of traffic each route receives) and the escalation rate on cascade routes. A one-point rise in escalation on a high-volume route can cost more than a price change. Chapter 30 builds the cost model these numbers feed. Cap reasoning effort with a token ceiling per route, so the most expensive knob in the catalog has a bound.
 
-**Security.** Policy rules read only metadata that application code sets after authentication: tenant, data zone, risk flag, task. A user cannot select a route by writing "this is high risk" in the prompt. Classifier and model-as-router strategies read user text, which makes them manipulable: a user who learns that complicated-sounding questions reach the reasoning model can drive up your cost, so cap spend per user and per route. The data-zone rule is first in the rule list and is a hard gap in the capability check, so even a misconfigured fallback list cannot send restricted data to a cloud model; `test_restricted_data_never_leaves_the_zone` verifies the router raises rather than leaking. Every model a route can reach is part of the request's trust boundary: a fallback provider with different retention terms is a data-processing decision.
+**Budget enforcement.** Routing is the natural place for it: when a tenant or feature approaches its spend ceiling, a policy rule can move its traffic to a cheaper route (or a shorter context) and mark responses degraded, which is a better failure than a hard stop at the end of the month.
 
-**Operations.** Log the route, stage, serving model and pinned version, attempts, escalation, degradation, and warnings on every request; these are span attributes in `aie_core` tracing (Chapter 31). Dashboard the route distribution and alert when it drifts, because a classifier whose input distribution shifts will silently move traffic between routes. Exercise fallbacks continuously, not only during incidents: send a small fraction of traffic through each fallback path, or run the selection harness against fallbacks nightly, so you discover a broken fallback before you need it. Under overload, routing is also admission control: sending traffic to a smaller model or a reduced context can serve everyone acceptably where the largest model would time out for many (Chapter 29).
+**Security.** Policy rules read only metadata that application code sets after authentication: tenant, data zone, risk flag, task. A user cannot select a route by writing "this is high risk" in the prompt. Classifier and model-as-router strategies read user text, which makes them manipulable: a user who learns that complicated-sounding questions reach the reasoning model can drive up your cost, so cap spend per user and per route. The data-zone rule is first in the rule list and is a hard gap in the capability check, and a model marked `any` never satisfies an explicit zone, so even a misconfigured fallback list or a catalog-wide substitution cannot send restricted data to a cloud model. Two tests verify the router raises rather than leaking: `test_restricted_data_never_leaves_the_zone` and `test_oversized_onprem_request_is_never_substituted_to_a_cloud_model`. Every model a route can reach is part of the request's trust boundary: a fallback provider with different retention terms is a data-processing decision.
+
+**Operations.** Log the route, stage, serving model and pinned version, attempts, escalation, degradation, and warnings on every request; these are span attributes in `aie_core` tracing (Chapter 31). Dashboard the route distribution and alert when it drifts, because a classifier whose input distribution shifts will silently move traffic between routes.
+
+Exercise fallbacks continuously, not only during incidents: send a small fraction of traffic through each fallback path, or run the selection harness against fallbacks nightly, so you discover a broken fallback before you need it. Under overload, routing is also admission control: sending traffic to a smaller model or a reduced context can serve everyone acceptably where the largest model would time out for many (Chapter 29).
 
 **What to measure and alert on.** Every signal below comes from the router's span attributes and result fields, aggregated per route and per serving alias. Baselines and thresholds are illustrative; set yours from a few weeks of your own traffic.
 
@@ -1443,7 +1459,7 @@ Two of these deserve a dashboard of their own: escalation rate next to cost per 
 - **Trusting self-reported confidence without measuring calibration.** Bin it, compute the gap, and count the confident errors that no threshold can catch.
 - **Calling floating model names.** Behavior changes without a deploy, and traces cannot tie a regression to a version.
 - **Comparing candidates on point estimates from small sets.** Sixty cases give intervals around fifteen points wide. Use lower bounds and paired counts.
-- **Testing the cascade only offline.** If the live router does not reproduce the simulated numbers, the sweep is fiction. Check them against each other.
+- **Testing the cascade only offline.** If the live router does not reproduce the simulated numbers, the sweep's numbers are untested. Check them against each other.
 - **Escalating twice.** When the fallback is the escalation target, a naive cascade pays the strong model again for the same answer.
 
 ## Failure modes
@@ -1474,7 +1490,7 @@ Two of these deserve a dashboard of their own: escalation rate next to cost per 
 
 **Predictive routing versus cascades.** Predicting difficulty from the input avoids paying for a cheap attempt on hard requests and keeps the latency tail tight, but input features are a weak signal of difficulty. Cascades see the attempt, which is a stronger signal, but every escalation pays twice. Many systems use both: rules and a classifier send the obviously hard traffic straight to the strong model, and a cascade handles the uncertain middle.
 
-**Cost versus quality on the hard slice.** Every routing configuration is a point on a curve. Moving right on cost buys quality where errors are expensive. The utility function is where product owners, not engineers, set the exchange rate between a cent of spend and a wrong answer.
+**Cost versus quality on the hard slice.** Every routing configuration is a point on a curve of cost against hard-slice quality, and spending more buys quality where errors are expensive. The utility function is where product owners, not engineers, set the exchange rate between a cent of spend and a wrong answer.
 
 **Provider diversity versus behavioral consistency.** A second provider improves availability but changes refusal patterns, prompt sensitivity, and structured-output reliability. Each fallback needs its own evaluation, and for regulated workloads some teams accept lower availability rather than inconsistent answers.
 
@@ -1492,7 +1508,7 @@ Test the router at four levels.
 
 **Cascade evaluation.** Collect outcomes once, sweep thresholds, choose by utility with the product's error prices, and keep the calibration table. Re-run when either model, the prompt, or the confidence signal changes. Report the false-accept and false-escalation rates next to utility so a reviewer can see why a threshold was chosen.
 
-**Online consistency and monitoring.** Check that the live router reproduces the offline prediction on the same set, as the last test does. In production, sample routed requests for labeling per route, compare each route's live quality with its offline number, and evaluate each route separately: a global quality metric averages a healthy general route with a failing cascade. Shadow evaluation, sending a sample of traffic to a candidate configuration without serving its answers, is the safest way to measure a new threshold or a new pin on real traffic before switching.
+**Online consistency and monitoring.** Check that the live router reproduces the offline prediction on the same set, as the last test does. In production, sample routed requests for labeling per route, compare each route's live quality with its offline number, and evaluate each route separately: a global quality metric averages a healthy general route with a failing cascade. Shadow evaluation (see the migration procedure) is the safest way to measure a new threshold or a new pin on real traffic before switching.
 
 ## Exercises
 

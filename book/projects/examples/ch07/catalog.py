@@ -39,7 +39,7 @@ class ModelProfile(BaseModel):
     supports_json_schema: bool = False           # native schema-constrained output
     supports_vision: bool = False
     reasoning_efforts: tuple[str, ...] = ()      # e.g. ("low", "medium", "high"); empty = no knob
-    data_zones: tuple[str, ...] = ("any",)       # where inference may run, e.g. ("eu",), ("onprem",)
+    data_zones: tuple[str, ...] = ("any",)       # where inference runs, e.g. ("eu",); "any" = no residency guarantee
     cost_tier: Tier = Tier.MEDIUM
     latency_tier: Tier = Tier.MEDIUM
     input_per_1m: float = 0.0                    # illustrative USD per million input tokens
@@ -106,7 +106,7 @@ def capability_gaps(profile: ModelProfile, need: Requirements) -> list[Gap]:
         gaps.append(Gap(capability="tools", detail="request carries tools; model has no tool calling"))
     if need.needs_vision and not profile.supports_vision:
         gaps.append(Gap(capability="vision", detail="request carries images; model is text-only"))
-    if need.data_zone and need.data_zone not in profile.data_zones and "any" not in profile.data_zones:
+    if need.data_zone and need.data_zone not in profile.data_zones:  # "any" never satisfies an explicit zone
         gaps.append(Gap(capability="data_zone",
                         detail=f"request must stay in {need.data_zone}; model runs in {list(profile.data_zones)}"))
     if need.needs_json_schema and not profile.supports_json_schema:
@@ -114,7 +114,7 @@ def capability_gaps(profile: ModelProfile, need: Requirements) -> list[Gap]:
         # (Chapter 6). The request still works, but its failure rate changes, so it is flagged.
         gaps.append(Gap(capability="json_schema", hard=False,
                         detail="no native schema mode; falls back to prompt+parse with repair"))
-    if need.reasoning_effort and profile.reasoning_efforts and need.reasoning_effort not in profile.reasoning_efforts:
+    if need.reasoning_effort and need.reasoning_effort not in profile.reasoning_efforts:
         gaps.append(Gap(capability="reasoning_effort", hard=False,
                         detail=f"effort {need.reasoning_effort!r} unsupported; model offers {list(profile.reasoning_efforts)}"))
     return gaps

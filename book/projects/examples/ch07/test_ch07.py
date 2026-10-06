@@ -98,7 +98,7 @@ def test_hard_and_soft_gaps(catalog):
 def test_data_zone_gap(catalog):
     assert not is_compatible(catalog.get("nw-general"), Requirements(data_zone="onprem"))
     assert is_compatible(catalog.get("nw-small"), Requirements(data_zone="onprem"))
-    assert is_compatible(catalog.get("nw-longctx"), Requirements(data_zone="onprem"))  # "any" zone
+    assert not is_compatible(catalog.get("nw-longctx"), Requirements(data_zone="onprem"))  # "any" is no guarantee
 
 
 def test_compatible_is_cheapest_first(catalog):
@@ -312,6 +312,13 @@ def test_restricted_data_never_leaves_the_zone(catalog, gold):
         make_router(catalog, gold).route(req)
     ok = req.model_copy(update={"tools": None})
     assert make_router(catalog, gold).route(ok).candidates == ["nw-small"]
+
+
+def test_oversized_onprem_request_is_never_substituted_to_a_cloud_model(catalog, gold):
+    big = CompletionRequest(messages=[Message.user("payroll line. " * 20_000)],
+                            metadata={"data_zone": "onprem"})
+    with pytest.raises(NoCompatibleModelError):   # nw-small's window is too small; nothing else is on-prem
+        make_router(catalog, gold).route(big)
 
 
 def test_high_risk_gets_reasoning_effort_and_toolless_models_do_not(catalog, gold):

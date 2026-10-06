@@ -16,8 +16,11 @@ Ordering guards (sequence numbers from the registry):
 - an upsert older than the version already indexed is skipped (no regression by a slow retry);
 - a purge older than a later re-creation is skipped (an intentional re-upload wins).
 
-The registry write is the commit point: indexes are written first, the registry last, so a
-crash in between leaves the registry describing the old state and the retry redoes the work.
+The registry write is the commit point: indexes are written first, then the BM25 snapshot is
+published, the registry last, so a crash in between leaves the registry describing the old
+state and the retry redoes the work. Publishing the snapshot before the generation bump means
+an API replica that sees the new generation can always load the new BM25; the reverse order
+would let it cache old content under the new stamp.
 """
 from __future__ import annotations
 
@@ -148,12 +151,12 @@ class IngestHandlers:
             authority=int(meta.get("authority", 1)), effective_date=meta.get("effective_date"),
             supersedes=list(meta.get("supersedes") or []),
         )
+        d.index_set.save_snapshots()  # before the commit: replicas never see a generation without its BM25
         d.registry.put(new_rec)  # commit point
         scopes = generation_scopes(doc.tenant) + (generation_scopes(rec.tenant) if rec else [])
         d.registry.bump(scopes)
         for cache in d.caches:
             cache.invalidate_docs([doc.id])
-        d.index_set.save_snapshots()
         return IngestOutcome(doc_id=doc.id, change="reindex" if p.reason == "reindex" and same_content else change,
                              added=len(diff.added), unchanged=len(diff.unchanged), removed=len(diff.removed),
                              reembedded=reembedded, versions=versions, freshness_lag_s=new_rec.freshness_lag_s)
@@ -184,13 +187,13 @@ class IngestHandlers:
             for key in rec.context_keys.values():
                 contexts += d.context_cache.pop(key, None) is not None
         cache_entries = sum(c.invalidate_docs([p.doc_id]) for c in d.caches)
+        d.index_set.save_snapshots()
         if rec is not None:
             rec = rec.model_copy(update={"status": "deleted", "purged_at": now(), "chunk_ids": [],
                                          "context_keys": {}, "index_versions": [],
                                          "deleted_seq": max(rec.deleted_seq or 0, p.seq)})
             d.registry.put(rec)
             d.registry.bump(generation_scopes(rec.tenant))
-        d.index_set.save_snapshots()
         return {"doc_id": p.doc_id, "purged": True, "indexes": removed, "vectors_forgotten": vectors_forgotten,
                 "blobs": blobs, "context_prefixes": contexts, "cache_entries": cache_entries}
 

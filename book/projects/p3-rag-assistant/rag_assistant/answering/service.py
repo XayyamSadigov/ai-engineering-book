@@ -154,8 +154,9 @@ class AnswerService:
                 yield "done", {"request_id": rid, "mode": "answer", "status": "insufficient_evidence",
                                "action": "abstain", "text": early.user_message}
                 return
-            if not self._can_generate(prep):
-                out = self._sources_only(prep, packed, reason="generate:budget")
+            blocked = self._generation_blocked(prep)
+            if blocked:
+                out = self._sources_only(prep, packed, reason=blocked)
                 yield "done", out.response.model_dump(mode="json")
                 return
             ctx = guard_context(principal, rid)
@@ -206,9 +207,10 @@ class AnswerService:
         if prep.early is not None:
             return prep.early
         packed: PackedEvidence | None = None
-        if not self._can_generate(prep):
+        blocked = self._generation_blocked(prep)
+        if blocked:
             packed = self.qa.packer.pack(prep.hits, principal)
-            return self._sources_only(prep, packed, reason="generate:budget")
+            return self._sources_only(prep, packed, reason=blocked)
         try:
             with prep.deadline.scope(), _Clock(prep.timings, "generate"):
                 qa = self.qa.answer(prep.question, prep.hits, principal, request_id=rid)
@@ -250,10 +252,12 @@ class AnswerService:
                                     security_events=[f"input_blocked:{verdict.blocked_by}"])
             return prep
 
-        with _Clock(timings, "refresh"):
-            self._refresh_view()
+        # Stamp first, then load snapshots: the worker publishes a snapshot before bumping the
+        # generation, so the indexes read here are never older than the stamp cached results carry.
         prep.version = self.index_set.active_version
         prep.gens = self.registry.generations(principal_scopes(principal))
+        with _Clock(timings, "refresh"):
+            self._refresh_view()
 
         if use_answer_cache and self.s.answer_cache and level == 0:
             with _Clock(timings, "answer_cache"):
@@ -272,7 +276,8 @@ class AnswerService:
             self.metrics.inc("rag_cache_lookups_total", cache="retrieval", result="hit" if result else "miss")
             prep.cache = "hit" if result is not None else "miss"
         if result is None:
-            hidden = frozenset(r.doc_id for r in self.registry.all("deleting"))
+            # every non-active status: a replica's BM25 snapshot may still hold a purged ("deleted") doc
+            hidden = frozenset(r.doc_id for r in self.registry.all() if r.status != "active")
             pipeline = build_pipeline(self.index_set, principal, self.s, breakers=self.breakers, hidden=hidden,
                                       degrade_level=level, tracer=self.tracer, version=prep.version,
                                       executor=self._executor)
@@ -344,17 +349,15 @@ class AnswerService:
             kept.append(h)
         return kept
 
-    def _can_generate(self, prep: _Prepared) -> bool:
+    def _generation_blocked(self, prep: _Prepared) -> str | None:
+        """The degraded reason that rules out generation, or None (_sources_only records it)."""
         if prep.degrade_level >= 2:
-            prep.degraded.append("generate:shed")
-            return False
+            return "generate:shed"
         if not prep.deadline.fits(self.s.min_generation_s):
-            prep.degraded.append("generate:deadline")
-            return False
+            return "generate:deadline"
         if self.breakers.get("llm").state is CircuitState.OPEN:  # fail fast: do not wait for a timeout
-            prep.degraded.append("generate:breaker_open")
-            return False
-        return True
+            return "generate:breaker_open"
+        return None
 
     def _guard_output(self, qa: QAResult, prep: _Prepared) -> AnswerEnvelope:
         env = qa.envelope

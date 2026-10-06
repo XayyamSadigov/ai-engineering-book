@@ -1,6 +1,6 @@
 # Chapter 15 — Production RAG
 
-This chapter turns the RAG components from Chapters 10 to 14 into a service that keeps working after the demo. You will learn to run indexing as a pipeline of idempotent jobs. You will update documents incrementally, and delete them so that no copy survives in any index, cache, or derived store. You will put authority and supersession metadata on chunks so that a current policy outranks an old FAQ, and enforce permissions at retrieval time. You will choose between per-tenant namespaces and a shared index, key every cache on the variables that change its answer, and give every stage a span, a metric, and a latency budget. Finally, you will define what the service does when the vector store, the reranker, or the model is down, and gate releases on an evaluation that fails on a single permission leak. The code is **Project 3**, the Northwind Assist knowledge service at `book/projects/p3-rag-assistant/` (package `rag_assistant`). It is a FastAPI service and an ingestion worker over PostgreSQL with pgvector and Redis, assembled from `ragkit`, `semsearch`, `guardrails`, `reliability`, `evalkit` and `aie_core`. It ships with Docker Compose and 50 offline tests.
+This chapter turns the RAG components from Chapters 10 to 14 into a service that keeps working after the demo. You will learn to run indexing as a pipeline of idempotent jobs. You will update documents incrementally, and delete them so that no copy survives in any index, cache, or derived store. You will put authority and supersession metadata on chunks so that a current policy outranks an old FAQ, and enforce permissions at retrieval time. You will choose between per-tenant namespaces and a shared index, key every cache on the variables that change its answer, and give every stage a span, a metric, and a latency budget. Finally, you will define what the service does when the vector store, the reranker, or the model is down, and gate releases on an evaluation that fails on a single permission leak. The code is **Project 3**, the Northwind Assist knowledge service at `book/projects/p3-rag-assistant/` (package `rag_assistant`). It is a FastAPI service and an ingestion worker over PostgreSQL with pgvector and Redis, assembled from `ragkit`, `semsearch`, `guardrails`, `reliability`, `evalkit` and `aie_core`. It ships with Docker Compose and 55 offline tests.
 
 ## Why this matters
 
@@ -11,7 +11,7 @@ Northwind's first RAG release was a notebook promoted to a container. A script r
 3. **The stale policy.** PTO Policy 3.0 raised carryover from 5 to 10 days. Retrieval kept ranking the HR FAQ above the policy, because the FAQ's wording was closer to how employees ask, and the FAQ still said 5. This is the failure Chapter 14's gold set calls RQ-001. It also turned out to be an ingestion problem, not a ranking problem.
 4. **The 40-minute brownout.** The vector database was overloaded during a reindex. Every request waited for a ten-second timeout on dense retrieval and then failed. BM25 was healthy the whole time and could have answered most questions.
 
-Every one of these is a property of the system around retrieval and generation: how documents enter and leave, who may see what, what a cache key contains, and what happens when a dependency fails. Chapters 11 to 14 built good components. This chapter is about the joints between them, which is where production RAG systems actually fail.
+Every one of these is a property of the system around retrieval and generation: how documents enter and leave, who may see what, what a cache key contains, and what happens when a dependency fails. Chapters 11 to 14 built good components. This chapter is about the joints between them.
 
 ## Mental model
 
@@ -23,6 +23,8 @@ A production RAG system has one system of record for documents. That record hold
 - What key tells a projection that it is stale?
 - What stops an old copy from coming back?
 
+Follow one edit through the system: the producer enqueues a pointer, a worker re-reads the source, re-embeds only the changed chunk, commits the registry, and bumps a generation counter so cached answers miss. Follow one delete: the API request marks the row `deleting` and bumps the generation, and a queued purge removes every copy. The rest of this section explains each step.
+
 The second mental model comes from the book's list and applies to every request: **the model is not the authorization system.** A document the principal cannot read must never enter the candidate list, the prompt, a trace visible to the user, or a cache another principal can hit. Permissions are applied before scoring and checked again before packing. Nothing is filtered after generation, because by then the model has already read the forbidden text.
 
 ## Core concepts
@@ -31,15 +33,15 @@ The second mental model comes from the book's list and applies to every request:
 
 The notebook approach, "rebuild everything nightly", has three costs. It burns embedding spend on unchanged text. It makes freshness a function of the cron schedule. And it has no concept of deletion: whatever is in the source tonight is the index tomorrow, including things that should have been removed. Production indexing is a stream of small jobs, one per document change. A producer enqueues them and workers process them.
 
-The **producer** (`IngestionService`) never writes an index. It reads a source item, parses it far enough to learn the document id, tenant, ACL and content hash, and rejects invalid documents early. A document without ACL metadata gets a 422 at upload, not a dead letter an hour later. The producer then enqueues a job with an idempotency key. The **queue** is `reliability.JobQueue` from Chapter 29: `InMemoryJobQueue` in tests, `RedisJobQueue` in Compose. It gives leases, bounded attempts, backoff, and a dead-letter set. The **worker** is `reliability.Worker` with two handlers, `ingest.upsert` and `ingest.purge`.
+The **producer** (`IngestionService`) never writes an index. It reads a source item, parses it far enough to learn the document id, tenant, ACL and content hash, and rejects invalid documents early. A document without ACL metadata gets a 422 at upload, not a dead letter an hour later. The producer then enqueues a job with an idempotency key. The **queue** is `reliability.JobQueue` from Chapter 29: `InMemoryJobQueue` in tests, `RedisJobQueue` in Compose. It gives leases, bounded attempts, backoff, and a dead-letter queue (DLQ). The **worker** is `reliability.Worker` with two handlers, `ingest.upsert` and `ingest.purge`.
 
 The queue carries pointers, not documents. A job says "folder connector, `pto-policy.md`" or "blob connector, `hr-sabbatical-policy/3f2c….md`". The worker re-reads the source when it runs. A job that waited behind a backlog indexes what the source holds now. A retried job never indexes a stale payload. Pointers also keep the queue small: a 40 MB PDF does not travel through Redis.
 
-**Idempotency** works at two levels, because the queue delivers at least once. At enqueue time, the key is document id plus fingerprint plus target versions plus the tombstone sequence. Resubmitting unchanged content returns the existing job, so a full sync of 24 unchanged documents creates zero jobs. At processing time, the handler compares the document fingerprint and target versions with the registry and does nothing when they match. Every index write is "replace everything this index holds for document X". A handler that crashes between the BM25 write and the vector write, and is then redelivered, converges to the same state.
+**Idempotency** works at two levels, because the queue delivers at least once. At enqueue time, the key is document id plus fingerprint plus the sequence number at which that fingerprint last became new, plus target versions and the tombstone sequence. Resubmitting unchanged content returns the existing job, so a full sync of 24 unchanged documents creates zero jobs. A revert (content A, then B, then A again, or an ACL changed and changed back) gets a new sequence and therefore a new job. At processing time, the handler compares the document fingerprint and target versions with the registry and does nothing when they match. Every index write is "replace everything this index holds for document X". A handler that crashes between the BM25 write and the vector write, and is then redelivered, converges to the same state.
 
 The **fingerprint** matters more than it looks. The obvious idempotency key is the content hash, and it is wrong. When a document's ACL changes from `["all"]` to `["hr"]`, its text, and therefore its content hash, are unchanged. A content-hash key would deduplicate the change away, and the document would stay visible to everyone. The fingerprint covers everything that changes what the indexes hold: content hash, version, tenant, ACL groups, authority metadata, chunker configuration, authority-rules version, pipeline version, and whether contextual enrichment is on. A new chunker or a new rule re-ingests exactly the documents it affects.
 
-**Index versions** separate "what we serve" from "what we are building". The vector namespace is `index:model:version` (Chapter 9's `make_namespace`). Two embedding models, or two chunking runs, never share a search space. A version is the unit of a blue/green rebuild. The registry records which versions hold each document. Retrieval always reads the active version, and promotion is a single registry write.
+**Index versions** separate "what we serve" from "what we are building". The vector namespace is `index:model:version` (Chapter 9's `make_namespace`). Two embedding models, or two chunking runs, never share a search space. A version is the unit of a blue/green rebuild: build version N+1 next to the live version N, then switch reads to it in one step. The registry records which versions hold each document. Retrieval always reads the active version, and promotion is a single registry write.
 
 ### Incremental updates
 
@@ -56,22 +58,22 @@ Deletion has two parts with different deadlines. The **logical delete** must tak
 `IngestionService.delete` does the logical part synchronously:
 
 - It sets the registry row to `status="deleting"` with a new `deleted_seq`.
-- It bumps the generation counter of the document's tenant scope, which invalidates every scoped cache entry for readers of that scope.
+- It bumps the generation counter of the document's tenant scope (an integer per scope, incremented on every committed change; see Caching layers), which invalidates every scoped cache entry for readers of that scope.
 - It physically removes cache entries tagged with the document.
 - It enqueues a purge job.
 
-Until the purge runs, `TombstoneFilter` drops hits from documents in the `deleting` state. The purge handler then deletes the document from every index version and partition, from the embedding cache (vectors are derived data and can be partially inverted), from the contextual-prefix cache, from the blob store, and from every request cache. It marks the row `deleted`.
+Until the purge runs, and until every replica has loaded the purged indexes, `TombstoneFilter` drops hits from every document whose state is not `active`. The purge handler then deletes the document from every index version and partition (per-tenant sub-index, see Multi-tenancy), from the embedding cache (vectors are derived data and can be partially inverted), from the contextual-prefix cache, from the blob store, and from every request cache. It marks the row `deleted`.
 
-The row is kept. The **tombstone** is what prevents resurrection, and the Northwind memo incident shows that resurrection is the normal failure, not an edge case. A document comes back through four paths, and each needs its own guard:
+The row is kept. The **tombstone** is what prevents resurrection, and the Northwind memo incident shows that resurrection is the normal failure. A document comes back through four paths, and each needs its own guard:
 
 | Path back | Guard |
 |---|---|
 | A stale upsert job, planned before the delete and delivered after it | the job's `seq` is older than `deleted_seq`, so the handler returns `skipped_tombstone` |
 | A folder sync that still sees the file | `submit_uri` refuses tombstoned ids, so the tombstone acts as a suppression list |
-| An old BM25 snapshot or a restored backup | `IndexSet.reconcile()` removes anything the registry does not list as active |
+| An old BM25 snapshot or a restored backup | `IndexSet.reconcile()` removes anything the registry lists as deleting or deleted |
 | A purge that crashed halfway | the purge is idempotent and re-runs; reconciliation is the backstop |
 
-Re-adding a deleted document is allowed, but it must be explicit. An admin upload carries the new tombstone sequence in its idempotency key. Without that, the queue would return the old, already-succeeded job for the same content, and the re-upload would silently do nothing. That bug is easy to write and hard to see.
+Re-adding a deleted document is allowed, but it must be explicit. An admin upload carries the new tombstone sequence in its idempotency key. Without that, the queue would return the old, already-succeeded job for the same content, and the re-upload would silently do nothing.
 
 ```mermaid
 stateDiagram-v2
@@ -135,7 +137,9 @@ Northwind has two tenants, `retail` and `logistics`, plus `shared` content that 
 
 Northwind's tenants are business units of one company, so the shared index is the default. A SaaS product selling to banks would start with namespaces, or with separate databases.
 
-**Noisy neighbors** appear on both paths. On the request path, one tenant's batch script can consume the replica's model concurrency. `reliability.AdmissionController` gives each tenant a token bucket. The API returns 429 with `Retry-After` when a tenant exhausts its quota, while other tenants keep their capacity (`test_tenant_quota_returns_429`). Under global load it degrades admissions before rejecting them: level 1 skips the reranker and halves candidate counts, and level 2 returns sources without generation. On the ingestion path, a tenant that bulk-uploads 50,000 documents can push every other tenant's freshness past its SLO. FIFO queues cannot express fairness. The fixes are per-tenant queues with weighted round-robin leasing, or a per-tenant cap on in-flight jobs. The job model already carries `tenant_id` for exactly this.
+**Noisy neighbors** appear on both paths. On the request path, one tenant's batch script can consume the replica's model concurrency. `reliability.AdmissionController` gives each tenant a token bucket. The API returns 429 with `Retry-After` when a tenant exhausts its quota, while other tenants keep their capacity (`test_tenant_quota_returns_429`). Under global load it degrades admissions before rejecting them, through admission levels (how far the service sheds work under load): level 1 skips the reranker and halves candidate counts, and level 2 returns sources without generation.
+
+On the ingestion path, a tenant that bulk-uploads 50,000 documents can push every other tenant's freshness past its SLO. FIFO queues cannot express fairness. The fixes are per-tenant queues with weighted round-robin leasing, or a per-tenant cap on in-flight jobs. The job model already carries `tenant_id` for exactly this.
 
 ### Caching layers and their keys
 
@@ -147,19 +151,23 @@ There are three caches on the path, each with its own key discipline. Chapter 30
 | Retrieval results | tenant + groups (scoped) + normalized query + index version + generations of readable scopes + funnel config | no | generation bump, TTL, document tag purge |
 | Answers | everything in the retrieval key + prompt version + model + guardrail policy version | no | as above, plus prompt/model change (new key) |
 
-The embedding cache key comes from `aie_core.CachedEmbeddings`. It hashes the provider, model, dimensions, instruction prefix and text-preparation version into a **space fingerprint**. Changing the model or the "query: " prefix invalidates the cache instead of mixing vector spaces. Plenty of caches in the wild key on text alone, which mixes vectors from incompatible spaces. `ForgettableEmbeddings` adds the one thing deletion needs: a per-document index of keys, stored in the same Redis map, so a purge can forget the document's vectors.
+The embedding cache key comes from `aie_core.CachedEmbeddings`. It hashes the provider, model, dimensions, instruction prefix and text-preparation version into a **space fingerprint**. Changing the model or the "query: " prefix invalidates the cache instead of mixing vector spaces. `ForgettableEmbeddings` adds the one thing deletion needs: a per-document index of keys, stored in the same Redis map, so a purge can forget the document's vectors.
 
-The retrieval and answer caches are `ScopedCache`, a subclass of `guardrails.TenantScopedCache`. Its key comes from `scoped_cache_key` over the caller's tenant and sorted groups. Two principals who could see different documents can never share an entry, and on read the cache re-checks that the stored authorization context equals the caller's. A forged or colliding key raises `TenantIsolationError` instead of returning data. The key also includes the **index version** and the **generation counters** of every scope the principal can read. A retail employee depends on `gen[retail]` and `gen[shared]`. Any committed change to a retail or shared document bumps one of them, so every older entry becomes unreachable for new lookups at once, on every API replica, because the counters live in the shared registry. Replicas also sweep unreachable entries when they notice the generations moved, so stale data does not sit in memory until its TTL. Entries carry document tags, so a delete physically removes every entry that contains the document.
+The retrieval and answer caches are `ScopedCache`, a subclass of `guardrails.TenantScopedCache`. Its key comes from `scoped_cache_key` over the caller's tenant and sorted groups. Two principals who could see different documents can never share an entry, and on read the cache re-checks that the stored authorization context equals the caller's. A forged or colliding key raises `TenantIsolationError` instead of returning data.
+
+That settles who may share an entry. Generations settle when an entry goes stale. The key also includes the **index version** and the **generation counters** of every scope the principal can read. A retail employee depends on `gen[retail]` and `gen[shared]`. Any committed change to a retail or shared document bumps one of them, so every older entry becomes unreachable for new lookups at once, on every API replica, because the counters live in the shared registry. Replicas also sweep unreachable entries when they notice the generations moved, so stale data does not sit in memory until its TTL. Entries carry document tags, so a delete physically removes every entry that contains the document.
 
 Generations are deliberately coarse. A change to any shared document invalidates every cached answer for every tenant. On a corpus that changes a few times an hour that costs little hit rate and buys a simple correctness argument. On a corpus that changes every second, coarse generations reduce the hit rate to zero. Then you need per-document dependency tracking: invalidate only entries whose tags include the changed document, and also entries for queries the new document might now win. The second half is the hard part, and it is why the fine-grained scheme is rarely worth it.
 
-TTLs add a freshness bound on top of generations. They catch the failures generations cannot see, such as a source edited without anyone running a sync. The defaults are illustrative: retrieval results live 5 minutes and answers live 10. A cache that returns a fast stale answer is still returning a wrong answer.
+TTLs add a freshness bound on top of generations. They catch the failures generations cannot see, such as a source edited without anyone running a sync. The defaults are illustrative: retrieval results live 5 minutes and answers live 10.
 
 Some results are not cached at all. A **degraded** retrieval result, for example lexical-only because the vector store was down, would pin lower quality for its TTL after the store recovers. Abstentions and escalations are not cached either, because the next ingestion might answer them. Streaming answers bypass the answer cache in this implementation. A semantic cache, which reuses answers for similar rather than identical questions, needs every key component above plus a similarity threshold validated against the gold set. Chapter 30 builds one and shows why its false-hit rate must be measured per tenant.
 
 ### Observability of each stage
 
-The tracer is one `aie_core` tracer per container, passed to every component, and every request produces one span tree. The root span `rag.request` carries `request.id`, `tenant.id`, `user.id`, the mode, the cache result, the index version, and the degraded list. Below it sit `guardrail.input`, `retrieval.pipeline` with `retrieval.retrieve`, `retrieval.fusion` and `retrieval.rerank` written by ragkit, then `rag.answer`, `rag.generate`, and `guardrail.output`. Ingestion produces `job.process`, then `ingest.upsert` or `ingest.purge`, tagged with the change kind and the added and removed chunk counts. `RetrievalPipeline` runs retrievers in a thread pool, and tracing context lives in context variables, which threads do not inherit. The pipeline therefore submits every job through `contextvars.copy_context().run`, so `retrieval.retrieve` spans, and any spans the retrievers open (an embedding call through the gateway), stay children of `retrieval.pipeline` in the request's trace. The same holds for Chapter 31's `AITracer`. Code that adds its own thread or process pools inside a request has to do the same, or its spans start new traces.
+The tracer is one `aie_core` tracer per container, passed to every component, and every request produces one span tree. The root span `rag.request` carries `request.id`, `tenant.id`, `user.id`, the mode, the cache result, the index version, and the degraded list. Below it sit `guardrail.check` spans (with a `guardrail.stage` attribute of input, context, or output), `retrieval.pipeline` with `retrieval.retrieve`, `retrieval.fusion` and `retrieval.rerank` written by ragkit, then `rag.answer` and `rag.generate`. Ingestion produces `job.process`, then `ingest.upsert` or `ingest.purge`, tagged with the change kind and the added and removed chunk counts.
+
+One trap: `RetrievalPipeline` runs retrievers in a thread pool, and tracing context lives in context variables, which threads do not inherit. The pipeline therefore submits every job through `contextvars.copy_context().run`, so `retrieval.retrieve` spans, and any spans the retrievers open (an embedding call through the gateway), stay children of `retrieval.pipeline` in the request's trace. The same holds for Chapter 31's `AITracer`. Code that adds its own thread or process pools inside a request has to do the same, or its spans start new traces.
 
 Traces explain one request. Metrics show the population. `observability/metrics.py` keeps labeled counters and distributions and renders Prometheus text at `/metrics`:
 
@@ -169,7 +177,7 @@ Traces explain one request. Metrics show the population. `observability/metrics.
 - `rag_security_events_total{kind}` for flagged context, output redactions, and ACL violations.
 - `rag_ingest_jobs_total{change}` and `rag_freshness_lag_s`.
 
-**Freshness lag** is the metric teams forget. It is the time from the moment a change was observed (`submitted_at`, stamped by the producer) to the moment it became searchable (`indexed_at`, stamped at the registry commit). `GET /v1/index/status` reports its p95 and maximum against the freshness SLO, together with queue depth, dead letters, the age of the oldest pending purge, and breaker states. Freshness is one of the service's dependencies. When it degrades, users get stale answers without any error.
+**Freshness lag** is easy to omit because nothing errors when it grows. It is the time from the moment a change was observed (`submitted_at`, stamped by the producer) to the moment it became searchable (`indexed_at`, stamped at the registry commit). `GET /v1/index/status` reports its p95 and maximum against the freshness SLO, together with queue depth, dead letters, the age of the oldest pending purge, and breaker states. Freshness is one of the service's dependencies. When it degrades, users get stale answers without any error.
 
 ### Cost and latency budgets
 
@@ -188,9 +196,9 @@ Northwind's target is p95 time-to-first-token under 2 seconds and p95 completion
 | first complete sentence (safe streaming buffer) | 400 | Chapter 13: the first visible token is the first validated sentence |
 | **time to first visible text** | **about 1,800** | 200 ms headroom under the 2 s target |
 
-The retrieval rows are enforced, not just written down. `RetrievalPipeline` takes `retrieve_timeout_s` and `rerank_timeout_s` (`RAG_RETRIEVE_TIMEOUT_S` 0.3 s and `RAG_RERANK_TIMEOUT_S` 0.25 s, illustrative), and the service passes it one shared thread pool. A retriever that misses its budget is recorded as degraded and skipped, exactly like a failed one. A reranker that misses its budget leaves the fused order. pgvector reads also carry a server-side `statement_timeout` (`RAG_PG_STATEMENT_TIMEOUT_MS`), so an abandoned query does not keep consuming the database. A breaker handles a dependency that is down. A timeout handles one that is slow, which is the more common failure.
+The retrieval rows are enforced, not just written down. `RetrievalPipeline` enforces `retrieve_timeout_s` (`RAG_RETRIEVE_TIMEOUT_S`, 0.3 s, illustrative) with one shared thread pool, and `RAG_RERANK_TIMEOUT_S` (0.25 s) goes to `AuthorityReranker`. A retriever that misses its budget is recorded as degraded and skipped, exactly like a failed one. A relevance reranker that misses its budget leaves the fused order, and `AuthorityReranker` still applies authority and supersession to it, because it enforces the reranker's deadline itself. pgvector reads also carry a server-side `statement_timeout` (`RAG_PG_STATEMENT_TIMEOUT_MS`), so an abandoned query does not keep consuming the database. A breaker handles a dependency that is down. A timeout handles one that is slow, which is the more common failure.
 
-The request deadline (`RAG_REQUEST_DEADLINE_S`, 8 s) is a `reliability.Deadline`. `DeadlineBoundLLM` stamps the remaining budget on every model request, so a call that starts late gets a short timeout instead of the provider default. If less than `RAG_MIN_GENERATION_S` remains when packing finishes, the service returns sources without an answer. A late answer is worse than a fast list of documents.
+The request deadline (`RAG_REQUEST_DEADLINE_S`, 8 s) is a `reliability.Deadline`. `DeadlineBoundLLM` stamps the remaining budget on every model request, so a call that starts late gets a short timeout instead of the provider default. If less than `RAG_MIN_GENERATION_S` remains when packing finishes, the service returns sources without an answer, so the user gets the evidence instead of a timeout.
 
 **Cost per answer** is dominated by generation input tokens. An evidence budget of 2,500 tokens, about 500 tokens of system prompt and question, and 300 output tokens give 3,000 input and 300 output tokens. At illustrative prices of `p_in` and `p_out` per million tokens, that is `0.003·p_in + 0.0003·p_out` dollars. Query embedding and reranking are two or three orders of magnitude smaller. Per-tenant request quotas bound volume, not spend; a tenant whose questions pull long evidence costs more per request, so a spend ceiling per tenant (Chapter 30's `SpendGuard`) belongs next to the quota. The levers, in order of size:
 
@@ -204,14 +212,14 @@ Ingestion cost scales with changed chunks, not with the corpus. That is the econ
 
 The request path scales horizontally. API replicas are stateless apart from in-process caches, which generations keep correct, and BM25 snapshots, which reload when the worker publishes a new one. Inside a request, lexical and dense retrieval run in parallel (`RAG_PARALLEL_RETRIEVAL`), so retrieval latency is the slower of the two, not their sum.
 
-**Index size** sets the hardware. Northwind's corpus is 24 documents and 231 chunks, which fits anywhere. A 4,000-employee company with ten years of wikis, tickets and runbooks might hold 200,000 documents. At about 10 chunks each, that is 2 million chunks. At 1,024 float32 dimensions, the vectors alone take 2,000,000 × 1,024 × 4 bytes, about 8.2 GB. HNSW graph links at m=16 add about 0.3 GB. Chunk text and metadata at about 2 KB per chunk add 4 GB, and BM25 postings add another 1 to 2× the text size. That is one large PostgreSQL instance with pgvector, held in RAM. A read replica doubles query capacity, and Chapter 9 shows `ef_search` tuning. Two levers shrink it:
+**Index size** sets the hardware. Northwind's corpus is 24 documents and 231 chunks, which fits anywhere. A 4,000-employee company with ten years of wikis, tickets and runbooks might hold 200,000 documents. At about 10 chunks each, that is 2 million chunks. At 1,024 float32 dimensions, the vectors alone take 2,000,000 × 1,024 × 4 bytes, about 8.2 GB, and pgvector's HNSW index stores its own copy of each vector, so the table plus index hold about twice that. HNSW graph links at m=16 add about 0.3 GB. Chunk text and metadata at about 2 KB per chunk add 4 GB, and BM25 postings add another 1 to 2× the text size. That is one large PostgreSQL instance with pgvector, held in RAM. A read replica doubles query capacity, and Chapter 9 shows `ef_search` tuning. Two levers shrink the vector share:
 
 - **Halving dimensions** (Matryoshka-style truncation, if the model supports it, validated on the gold set) halves the 8 GB.
 - **int8 quantization** quarters it, at a recall cost you must measure.
 
-Read replicas need one rule: a request must not read a replica that lags behind the registry generation it used for its cache key. Otherwise a deleted document can come back from a lagging replica. Project 3 reads the primary only, so it does not implement the rule. With PostgreSQL, record the primary's WAL position (`pg_current_wal_lsn()`) in the registry commit that bumps a generation, and route a request to a replica only if its replayed position (`pg_last_wal_replay_lsn()`) has reached the position of the generations in the request's key; otherwise read the primary.
+Read replicas need one rule: a request must not read a replica that lags behind the registry generation it used for its cache key. Otherwise a deleted document can come back from a lagging replica. Project 3 reads the primary only, so it does not implement the rule. With PostgreSQL, record the primary's write-ahead-log position, its LSN (`pg_current_wal_lsn()`, a monotonically increasing position in the change log), in the registry commit that bumps a generation, and route a request to a replica only if its replayed position (`pg_last_wal_replay_lsn()`) has reached the position of the generations in the request's key; otherwise read the primary.
 
-**Ingestion throughput** follows Little's law. If a worker processes a document in 0.5 s (parse 20 ms, chunk 10 ms, embed one batch 300 ms, write 150 ms), one worker sustains 2 documents per second. A migration that drops 50,000 documents at once needs 7 hours on one worker and 42 minutes on ten. That is fine, as long as the bulk load cannot starve everyday changes of their freshness SLO. Bulk loads run at batch priority, or on their own queue.
+**Ingestion throughput** is simple arithmetic. If a worker processes a document in 0.5 s (parse 20 ms, chunk 10 ms, embed one batch 300 ms, write 150 ms), one worker sustains 2 documents per second. A migration that drops 50,000 documents at once needs 7 hours on one worker and 42 minutes on ten. That is fine, as long as the bulk load cannot starve everyday changes of their freshness SLO. Bulk loads run at batch priority, or on their own queue.
 
 ### Freshness SLOs
 
@@ -226,18 +234,18 @@ Measure the SLO from `submitted_at` to `indexed_at`. Measure separately how long
 
 ### Failure handling and degraded modes
 
-Every dependency on the request path has a breaker (`reliability.CircuitBreaker`, one per dependency name) and a defined degraded mode. Degraded modes are product decisions written down in advance, not exception handlers improvised during an incident.
+Every dependency on the request path has a breaker (`reliability.CircuitBreaker`, one per dependency name) and a defined degraded mode. Degraded modes are product decisions written down before an incident.
 
 | Dependency down | Mode | User sees | Recorded |
 |---|---|---|---|
 | vector store / dense retrieval | lexical only | normal answer, sometimes weaker on paraphrases | `retrieve:dense#q0` |
 | one of the BM25 partitions | dense only | normal answer, weaker on IDs | `retrieve:bm25…` |
-| reranker | fused order, authority still applied | normal answer | `rerank:fallback` |
+| reranker (down or too slow) | fused order, authority still applied | normal answer | `rerank:fallback` |
 | LLM (error, open breaker, budget spent) | sources only | "These documents matched your question", titles and snippets | `generate:…` |
 | every retriever | unavailable | 503 with a retry message | `retrieve:all` |
 | admission level 2 (overload) | sources only | as LLM down | `admission:level2`, `generate:shed` |
 
-The breaker is what turns the 40-minute brownout into a non-event. After a few failures in its window, the dense breaker opens, and dense retrieval fails in microseconds with `CircuitOpenError`. `RetrievalPipeline` already treats a failing retriever as "skip and record". Requests run lexical-only at normal latency until the breaker's half-open probes succeed. The test `test_breaker_opens_and_dense_fails_fast` asserts that later requests never call the broken dependency. The breaker for the model is checked before generation: when it is open, the service goes straight to sources-only instead of waiting for a timeout it already knows will happen.
+The breaker is what turns the 40-minute brownout into a non-event. After a few failures in its window, the dense breaker opens, and dense retrieval fails in microseconds with `CircuitOpenError`. `RetrievalPipeline` already treats a failing retriever as "skip and record". Requests run lexical-only at normal latency until the breaker's half-open probes succeed (after a cool-down the breaker lets a few trial calls through and closes if they succeed). The test `test_breaker_opens_and_dense_fails_fast` asserts that later requests never call the broken dependency. The breaker for the model is checked before generation: when it is open, the service goes straight to sources-only instead of waiting for a timeout it already knows will happen.
 
 "Sources only" deserves care. The sources are the packed evidence blocks, after ACL re-checks and with flagged spans removed, so the list never shows more than an answer would have cited. When retrieval abstains because nothing relevant is visible, the response lists nothing. The hits were not good enough to answer from, so they are not good enough to show either.
 
@@ -259,7 +267,7 @@ Offline, the default configuration passes with zero leaks. The ablations show wh
 | authority layer off | 0.986 | 0.784 | 0.875 | fail: conflicting-versions |
 | no reranker | 1.000 | 0.946 | 0.85 | fail: conflicting-versions |
 
-Removing the toy lexical reranker *raises* hit@1 from 0.81 to 0.95 on this corpus. Without the critical slice, that configuration would ship as an improvement while answering the PTO question from the stale FAQ again. With the slice, the release blocks and someone has to make the trade explicitly. They might keep the reranker, or move the authority rule into the fusion stage, which is exercise P2. The numbers come from an offline fake model and vocabulary embeddings, so read them as a demonstration of the gate, not as quality claims.
+Removing the toy lexical reranker *raises* hit@1 from 0.81 to 0.95 on this corpus. Without the critical slice, that configuration would ship as an improvement while failing a conflicting-versions question: authority still runs without the reranker, but for RQ-002 the parental leave policy now ranks first. With the slice, the release blocks and someone has to make the trade explicitly, which is exercise P2. The numbers come from an offline fake model and vocabulary embeddings, so read them as a demonstration of the gate, not as quality claims.
 
 Online, every response carries a request id. Chapter 31's convention joins user feedback, thumbs and "this source is wrong" reports, to the trace by `response.id`. The useful online signals are:
 
@@ -277,11 +285,11 @@ Feedback-flagged questions become candidate gold cases after a human labels the 
 
 ```mermaid
 flowchart TD
-    subgraph Producer["Producer (API or sync job)"]
+    subgraph Producer["Producer (API upload or sync job; tombstone check on sync)"]
         S1[read source item] --> S2[parse + validate ACL]
         S2 --> S3{tombstoned?}
         S3 -->|yes, not forced| SX[suppressed]
-        S3 -->|no| S4["enqueue ingest.upsert, key = id + fingerprint + versions + tombstone seq"]
+        S3 -->|no| S4["enqueue ingest.upsert, key = id + fingerprint@seq + versions + tombstone seq"]
     end
     S4 --> Q[(job queue with leases)]
     Q --> W1[worker leases job]
@@ -293,12 +301,12 @@ flowchart TD
         W4 -->|yes| WU[unchanged: no writes]
         W4 -->|no| W5[chunk, enrich, diff_chunks]
         W5 --> W6["write BM25 + vectors per target version; embed through cache"]
-        W6 --> W7["registry commit: chunk ids, versions, indexed_at"]
-        W7 --> W8[bump generations, purge tagged cache entries, publish snapshot]
+        W6 --> W7["publish BM25 snapshot, then registry commit: chunk ids, versions, indexed_at"]
+        W7 --> W8[bump generations, purge tagged cache entries]
     end
 ```
 
-The registry write is the commit point. Indexes are written first and the registry last. A crash in between leaves the registry describing the old state, and the redelivered job redoes the work, which is safe because every index write is a whole-document replace. Two workers processing two versions of the same document at once is the remaining race. The handler takes a per-document lock inside a process. Across processes, route a document's jobs to one queue partition by hashing the doc id, or take a row lock on the registry row. Exercise E2 asks you to choose.
+The registry write is the commit point. Indexes and the BM25 snapshot are written first and the registry last, so an API replica that sees the new generation can also load the new snapshot. A crash in between leaves the registry describing the old state, and the redelivered job redoes the work, which is safe because every index write is a whole-document replace. Two workers processing two versions of the same document at once is the remaining race. A narrower one remains around re-uploads of a deleted document: a reconcile that runs after the worker has written vectors but before the registry commits `active` can remove them, so run reconcile only when no re-add of a tombstoned id is in flight. The handler takes a per-document lock inside a process. Across processes, route a document's jobs to one queue partition by hashing the doc id, or take a row lock on the registry row. Exercise E2 asks you to choose.
 
 ### The request path
 
@@ -403,6 +411,8 @@ p3-rag-assistant/
 ```
 
 ### Identity and keys
+
+`doc_fingerprint` is the function every idempotency decision rests on; note what it includes beyond the content hash.
 
 ```python
 # path: book/projects/p3-rag-assistant/rag_assistant/domain/keys.py
@@ -575,6 +585,8 @@ class AuthorityRules(BaseModel):
 
 ### The worker handlers
 
+Read the guards in order, each cheaper than the one after it, then the commit order at the end of `_upsert`.
+
 ```python
 # path: book/projects/p3-rag-assistant/rag_assistant/ingestion/handlers.py
 """Worker handlers: `ingest.upsert` and `ingest.purge`.
@@ -594,8 +606,11 @@ Ordering guards (sequence numbers from the registry):
 - an upsert older than the version already indexed is skipped (no regression by a slow retry);
 - a purge older than a later re-creation is skipped (an intentional re-upload wins).
 
-The registry write is the commit point: indexes are written first, the registry last, so a
-crash in between leaves the registry describing the old state and the retry redoes the work.
+The registry write is the commit point: indexes are written first, then the BM25 snapshot is
+published, the registry last, so a crash in between leaves the registry describing the old
+state and the retry redoes the work. Publishing the snapshot before the generation bump means
+an API replica that sees the new generation can always load the new BM25; the reverse order
+would let it cache old content under the new stamp.
 """
 from __future__ import annotations
 
@@ -726,12 +741,12 @@ class IngestHandlers:
             authority=int(meta.get("authority", 1)), effective_date=meta.get("effective_date"),
             supersedes=list(meta.get("supersedes") or []),
         )
+        d.index_set.save_snapshots()  # before the commit: replicas never see a generation without its BM25
         d.registry.put(new_rec)  # commit point
         scopes = generation_scopes(doc.tenant) + (generation_scopes(rec.tenant) if rec else [])
         d.registry.bump(scopes)
         for cache in d.caches:
             cache.invalidate_docs([doc.id])
-        d.index_set.save_snapshots()
         return IngestOutcome(doc_id=doc.id, change="reindex" if p.reason == "reindex" and same_content else change,
                              added=len(diff.added), unchanged=len(diff.unchanged), removed=len(diff.removed),
                              reembedded=reembedded, versions=versions, freshness_lag_s=new_rec.freshness_lag_s)
@@ -762,13 +777,13 @@ class IngestHandlers:
             for key in rec.context_keys.values():
                 contexts += d.context_cache.pop(key, None) is not None
         cache_entries = sum(c.invalidate_docs([p.doc_id]) for c in d.caches)
+        d.index_set.save_snapshots()
         if rec is not None:
             rec = rec.model_copy(update={"status": "deleted", "purged_at": now(), "chunk_ids": [],
                                          "context_keys": {}, "index_versions": [],
                                          "deleted_seq": max(rec.deleted_seq or 0, p.seq)})
             d.registry.put(rec)
             d.registry.bump(generation_scopes(rec.tenant))
-        d.index_set.save_snapshots()
         return {"doc_id": p.doc_id, "purged": True, "indexes": removed, "vectors_forgotten": vectors_forgotten,
                 "blobs": blobs, "context_prefixes": contexts, "cache_entries": cache_entries}
 
@@ -788,6 +803,8 @@ __all__ = ["IngestHandlers", "IngestionDeps"]
 ```
 
 ### The producer: uploads, sync, delete, blue/green
+
+The producer validates early, builds idempotency keys, and does the synchronous half of a delete.
 
 ```python
 # path: book/projects/p3-rag-assistant/rag_assistant/ingestion/service.py  (excerpt; full file on disk)
@@ -809,7 +826,12 @@ class IngestionService:
         seq = self.d.registry.next_seq()
         payload = IngestPayload(op="upsert", doc_id=doc_id, connector=connector, uri=uri, content_hash=content_hash,
                                 seq=seq, submitted_at=now(), target_versions=targets or [], reason=reason)
-        key = f"upsert:{doc_id}:{fingerprint}:{','.join(targets or ['*'])}:{tomb}"
+        head_key = f"upsert_head:{short_hash(doc_id)}"
+        head = state_json(self.d.registry, head_key)
+        if not isinstance(head, dict) or head.get("fp") != fingerprint:  # a new fingerprint: a new change
+            head = {"fp": fingerprint, "seq": seq}
+            self.d.registry.set_state(head_key, json.dumps(head))
+        key = f"upsert:{doc_id}:{fingerprint}@{head['seq']}:{','.join(targets or ['*'])}:{tomb}"
         job = self.queue.enqueue("ingest.upsert", payload.model_dump(mode="json"), idempotency_key=key,
                                  tenant_id=tenant)
         return {"doc_id": doc_id, "job_id": job.id, "state": job.state.value, "deduplicated": job.payload["seq"] != seq}
@@ -825,8 +847,10 @@ class IngestionService:
                                    self.d.processor.fingerprint(doc))
         return {**out, "tenant": doc.tenant}
 
-    def peek_tenant(self, content: bytes, filename: str) -> str:
-        return self.d.processor.parse(content, filename).tenant or "shared"
+    def peek(self, content: bytes, filename: str) -> tuple[str, str]:
+        """(doc id, tenant) an upload declares, for authorization before anything is stored."""
+        doc = self.d.processor.parse(content, filename)
+        return doc.id, doc.tenant or "shared"
 
     def submit_uri(self, connector: str, uri: str, *, force: bool = False) -> dict[str, Any]:
         raw = self.d.connectors[connector].read(uri)
@@ -913,6 +937,8 @@ class IngestionService:
 ```
 
 ### Scoped caches
+
+The key carries the authorization scope, index version, and generations; the read path re-checks authorization.
 
 ```python
 # path: book/projects/p3-rag-assistant/rag_assistant/caching/caches.py  (excerpt; full file on disk)
@@ -1065,6 +1091,8 @@ class CacheSet:
 
 ### Retrieval adapters
 
+The adapters wire ragkit's retrievers to the registry's active version, and `AuthorityReranker` wraps whatever relevance reranker is configured.
+
 ```python
 # path: book/projects/p3-rag-assistant/rag_assistant/retrieval/wiring.py  (excerpt; full file on disk)
 class BreakerRetriever:
@@ -1107,15 +1135,33 @@ class TombstoneFilter:
 class AuthorityReranker:
     name = "authority"
 
-    def __init__(self, inner: Reranker | None = None, *, weight: float = 0.05) -> None:
+    def __init__(self, inner: Reranker | None = None, *, weight: float = 0.05, timeout_s: float | None = None,
+                 executor: Executor | None = None) -> None:
         self.inner = inner
         self.weight = weight
+        self.timeout_s = timeout_s
+        self.executor = executor
+
+    def _relevance(self, query: RetrievalQuery, candidates: list[ScoredChunk]) -> list[ScoredChunk]:
+        assert self.inner is not None
+        if self.timeout_s is None:
+            return self.inner.rerank(query, candidates, len(candidates))
+        own = None if self.executor else ThreadPoolExecutor(max_workers=1)
+        pool = self.executor or own
+        assert pool is not None
+        try:  # a TimeoutError here is handled like any reranker failure
+            ctx = contextvars.copy_context()
+            return pool.submit(ctx.run, self.inner.rerank, query, candidates, len(candidates)).result(
+                timeout=self.timeout_s)
+        finally:
+            if own is not None:
+                own.shutdown(wait=False, cancel_futures=True)
 
     def rerank(self, query: RetrievalQuery, candidates: list[ScoredChunk], k: int) -> list[ScoredChunk]:
         failed = False
         try:
-            ranked = self.inner.rerank(query, candidates, len(candidates)) if self.inner else list(candidates)
-        except Exception:  # reranker down or breaker open: keep fused order, still apply authority
+            ranked = self._relevance(query, candidates) if self.inner else list(candidates)
+        except Exception:  # reranker down, breaker open or too slow: keep fused order, still apply authority
             ranked, failed = list(candidates), True
         # The boost is relative to the top score, so it means the same thing for RRF scores
         # (around 0.03), lexical-overlap scores (0 to 1.5) and cross-encoder logits.
@@ -1179,7 +1225,8 @@ def build_pipeline(
         retrievers[f"dense{suffix}"] = TombstoneFilter(BreakerRetriever(ix.dense, breakers.get("dense")), hidden)
     inner = reranker_factory(settings) if degrade_level == 0 else None
     wrapped_inner = BreakerReranker(inner, breakers.get("reranker")) if inner is not None else None
-    reranker = AuthorityReranker(wrapped_inner, weight=settings.authority_weight)
+    reranker = AuthorityReranker(wrapped_inner, weight=settings.authority_weight,
+                                 timeout_s=settings.rerank_timeout_s, executor=executor)
     shrink = 2 if degrade_level >= 1 else 1
     return RetrievalPipeline(
         retrievers,
@@ -1189,13 +1236,15 @@ def build_pipeline(
         final_k=settings.final_k,
         parallel=settings.parallel_retrieval,
         retrieve_timeout_s=settings.retrieve_timeout_s,
-        rerank_timeout_s=settings.rerank_timeout_s,
+        rerank_timeout_s=None,  # AuthorityReranker applies rerank_timeout_s to the relevance reranker
         executor=executor,  # one pool per service, not per request
         tracer=tracer,
     )
 ```
 
 ### The request path
+
+`_prepare` builds the cache keys from the registry, and `_ask` walks the degraded modes in order.
 
 ```python
 # path: book/projects/p3-rag-assistant/rag_assistant/answering/service.py  (excerpt; full file on disk)
@@ -1218,10 +1267,12 @@ def build_pipeline(
                                     security_events=[f"input_blocked:{verdict.blocked_by}"])
             return prep
 
-        with _Clock(timings, "refresh"):
-            self._refresh_view()
+        # Stamp first, then load snapshots: the worker publishes a snapshot before bumping the
+        # generation, so the indexes read here are never older than the stamp cached results carry.
         prep.version = self.index_set.active_version
         prep.gens = self.registry.generations(principal_scopes(principal))
+        with _Clock(timings, "refresh"):
+            self._refresh_view()
 
         if use_answer_cache and self.s.answer_cache and level == 0:
             with _Clock(timings, "answer_cache"):
@@ -1240,7 +1291,8 @@ def build_pipeline(
             self.metrics.inc("rag_cache_lookups_total", cache="retrieval", result="hit" if result else "miss")
             prep.cache = "hit" if result is not None else "miss"
         if result is None:
-            hidden = frozenset(r.doc_id for r in self.registry.all("deleting"))
+            # every non-active status: a replica's BM25 snapshot may still hold a purged ("deleted") doc
+            hidden = frozenset(r.doc_id for r in self.registry.all() if r.status != "active")
             pipeline = build_pipeline(self.index_set, principal, self.s, breakers=self.breakers, hidden=hidden,
                                       degrade_level=level, tracer=self.tracer, version=prep.version,
                                       executor=self._executor)
@@ -1312,17 +1364,15 @@ def build_pipeline(
             kept.append(h)
         return kept
 
-    def _can_generate(self, prep: _Prepared) -> bool:
+    def _generation_blocked(self, prep: _Prepared) -> str | None:
+        """The degraded reason that rules out generation, or None (_sources_only records it)."""
         if prep.degrade_level >= 2:
-            prep.degraded.append("generate:shed")
-            return False
+            return "generate:shed"
         if not prep.deadline.fits(self.s.min_generation_s):
-            prep.degraded.append("generate:deadline")
-            return False
+            return "generate:deadline"
         if self.breakers.get("llm").state is CircuitState.OPEN:  # fail fast: do not wait for a timeout
-            prep.degraded.append("generate:breaker_open")
-            return False
-        return True
+            return "generate:breaker_open"
+        return None
 
     def _guard_output(self, qa: QAResult, prep: _Prepared) -> AnswerEnvelope:
         env = qa.envelope
@@ -1355,6 +1405,8 @@ def build_pipeline(
 ```
 
 ### The CI gate
+
+Leaks and invalid citations are hard failures; the rest are floors and critical slices.
 
 ```python
 # path: book/projects/p3-rag-assistant/rag_assistant/eval/run_eval.py  (excerpt; full file on disk)
@@ -1396,21 +1448,21 @@ def service_target(container: Container):  # type: ignore[no-untyped-def]
 
 ## Code walkthrough
 
-**Fingerprints, not content hashes.** `doc_fingerprint` in `domain/keys.py` is the most consequential twelve lines in the project. Every idempotency decision compares fingerprints. If you remove `acl_groups` from it, `test_acl_change_reaches_indexes_without_reembedding` fails: the sync deduplicates the change and the employee keeps retrieving a document now restricted to HR. If you remove the rules fingerprint, a supersession rule added on Monday reaches only the documents edited after Monday.
+**Fingerprints, not content hashes.** `doc_fingerprint` in `domain/keys.py` is the function every idempotency decision depends on. If you remove `acl_groups` from it, `test_acl_change_reaches_indexes_without_reembedding` fails: the sync deduplicates the change and the employee keeps retrieving a document now restricted to HR. If you remove the rules fingerprint, a supersession rule added on Monday reaches only the documents edited after Monday.
 
 **The upsert handler's guards come in order of cost.** It checks the tombstone and the sequence against the registry before reading the source, and the fingerprint before chunking. Only a real change reaches the chunker and the embedding cache. The forced widening of `targets` handles one subtle race. Suppose a reindex job for `v2` reads a source that changed after the job was planned. Writing only `v2` would leave the active `v1` serving the old content, so a fingerprint mismatch always writes every writable version.
 
-**The commit order is deliberate.** Indexes are written first, then the registry, then generations, then the cache purge, then the snapshot. A reader that sees the new generation will miss the cache and retrieve from indexes that already hold the new data. If the registry were written first, a reader could cache the old index content under the new generation, and that entry would survive until its TTL.
+**The commit order is deliberate.** Indexes are written first, then the BM25 snapshot, then the registry, then generations, then the cache purge. A reader that sees the new generation will miss the cache and retrieve from indexes and snapshots that already hold the new data. A request reads the version and generation stamp before it loads snapshots, so a replica never caches old content under a new stamp. If the registry were written first, a reader could cache the old index content under the new generation, and that entry would survive until its TTL.
 
 **`IngestionService.delete` is synchronous where it matters.** The tombstone, the generation bump and the cache purge happen inside the API request. Only the expensive physical deletion is queued. The idempotency key of the purge includes `deleted_seq`, so a delete, a re-upload and a second delete produce two purge jobs, not one deduplicated job.
 
 **`ScopedCache.get` re-checks authorization on read.** The parent class stores the tenant and groups with each entry and raises if they differ from the caller's. Removal goes through one public method, `TenantScopedCache.discard_key`, which `discard`, `clear` and `invalidate_tenant` all call. `ScopedCache` overrides that one method to drop its TTL and tag metadata, so no removal path can leave metadata for an entry that is gone, which would otherwise count a phantom hit. The test forges a colliding key on purpose to show that a key bug alone does not leak. The `stamp` stored with each entry, the index version and generations, is what `sweep` compares when a replica sees a newer view.
 
-**`AuthorityReranker` survives reranker failure.** It wraps the relevance reranker and catches its failure. It keeps the fused order, sets the `rerank_failed` signal that `RetrievalPipeline` records as degraded, and still applies authority and supersession. If the authority step lived inside a reranker that can fail, a reranker outage would quietly bring back the FAQ-over-policy bug.
+**`AuthorityReranker` survives reranker failure.** It wraps the relevance reranker, enforces its deadline itself (the pipeline-level rerank timeout is off for this wrapper), and catches its failure or timeout. It keeps the fused order, sets the `rerank_failed` signal that `RetrievalPipeline` records as degraded, and still applies authority and supersession. If the authority step lived inside a reranker that can fail, a reranker outage would quietly bring back the FAQ-over-policy bug.
 
 **`_prepare` builds the cache keys from the registry, not from the request.** The version and generations come from `registry.generations(principal_scopes(principal))`, read after `_refresh_view`. A client cannot send a version or a scope. The retrieval key also includes the degrade level and the funnel configuration, because a level-1 result (no reranker) is a different result.
 
-**Streaming binds the budget to the client, not to a context.** `ask` runs generation inside `deadline.scope()`. A streaming generator cannot: the ASGI server resumes it from different contexts, and a context-variable token cannot be reset across them. The first version of the code failed exactly this way under `TestClient`. `stream` therefore wraps the LLM in `DeadlineBoundLLM(llm, deadline)` with the deadline passed explicitly.
+**Streaming binds the budget to the client, not to a context.** `ask` runs generation inside `deadline.scope()`. A streaming generator cannot: the ASGI server resumes it from different contexts, and a context-variable token cannot be reset across them, which shows up as an error under `TestClient`. `stream` therefore wraps the LLM in `DeadlineBoundLLM(llm, deadline)` with the deadline passed explicitly.
 
 **The eval target is the service.** `service_target` calls `container.answers.ask`, the same method the API calls, and adapts its outcome with Chapter 14's `from_grounded_qa`. Sources-only, blocked and unavailable outcomes count as abstentions. The evaluation therefore scores a degraded run as what the user experienced, not as a crash.
 
@@ -1423,7 +1475,7 @@ def service_target(container: Container):  # type: ignore[no-untyped-def]
 **Security.**
 
 - The auth stub must not leave a closed network. Its token format exists to make the "principal only from a verified token" contract testable. `create_app` refuses to start with the published dev secret unless `RAG_ALLOW_DEV_AUTH_SECRET=true`, which only the local Compose file sets, because anyone who has read the source can mint tokens for it.
-- Admins may manage documents in their own tenant and in `shared` only.
+- Admins may manage documents in their own tenant and in `shared` only, checked against both the uploaded content's tenant and, when the document id already exists, the existing record's tenant (a check-then-act: an id still queued and not yet registered is not protected).
 - Traces carry ids and hashes, not document text (Chapter 31's capture policy).
 - The embedding cache keys are hashes of the space fingerprint and the text, but the values are vectors of user queries and document chunks, and vectors can be partially inverted to their text. Give query entries a TTL, and treat the Redis instance as holding user data.
 - Lookups by chunk id, which resolve citations or re-display a stored answer, go through `IndexSet.get_chunks(ids, principal)`. It applies the same ACL check as retrieval and omits documents that are not `active`, so an id from an old answer cannot reach a deleted or restricted chunk.
@@ -1507,9 +1559,9 @@ cd book/projects/p3-rag-assistant && pytest -q
 pytest -q book/projects/p3-rag-assistant/tests
 ```
 
-The 50 tests are grouped by the property they prove:
+The 55 tests are grouped by the property they prove:
 
-- **Ingestion** (8 tests):
+- **Ingestion** (9 tests):
   - a full sync indexes each document once;
   - resubmitting unchanged sources creates no jobs and no embedding calls;
   - redelivering a job is a no-op;
@@ -1517,15 +1569,16 @@ The 50 tests are grouped by the property they prove:
   - an ACL change propagates without embedding;
   - an ACL-less upload is rejected before queueing;
   - the authority layer flips RQ-001 back to the policy;
-  - a blue/green reindex dual-writes, refuses early promotion, promotes, and rolls back.
-- **Deletion** (7): the purge leaves no trace in BM25, vectors, the embedding cache, blobs, or request caches, and a document is hidden before the purge runs. The no-resurrection tests cover stale jobs, folder syncs and old snapshots. A re-upload after a delete is a new ingestion, and cached answers that cited the deleted document are removed.
+  - a blue/green reindex dual-writes, refuses early promotion, promotes, and rolls back;
+  - a revert (A, then B, then A again) is re-ingested instead of deduplicated.
+- **Deletion** (9): the purge leaves no trace in BM25, vectors, the embedding cache, blobs, or request caches, and a document is hidden before the purge runs. The no-resurrection tests cover stale jobs, folder syncs and old snapshots. A re-upload after a delete is a new ingestion, and cached answers that cited the deleted document are removed. Purged documents stay hidden until replicas load the new snapshot, and the snapshot is published before the registry commit.
 - **Permissions and tenancy** (7): forbidden-doc gold questions never retrieve, pack or cite the forbidden document, and they abstain. Group-based access is checked for on-call staff, and cross-tenant isolation is checked in both tenancy modes. Cache keys include scope and resist a forged key, and the retrieval key includes generations.
-- **Injection and degraded modes** (11): injection has no effect with an honest model, and the controls hold with a compromised one. The degraded modes covered are dense down, an opening breaker, reranker down, LLM down, all retrievers down, a slow retriever cut by its stage budget, and a spent budget. Degraded results are not cached, and one request produces one trace.
-- **API** (8): auth, refusal to start on the published dev secret, cited JSON answers, the SSE contract (meta first, citations before the text that uses them, done last), streamed abstention, the admin upload and delete permissions, status, health and metrics, and per-tenant quota 429s.
+- **Injection and degraded modes** (12): injection has no effect with an honest model, and the controls hold with a compromised one. The degraded modes covered are dense down, an opening breaker, reranker down, LLM down, all retrievers down, a slow retriever cut by its stage budget, a slow reranker that still leaves authority applied, and a spent budget. Degraded results are not cached, and one request produces one trace.
+- **API** (9): auth, refusal to start on the published dev secret, cited JSON answers, the SSE contract (meta first, citations before the text that uses them, done last), streamed abstention, the admin upload and delete permissions (including an admin who tries to take over another tenant's document id), status, health and metrics, and per-tenant quota 429s.
 - **Scoped caches and id lookups** (3): tenant invalidation removes the entries and their metadata (a later read is a miss, not a phantom hit); discard, per-entry TTL, and clear go through the public removal API; and `IndexSet.get_chunks` returns chunks in the order asked while omitting restricted and tombstoned ones.
 - **Evaluation and backends** (6): the gate passes with zero leaks, the gate fails on one injected leak, the CLI exit code is correct, the registry contract holds on memory and SQLite, and the full stack runs on the SQL registry, the Redis queue and the Redis embedding cache (fakeredis), with a separate "API replica" container.
 
-What the offline suite does not prove: real pgvector behavior, because the Docker Hub base image pull failed during authoring and the HNSW DDL is Project 2's; real model faithfulness, for which Chapter 14's LLM judges run with `--judges llm`; and concurrency across worker processes. Mark integration tests that use `DATABASE_URL` and `REDIS_URL` with `@pytest.mark.integration`, and run them in a CI job that brings up the Compose stack.
+What the offline suite does not prove: real pgvector behavior, which needs the Compose stack (the HNSW DDL is Project 2's); real model faithfulness, for which Chapter 14's LLM judges run with `--judges llm`; and concurrency across worker processes. Mark integration tests that use `DATABASE_URL` and `REDIS_URL` with `@pytest.mark.integration`, and run them in a CI job that brings up the Compose stack.
 
 ## Exercises
 
@@ -1557,7 +1610,7 @@ What the offline suite does not prove: real pgvector behavior, because the Docke
 
 **P1.** Add a per-tenant cap on in-flight ingestion jobs, so that a bulk upload from `logistics` cannot push `retail` freshness beyond its SLO. Write a test that enqueues 200 logistics jobs and 5 retail jobs and asserts the retail lag.
 
-**P2.** Move supersession into fusion: implement a retriever-stage adjustment so the `conflicting-versions` slice passes with `RAG_RERANKER=none`, then compare the gate results of the three configurations.
+**P2.** Diagnose the no-reranker failure: with `RAG_RERANKER=none`, authority still runs, yet RQ-002 ranks the parental leave policy first. Use the trace to find the stage responsible and explain why the authority boost cannot fix it, implement an adjustment so the `conflicting-versions` slice passes without the reranker, then compare the gate results of the three configurations.
 
 **P3.** Implement a source-change canary: a synthetic document whose content embeds a timestamp, edited every minute by a scheduled job. Measure end-to-end freshness (source edit to searchable) from outside the service and expose it as a metric.
 
@@ -1574,12 +1627,12 @@ What the offline suite does not prove: real pgvector behavior, because the Docke
 ## Key takeaways
 
 - The registry is the system of record. Indexes, vectors, caches, prefixes, blobs and snapshots are projections that must be invalidated on change and purged on delete.
-- Ingestion is a stream of idempotent jobs keyed on a fingerprint that covers content, ACL, metadata, chunker and pipeline version. A content hash alone drops permission changes.
+- Ingestion is a stream of idempotent jobs keyed on a fingerprint that covers content, ACL, metadata, chunker and pipeline version.
 - Incremental updates come from stable chunk ids, `diff_chunks`, and an embedding cache keyed by space fingerprint and text, so only changed chunks cost embedding calls.
 - Deletion is a synchronous logical delete followed by an asynchronous complete purge. The tombstone prevents resurrection by stale jobs, syncs and restores, and reconciliation is the backstop.
 - Authority, effective date and supersession are ingestion-time metadata owned by content owners. They fix FAQ-over-policy misses that no embedding change can fix.
 - Permissions are enforced before scoring and re-checked at packing, never after generation. ACL changes propagate as ordinary fingerprinted changes.
-- Retrieval and answer cache keys include the principal's tenant and groups, the index version, and the generations of every readable scope. Degraded results are never cached.
+- Retrieval and answer cache keys include the principal's tenant and groups, the index version, and the generations of every readable scope; degraded results are not cached.
 - Every dependency has a breaker and a written degraded mode: lexical only, fused order, sources only, or unavailable.
 - Budgets per stage and an explicit freshness SLO make "fast enough" and "fresh enough" testable claims.
-- The release gate runs the real service on the gold set and fails on one permission leak or on any regression in critical slices, even when the averages improve.
+- The release gate runs the real service on the gold set and fails on one permission leak or on any failing case in a critical slice, even when the averages improve.

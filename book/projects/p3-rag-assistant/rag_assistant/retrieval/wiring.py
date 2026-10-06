@@ -11,10 +11,13 @@ Adapters (each wraps a ragkit Retriever/Reranker and keeps its contract):
 - `AuthorityReranker`: runs after the relevance reranker and applies authority metadata
   (see domain/authority.py): a small additive boost per authority level, and a hard rule that
   a chunk marked `superseded_by` a document that is also in the candidates scores below it.
+  It owns the rerank deadline: a slow relevance reranker times out *inside* it, so authority
+  and supersession still apply to the fused order (the pipeline-level rerank timeout is off).
 """
 from __future__ import annotations
 
-from concurrent.futures import Executor
+import contextvars
+from concurrent.futures import Executor, ThreadPoolExecutor
 from typing import Callable, Mapping
 
 from aie_core.observability import Tracer
@@ -75,15 +78,33 @@ class TombstoneFilter:
 class AuthorityReranker:
     name = "authority"
 
-    def __init__(self, inner: Reranker | None = None, *, weight: float = 0.05) -> None:
+    def __init__(self, inner: Reranker | None = None, *, weight: float = 0.05, timeout_s: float | None = None,
+                 executor: Executor | None = None) -> None:
         self.inner = inner
         self.weight = weight
+        self.timeout_s = timeout_s
+        self.executor = executor
+
+    def _relevance(self, query: RetrievalQuery, candidates: list[ScoredChunk]) -> list[ScoredChunk]:
+        assert self.inner is not None
+        if self.timeout_s is None:
+            return self.inner.rerank(query, candidates, len(candidates))
+        own = None if self.executor else ThreadPoolExecutor(max_workers=1)
+        pool = self.executor or own
+        assert pool is not None
+        try:  # a TimeoutError here is handled like any reranker failure
+            ctx = contextvars.copy_context()
+            return pool.submit(ctx.run, self.inner.rerank, query, candidates, len(candidates)).result(
+                timeout=self.timeout_s)
+        finally:
+            if own is not None:
+                own.shutdown(wait=False, cancel_futures=True)
 
     def rerank(self, query: RetrievalQuery, candidates: list[ScoredChunk], k: int) -> list[ScoredChunk]:
         failed = False
         try:
-            ranked = self.inner.rerank(query, candidates, len(candidates)) if self.inner else list(candidates)
-        except Exception:  # reranker down or breaker open: keep fused order, still apply authority
+            ranked = self._relevance(query, candidates) if self.inner else list(candidates)
+        except Exception:  # reranker down, breaker open or too slow: keep fused order, still apply authority
             ranked, failed = list(candidates), True
         # The boost is relative to the top score, so it means the same thing for RRF scores
         # (around 0.03), lexical-overlap scores (0 to 1.5) and cross-encoder logits.
@@ -147,7 +168,8 @@ def build_pipeline(
         retrievers[f"dense{suffix}"] = TombstoneFilter(BreakerRetriever(ix.dense, breakers.get("dense")), hidden)
     inner = reranker_factory(settings) if degrade_level == 0 else None
     wrapped_inner = BreakerReranker(inner, breakers.get("reranker")) if inner is not None else None
-    reranker = AuthorityReranker(wrapped_inner, weight=settings.authority_weight)
+    reranker = AuthorityReranker(wrapped_inner, weight=settings.authority_weight,
+                                 timeout_s=settings.rerank_timeout_s, executor=executor)
     shrink = 2 if degrade_level >= 1 else 1
     return RetrievalPipeline(
         retrievers,
@@ -157,7 +179,7 @@ def build_pipeline(
         final_k=settings.final_k,
         parallel=settings.parallel_retrieval,
         retrieve_timeout_s=settings.retrieve_timeout_s,
-        rerank_timeout_s=settings.rerank_timeout_s,
+        rerank_timeout_s=None,  # AuthorityReranker applies rerank_timeout_s to the relevance reranker
         executor=executor,  # one pool per service, not per request
         tracer=tracer,
     )

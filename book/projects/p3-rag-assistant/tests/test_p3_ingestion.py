@@ -107,3 +107,21 @@ def test_blue_green_reindex_dual_writes_and_promotes(container, docs_dir, employ
     assert out.response.index_version == "v2" and out.retrieval.doc_ids[0] == "hr-pto-policy"
     assert container.ingestion.rollback() == "v1"
     assert container.answers.ask(PTO_Q, employee).response.index_version == "v1"
+
+
+def test_reverting_a_document_is_not_deduplicated(container, docs_dir, employee):
+    """A -> B -> A: the second A is a new change, not a duplicate of the first (succeeded) A job."""
+    a = container.registry.get("hr-pto-policy")
+    edit_doc(docs_dir / "pto-policy.md", "Questions go to People Operations", "Questions go to People Ops")
+    container.ingestion.sync("folder")
+    assert container.drain() == 1
+    assert container.registry.get("hr-pto-policy").fingerprint != a.fingerprint
+    edit_doc(docs_dir / "pto-policy.md", "Questions go to People Ops", "Questions go to People Operations")
+    out = container.ingestion.submit_uri("folder", a.uri)
+    assert not out["deduplicated"]
+    assert container.drain() == 1
+    back = container.registry.get("hr-pto-policy")
+    assert back.fingerprint == a.fingerprint and back.chunk_ids == a.chunk_ids
+    served = container.index_set.get_chunks(a.chunk_ids, employee)
+    assert len(served) == len(a.chunk_ids)
+    assert any("Questions go to People Operations" in c.text for c in served)

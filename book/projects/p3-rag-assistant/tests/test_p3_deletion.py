@@ -125,3 +125,36 @@ def test_delete_also_removes_cached_answers_that_cited_it(container, employee):
     container.ingestion.delete("hr-pto-policy")
     assert container.caches.entries_for("hr-pto-policy") == 0
     assert container.answers.ask(PTO_Q, employee).response.cache == "miss"
+
+
+def test_purged_document_is_hidden_even_if_a_replica_index_still_holds_it(make_container, employee):
+    """After purge marks a doc "deleted", a replica's stale BM25 snapshot must not serve it."""
+    c = make_container(retrieval_cache=False, answer_cache=False)
+    assert "hr-pto-policy" in c.answers.ask(PTO_Q, employee).retrieval.doc_ids
+    rec = c.registry.get("hr-pto-policy")
+    c.registry.put(rec.model_copy(update={"status": "deleted", "deleted_seq": c.registry.next_seq()}))
+    assert "hr-pto-policy" not in c.answers.ask(PTO_Q, employee).retrieval.doc_ids  # indexes untouched
+
+
+def test_snapshot_is_published_before_the_registry_commit(make_container, docs_dir, tmp_path):
+    from conftest import edit_doc
+
+    c = make_container(snapshot_dir=tmp_path / "snap")
+    events: list[str] = []
+    for obj, name in ((c.index_set, "save_snapshots"), (c.registry, "put"), (c.registry, "bump")):
+        real = getattr(obj, name)
+
+        def spy(*a, _real=real, _name=name, **k):  # type: ignore[no-untyped-def]
+            events.append(_name)
+            return _real(*a, **k)
+
+        setattr(obj, name, spy)
+    edit_doc(docs_dir / "pto-policy.md", "Questions go to People Operations", "Questions go to People Ops")
+    c.ingestion.sync("folder")
+    assert c.drain() == 1
+    assert events == ["save_snapshots", "put", "bump"]
+    events.clear()
+    c.ingestion.delete("hr-faq")
+    events.clear()  # the logical delete itself bumps; the purge is what publishes a snapshot
+    c.drain()
+    assert events == ["save_snapshots", "put", "bump"]

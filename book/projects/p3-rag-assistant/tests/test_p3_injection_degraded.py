@@ -147,3 +147,23 @@ def test_slow_dense_retriever_is_cut_by_the_stage_budget(make_container, employe
     assert _time.perf_counter() - t0 < 0.9  # did not wait for the slow store
     assert any(d.startswith("retrieve:dense") for d in out.response.degraded)
     assert out.response.mode == "answer" and out.retrieval.doc_ids[0] == "hr-pto-policy"
+
+
+def test_slow_reranker_still_applies_authority(make_container, employee, monkeypatch):
+    """A relevance-reranker timeout keeps the fused order but still runs authority and supersession."""
+    import time
+
+    from ragkit.retrieval import LexicalOverlapReranker
+
+    original = LexicalOverlapReranker.rerank
+
+    def slow(self, *a, **k):  # type: ignore[no-untyped-def]
+        time.sleep(0.3)
+        return original(self, *a, **k)
+
+    c = make_container(rerank_timeout_s=0.05)
+    monkeypatch.setattr(LexicalOverlapReranker, "rerank", slow)
+    out = c.answers.ask(PTO_Q, employee)
+    assert out.retrieval.doc_ids[0] == "hr-pto-policy"  # policy above the FAQ it supersedes
+    assert "rerank:fallback" in out.response.degraded
+    assert not any(d == "rerank:TimeoutError" for d in out.response.degraded)  # not the pipeline-level fallback

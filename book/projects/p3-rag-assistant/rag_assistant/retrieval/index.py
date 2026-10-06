@@ -216,17 +216,19 @@ class IndexSet:
 
     # ------------------------------------------------------------------ reconciliation
     def reconcile(self) -> dict[str, list[str]]:
-        """Remove from every index any document the registry does not list as active.
+        """Remove from every index any document the registry lists as deleting or deleted.
 
         This is the backstop against resurrection: an old snapshot, a restored backup, or a
         crashed purge can bring deleted data back into an index; reconciling against the
         system of record takes it out again before it can be served.
         """
-        active = {r.doc_id for r in self.registry.all("active")}
+        # Only documents the registry knows as not active: one it does not know yet may be in
+        # flight (the worker publishes its snapshot before the registry commit).
+        inactive = {r.doc_id for r in self.registry.all() if r.status != "active"}
         removed: dict[str, list[str]] = {}
         for ix in self.existing():
             present = ix.docs | ix.dense_doc_ids() | _bm25_doc_ids(ix.bm25)
-            stray = sorted(present - active)
+            stray = sorted(present & inactive)
             for doc_id in stray:
                 ix.delete(doc_id)
             if stray:

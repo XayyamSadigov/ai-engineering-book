@@ -11,20 +11,25 @@ It never writes an index. It validates, decides, and enqueues:
   from the source are deleted;
 - `start_reindex` / `promote` / `rollback` run a blue/green index rebuild.
 
-Idempotency key of an upsert = doc id + fingerprint + target versions + tombstone sequence.
-Resubmitting the same content is free; re-adding a document after deleting it is a new job,
-because the tombstone sequence changed.
+Idempotency key of an upsert = doc id + fingerprint + change sequence + target versions +
+tombstone sequence. Resubmitting the same content is free; re-adding a document after deleting
+it is a new job, because the tombstone sequence changed. The change sequence is the seq of the
+submission that last moved this document to a new fingerprint, so a revert (A -> B -> A, or an
+ACL hr -> all -> hr) is a new job instead of a duplicate of the first A that already succeeded.
 """
 from __future__ import annotations
 
 import argparse
+import json
 from typing import Any
 
+from ragkit.documents import short_hash
 from reliability import JobQueue
 
 from ..domain.keys import generation_scopes
 from ..domain.models import IngestPayload, now
 from ..ingestion.handlers import IngestionDeps
+from ..ingestion.registry import state_json
 from ..retrieval.index import IndexSet
 from .sources import BlobConnector, SourceNotFound
 
@@ -51,7 +56,12 @@ class IngestionService:
         seq = self.d.registry.next_seq()
         payload = IngestPayload(op="upsert", doc_id=doc_id, connector=connector, uri=uri, content_hash=content_hash,
                                 seq=seq, submitted_at=now(), target_versions=targets or [], reason=reason)
-        key = f"upsert:{doc_id}:{fingerprint}:{','.join(targets or ['*'])}:{tomb}"
+        head_key = f"upsert_head:{short_hash(doc_id)}"
+        head = state_json(self.d.registry, head_key)
+        if not isinstance(head, dict) or head.get("fp") != fingerprint:  # a new fingerprint: a new change
+            head = {"fp": fingerprint, "seq": seq}
+            self.d.registry.set_state(head_key, json.dumps(head))
+        key = f"upsert:{doc_id}:{fingerprint}@{head['seq']}:{','.join(targets or ['*'])}:{tomb}"
         job = self.queue.enqueue("ingest.upsert", payload.model_dump(mode="json"), idempotency_key=key,
                                  tenant_id=tenant)
         return {"doc_id": doc_id, "job_id": job.id, "state": job.state.value, "deduplicated": job.payload["seq"] != seq}
@@ -67,8 +77,10 @@ class IngestionService:
                                    self.d.processor.fingerprint(doc))
         return {**out, "tenant": doc.tenant}
 
-    def peek_tenant(self, content: bytes, filename: str) -> str:
-        return self.d.processor.parse(content, filename).tenant or "shared"
+    def peek(self, content: bytes, filename: str) -> tuple[str, str]:
+        """(doc id, tenant) an upload declares, for authorization before anything is stored."""
+        doc = self.d.processor.parse(content, filename)
+        return doc.id, doc.tenant or "shared"
 
     def submit_uri(self, connector: str, uri: str, *, force: bool = False) -> dict[str, Any]:
         raw = self.d.connectors[connector].read(uri)

@@ -100,7 +100,7 @@ The test uses the in-memory queue and a manual clock:
 - assert that every retail job completes within 5 job durations, not after the 200 logistics jobs;
 - assert that logistics throughput stays at least (cap / workers) of capacity.
 
-**P2.** Add a retriever wrapper, or a post-fusion step in `build_pipeline`, that applies the same `superseded_by` ceiling and a smaller authority boost to the fused list before it is cut to `rerank_k`. Keep `AuthorityReranker` for the reranked path.
+**P2.** Diagnosis first: the trace shows RQ-002's fused list putting the parental leave policy ahead of the PTO policy, and both are policies at the same authority level, so the authority boost cannot separate them; relevance ordering has to come from somewhere other than the missing reranker. One option is a cheap post-fusion step in `build_pipeline` that re-scores the top few fused hits by query-term coverage. Alongside it, add a retriever wrapper or post-fusion step that applies the same `superseded_by` ceiling and a smaller authority boost to the fused list before it is cut to `rerank_k`. Keep `AuthorityReranker` for the reranked path.
 
 Acceptance criteria:
 

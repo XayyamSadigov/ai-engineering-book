@@ -108,8 +108,11 @@ def create_app(container: Container | None = None) -> FastAPI:
                c: Container = Depends(get_container)) -> dict[str, Any]:
         raw = body.content.encode("utf-8")
         try:
-            tenant = c.ingestion.peek_tenant(raw, body.filename)
+            doc_id, tenant = c.ingestion.peek(raw, body.filename)
             _require_admin(c, principal, tenant)
+            existing = c.registry.get(doc_id)
+            if existing is not None:  # the id may belong to another tenant: no overwriting or moving it
+                _require_admin(c, principal, existing.tenant)
             out = c.ingestion.submit_upload(raw, body.filename)
         except InvalidDocument as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc

@@ -98,6 +98,16 @@ def test_admin_upload_and_delete(client):
     assert api.post("/v1/documents", json=bad, headers=bearer("retail", ["rag-admin"])).status_code == 422
 
 
+def test_admin_cannot_take_over_another_tenants_document_id(client):
+    api, c = client
+    doc = ("---\nid: prod-logistics-route-planner\ntitle: Hijacked\nversion: \"9\"\nupdated_at: 2026-05-01\n"
+           "tenant: retail\nacl_groups: [\"all\"]\n---\n\n# Hijacked\n\n## Body\n\nReplacement text for the planner.\n")
+    before = c.registry.get("prod-logistics-route-planner")
+    r = api.post("/v1/documents", json={"filename": "x.md", "content": doc}, headers=bearer("retail", ["rag-admin"]))
+    assert r.status_code == 403
+    assert c.registry.get("prod-logistics-route-planner") == before  # still logistics, content untouched
+
+
 def test_status_health_and_metrics(client):
     api, _ = client
     api.post("/v1/ask", json={"question": PTO_Q}, headers=bearer())

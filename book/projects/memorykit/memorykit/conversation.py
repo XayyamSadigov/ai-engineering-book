@@ -158,7 +158,8 @@ class ConversationMemory:
         turn = by_index.get(f.turn_index)
         if turn is None or not f.value.strip():
             return None
-        if normalize_text(f.value) not in normalize_text(turn.content):
+        # Whole-token match: "INC-482" must not verify against "INC-4821", nor "150" against "$1500".
+        if not re.search(rf"(?<!\w){re.escape(normalize_text(f.value))}(?!\w)", normalize_text(turn.content)):
             return None  # the extractor paraphrased or invented it; an exact fact must be exact
         source = Source.USER_STATED if turn.role == "user" else Source.MODEL_INFERRED
         return SessionFact(

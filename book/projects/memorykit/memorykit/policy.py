@@ -113,6 +113,17 @@ def redact_pii(text: str) -> str:
     return text
 
 
+def _redact_value(value: object) -> object:
+    """Redact strings anywhere inside a structured value (dicts, lists), not only a bare string."""
+    if isinstance(value, str):
+        return redact_pii(value)
+    if isinstance(value, dict):
+        return {k: _redact_value(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_redact_value(v) for v in value]
+    return value
+
+
 def looks_like_instruction(text: str) -> bool:
     return any(rx.search(text) for rx in INSTRUCTION_PATTERNS)
 
@@ -162,8 +173,6 @@ class WritePolicy:
             return reject("instruction_like_content")
         if r.kind == MemoryKind.PROCEDURAL and r.source != Source.SYSTEM_OF_RECORD:
             return reject("procedural_requires_system_of_record")
-        if store is not None and store.is_suppressed(r):
-            return reject("suppressed_by_user_deletion")
 
         reasons: list[str] = []
         pii = find_pii(text)
@@ -176,9 +185,11 @@ class WritePolicy:
                 reasons.append(f"pii_allowed:{r.key}")
             else:
                 r.content = redact_pii(r.content)
-                if isinstance(r.value, str):
-                    r.value = redact_pii(r.value)
+                r.value = _redact_value(r.value)
                 reasons.append("redacted:" + ",".join(pii))
+        # After redaction: tombstones fingerprint the stored (redacted) form, so compare like with like.
+        if store is not None and store.is_suppressed(r):
+            return reject("suppressed_by_user_deletion")
 
         decision = Decision.ACCEPT
         if r.source == Source.MODEL_INFERRED:
@@ -233,6 +244,15 @@ def _merge_provenance(a: list[str], b: list[str]) -> list[str]:
     return list(dict.fromkeys([*a, *b]))
 
 
+def _renewed_expiry(e: MemoryRecord, candidate: MemoryRecord) -> datetime | None:
+    """A restatement can extend a memory's life, never shorten it; an unconfirmed guess changes nothing."""
+    if candidate.status == MemoryStatus.PENDING:
+        return e.expires_at
+    if e.expires_at is None or candidate.expires_at is None:
+        return None
+    return max(e.expires_at, candidate.expires_at)
+
+
 def consolidate(
     store: MemoryStore,
     candidate: MemoryRecord,
@@ -253,7 +273,8 @@ def consolidate(
                 "salience": max(e.salience, candidate.salience),
                 "provenance": _merge_provenance(e.provenance, candidate.provenance),
                 "source": better_source,
-                "expires_at": candidate.expires_at,
+                "sensitivity": _at_least(e.sensitivity, candidate.sensitivity),
+                "expires_at": _renewed_expiry(e, candidate),
                 "version": e.version + 1,
             })
             store.put(refreshed, expected_version=e.version)
@@ -292,7 +313,8 @@ def consolidate(
                     "confidence": max(e.confidence, candidate.confidence),
                     "salience": max(e.salience, candidate.salience),
                     "updated_at": now,
-                    "expires_at": candidate.expires_at,
+                    "sensitivity": _at_least(e.sensitivity, candidate.sensitivity),
+                    "expires_at": _renewed_expiry(e, candidate),
                     "version": e.version + 1,
                 })
                 store.put(merged, expected_version=e.version)

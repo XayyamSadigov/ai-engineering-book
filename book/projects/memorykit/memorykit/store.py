@@ -125,8 +125,8 @@ class InMemoryStore:
     def put(self, record: MemoryRecord, *, expected_version: int | None = None) -> MemoryRecord:
         with self._lock:
             current = self._records.get(record.id)
-            if current is not None and current.owner.tenant != record.owner.tenant:
-                raise PermissionError("record id belongs to another tenant")
+            if current is not None and current.owner != record.owner:
+                raise PermissionError("record id belongs to another owner")
             if expected_version is not None:
                 found = current.version if current else 0
                 if found != expected_version:
@@ -191,13 +191,17 @@ class InMemoryStore:
         return list(found.values())
 
     def delete_owner(self, owner: Owner) -> int:
-        """Erase everything a user owns, including their tombstones (nothing left to suppress)."""
+        """Erase everything a user owns, with the same cascade into derived records as `delete`,
+        then every tombstone the erasure produced or the user owned: fingerprints are derived from
+        personal data. Each root is its own transaction, so a crash mid-way is safe to retry.
+        Returns the number of the user's own records erased."""
         with self._lock:
             ids = [r.id for r in self._records.values() if r.owner == owner]
-            for i in ids:
-                del self._records[i]
-            self._tombstones = [t for t in self._tombstones if t.owner != owner]
-            return len(ids)
+        stones = [t for i in ids for t in self.delete(owner, i, reason="account erased")]
+        erased_ids = {t.record_id for t in stones}
+        with self._lock:
+            self._tombstones = [t for t in self._tombstones if t.owner != owner and t.record_id not in erased_ids]
+        return sum(1 for t in stones if t.owner == owner)
 
     def is_suppressed(self, record: MemoryRecord) -> bool:
         fp = fingerprint(record, self._secret)
@@ -321,9 +325,10 @@ class SQLiteStore:
         with self._lock:
             self._conn.execute("BEGIN IMMEDIATE")
             try:
-                cur = self._conn.execute("SELECT tenant, version FROM memories WHERE id = ?", (record.id,)).fetchone()
-                if cur is not None and cur["tenant"] != record.owner.tenant:
-                    raise PermissionError("record id belongs to another tenant")
+                cur = self._conn.execute("SELECT tenant, user_id, version FROM memories WHERE id = ?",
+                                         (record.id,)).fetchone()
+                if cur is not None and (cur["tenant"], cur["user_id"]) != (record.owner.tenant, record.owner.user or ""):
+                    raise PermissionError("record id belongs to another owner")
                 if expected_version is not None:
                     found = cur["version"] if cur else 0
                     if found != expected_version:
@@ -422,11 +427,14 @@ class SQLiteStore:
         return list(found.values())
 
     def delete_owner(self, owner: Owner) -> int:
+        args = (owner.tenant, owner.user or "")
+        ids = [row["id"] for row in self._conn.execute("SELECT id FROM memories WHERE tenant = ? AND user_id = ?", args)]
+        stones = [t for i in ids for t in self.delete(owner, i, reason="account erased")]
         with self._lock:
-            args = (owner.tenant, owner.user or "")
-            n = self._conn.execute("DELETE FROM memories WHERE tenant = ? AND user_id = ?", args).rowcount
             self._conn.execute("DELETE FROM tombstones WHERE tenant = ? AND user_id = ?", args)
-            return n
+            self._conn.executemany("DELETE FROM tombstones WHERE tenant = ? AND record_id = ?",
+                                   [(owner.tenant, t.record_id) for t in stones])
+        return sum(1 for t in stones if t.owner == owner)
 
     def is_suppressed(self, record: MemoryRecord) -> bool:
         row = self._conn.execute(

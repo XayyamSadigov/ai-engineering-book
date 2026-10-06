@@ -63,8 +63,8 @@ class UserProfileMemory:
         self._require_user(owner)
         now = self.clock()
         pending = self.store.get(owner, record_id)
-        if pending is None or pending.status != MemoryStatus.PENDING:
-            raise ProfileError(f"no pending proposal {record_id} for {owner}")
+        if pending is None or pending.status != MemoryStatus.PENDING or pending.is_expired(now):
+            raise ProfileError(f"no pending proposal {record_id} for {owner}")   # an expired guess is gone
         confirmed = pending.model_copy(update={
             "source": Source.USER_STATED,
             "status": MemoryStatus.ACTIVE,

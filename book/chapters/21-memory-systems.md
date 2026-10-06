@@ -8,9 +8,9 @@ Northwind Assist answers a few thousand employee questions a day. Without memory
 
 The naive fix is to embed every conversation turn and every agent observation into a vector store and retrieve the top hits into each prompt. It demos well. Within a month, three kinds of incident show up. First, the assistant tells Ana her manager is someone who left the team in the spring, because a stale memory outranks the current HR record. Second, a vendor newsletter that the agent summarized contains a paragraph addressed to "automated readers". The agent stored its own summary of that paragraph as a procurement note, and the next agent run reads the note as an established fact about what Procurement approved. Third, an employee invokes their right to erasure. The team deletes the profile row, but the phone number is still in a conversation summary, an embedding, and two episodes that quoted it.
 
-None of these is a model problem. Each is a database problem that nobody treated as one: no write policy, no provenance, no expiry, no conflict rule, no deletion semantics, no tenant scope enforced in the query. The source material puts it in one sentence that this chapter expands: treat memory as a database design problem, not a magic prompt feature.
+None of these is a model problem. Each is a database problem that nobody treated as one: no write policy, no provenance, no expiry, no conflict rule, no deletion semantics, no tenant scope enforced in the query. The fix is to treat memory as a database design problem rather than a prompt feature, and the rest of this chapter does exactly that.
 
-Memory also has a cost that is easy to miss. Every recalled memory spends context tokens (Chapter 5), adds an embedding call and a query to the request path, and widens what the model sees about a person. A memory system that cannot show it improves task success is a liability with a storage bill.
+Memory also has a cost that is easy to miss. Every recalled memory spends context tokens (Chapter 5), adds an embedding call and a query to the request path, and widens what the model sees about a person. If a memory system cannot show that it improves task success, it is all cost and risk.
 
 ## Mental model
 
@@ -22,17 +22,15 @@ The first is that **writes matter more than reads**. Retrieval mistakes are tran
 
 The second is that **"memory" is several stores, not one**. A user's preferred language, last week's incident trajectory, a reusable runbook procedure, and the last six turns of the current conversation differ in who may write them, how they are retrieved, how long they live, and what happens when they conflict. Collapsing them into one vector index loses all of those distinctions at once. The minimum design question for any proposed memory is: which store, which writer, which reader, which expiry, and which deletion path?
 
-Context is still a budget: memory decides *what is worth knowing*, and Chapter 5's builder decides *what is worth showing this time*, treating each recalled memory as an untrusted item with a source id and a priority.
+Context is still a budget: memory decides *what is worth knowing*, and Chapter 5's context builder decides *what is worth showing this time*, treating each recalled memory as an untrusted item with a source id and a priority.
 
 ## Core concepts
 
 ### The memory stack
 
-The source material describes agent memory as a stack, from the most immediate to the most durable. Each layer below is defined by what it holds, who writes it, how it is read, and how long it lives.
+It helps to picture agent memory as a stack, from the most immediate layer to the most durable. Each layer below is defined by what it holds, who writes it, how it is read, and how long it lives.
 
-The common split into short-term and long-term memory maps onto the stack as follows. **Short-term memory** is everything scoped to one task or one session: working memory and conversation memory. It lives in the request path, is rebuilt or discarded when the session ends, and its main risk is losing an exact fact during compaction. **Long-term memory** is everything that outlives the session: episodic, semantic, procedural, and profile memory. It lives in a store with an owner, a write policy, and an expiry, and its main risk is a wrong or stale fact that every later session inherits. The boundary between the two is a write: a fact crosses from short-term to long-term only through promotion and the write policy, never by default.
-
-**Working memory** is the state of the current task: the user's goal, the plan, tool results so far, budgets, approvals, and the current step. It lives in the agent runtime's typed state (Chapter 19) or the workflow state record (Chapter 17), not in a memory store. It is written by the harness on every step and discarded or archived when the task ends. Its main engineering rule comes from the source's state-machine view of agents: the transcript is not the state. Keep working memory structured so that deterministic code can enforce invariants on it.
+**Working memory** is the state of the current task: the user's goal, the plan, tool results so far, budgets, approvals, and the current step. It lives in the agent runtime's typed state (Chapter 19) or the workflow state record (Chapter 17), not in a memory store. It is written by the harness on every step and discarded or archived when the task ends. Its main engineering rule comes from Chapter 19's view of an agent as a state machine: the transcript is not the state. Keep working memory structured so that deterministic code can enforce invariants on it.
 
 **Conversation memory** is what the assistant knows about the current session beyond the last few turns. It consists of a verbatim window of recent turns, a rolling summary of older turns, and exact facts extracted from those turns: ticket ids, amounts, stated preferences, commitments. It is written by the application as the conversation proceeds, read on every turn, and lives as long as the session plus whatever retention the transcript has. Chapter 5 owns the compaction mechanics. This chapter adds what memory needs: verifying extracted facts, deciding their source, redacting a session, and promoting selected facts to long-term memory.
 
@@ -44,7 +42,9 @@ The common split into short-term and long-term memory maps onto the stack as fol
 
 **User-profile memory** is a small set of keyed facts about one user: preferred language, role, office, manager, time zone. It is the most visible kind to the user, the most likely to contain personal data, and the one where a wrong value is most embarrassing. Profile facts have slots (keys), so conflicts are well defined: there is exactly one current value for `office`.
 
-The source warns against collapsing these into one vector store. The reasons are concrete. Profile facts need exact keyed lookup and conflict resolution, which similarity search cannot express. Procedural memory needs review and versioning. Episodes need structured outcome fields for filtering ("show me failures"). Conversation memory needs ordering. One index means one retention period, one access rule, and one deletion path for data that needs six.
+The common split into short-term and long-term memory maps onto these six layers as follows. **Short-term memory** is everything scoped to one task or one session: working memory and conversation memory. It lives in the request path, is rebuilt or discarded when the session ends, and its main risk is losing an exact fact during compaction. **Long-term memory** is everything that outlives the session: episodic, semantic, procedural, and profile memory. It lives in a store with an owner, a write policy, and an expiry, and its main risk is a wrong or stale fact that every later session inherits. The boundary between the two is a write: a fact crosses from short-term to long-term only through promotion and the write policy, never by default.
+
+Do not collapse these six layers into one vector store, for concrete reasons. Profile facts need exact keyed lookup and conflict resolution, which similarity search cannot express. Procedural memory needs review and versioning. Episodes need structured outcome fields for filtering ("show me failures"). Conversation memory needs ordering. One index means one retention period, one access rule, and one deletion path for data that needs six.
 
 ### What a memory record must carry
 
@@ -60,7 +60,7 @@ Every durable memory in `memorykit` is a `MemoryRecord`, and each field exists b
 - **Status** (`active`, `pending`, `superseded`), **timestamps**, **expiry**, and **version**. Status separates proposals awaiting confirmation from facts. Version enables optimistic concurrency when two writers update the same record.
 - **Embedding and embedding model.** Storing the model id beside the vector is what lets you detect that an embedding model upgrade silently made old memories unreachable.
 
-A deleted record leaves a **tombstone**: the record id, owner, kind, key, deletion time, reason, and a keyed fingerprint of what the memory said, but never the content. Tombstones serve two purposes. They are evidence for an auditor that a deletion happened. They also let the write path refuse to re-create a deleted fact when an old transcript is re-processed. The fingerprint must be keyed (an HMAC with a deployment secret), because a plain hash of a phone number can be reversed by enumerating phone numbers.
+A deleted record leaves a **tombstone**, a small marker row that remembers the deletion: the record id, owner, kind, key, deletion time, reason, and a keyed fingerprint of what the memory said, but never the content. Tombstones serve two purposes. They are evidence for an auditor that a deletion happened. They also let the write path refuse to re-create a deleted fact when an old transcript is re-processed. The fingerprint must be keyed (an HMAC with a deployment secret), because a plain hash of a phone number can be reversed by enumerating phone numbers.
 
 ### Storage choices
 
@@ -72,19 +72,19 @@ The storage decision follows from the access patterns, and the access patterns d
 
 **Key-value stores and caches** such as Redis suit conversation state for active sessions, where latency matters and the data is short-lived. They are poor systems of record for anything a user may ask to export or delete, because retention is easy to lose track of.
 
-**Event logs** are the source of truth for conversation and agent history. The source makes this point twice: keep raw logs outside the active context for audit and recovery, and prefer event logs over mutable narrative summaries as the record of what happened. Summaries, facts, and episodes are all derived from the log and can be regenerated from it.
+**Event logs** are the source of truth for conversation and agent history. Keep raw logs outside the active context for audit and recovery, and treat the event log, not a mutable narrative summary, as the record of what happened. Summaries, facts, and episodes are all derived from the log and can be regenerated from it.
 
 **Knowledge graphs** help when queries genuinely traverse relationships ("who owns the warehouse Ana's manager runs?"). Add one when such multi-hop questions appear in your evaluation set, not before.
 
-An illustrative sizing for Northwind: 4,000 employees with about 30 durable memories each is 120,000 records. With 1,536-dimensional float32 embeddings that is roughly 740 MB of vectors, plus a few hundred bytes of metadata per row. That is a modest single PostgreSQL instance. Memory systems rarely fail on storage volume. They fail on correctness.
+An illustrative sizing for Northwind: 4,000 employees with about 30 durable memories each is 120,000 records. With 1,536-dimensional float32 embeddings that is roughly 740 MB of vectors, plus a few hundred bytes of metadata per row. That is a modest single PostgreSQL instance. Storage volume is rarely the problem; correctness is.
 
 ### Summarization and compaction, seen from memory
 
 Chapter 5 covers compaction as a context mechanism: trigger high and compact low, guard the summary against invented literals, keep the turn log append-only, and rebuild summaries periodically to reset drift. Memory adds three requirements on top.
 
-First, **exact facts leave the turns before the turns leave the context**. Before a span of turns is folded into the summary, an extractor pulls out identifiers, amounts, preferences, and commitments as structured facts. The summarizer refers to them by key and never restates them. The source is blunt about why: never compress secrets, financial numbers, code, or legal clauses into prose unless the original remains retrievable.
+First, **exact facts leave the turns before the turns leave the context**. Before a span of turns is folded into the summary, an extractor pulls out identifiers, amounts, preferences, and commitments as structured facts. The summarizer refers to them by key and never restates them. The rule behind this: never compress secrets, financial numbers, code, or legal clauses into prose unless the original remains retrievable.
 
-Second, **extracted facts must be verified, and their source decided by evidence**. The extractor is a model, so its output is a claim. `ConversationMemory` checks that the extracted value appears in the turn the extractor cited. If it appears in a user turn, the fact is `user_stated`. If it appears only in an assistant turn, it is `model_inferred`, because the assistant saying "your shipping site is the Lisbon warehouse" is not the user saying it. If it appears nowhere, the extractor paraphrased or invented it, and it is dropped. This small check is what keeps "the user told us" honest.
+Second, **extracted facts must be verified, and their source decided by evidence**. The extractor is a model, so its output is a claim. `ConversationMemory` checks that the extracted value appears in the turn the extractor cited. If the cited turn is a user turn, the fact is `user_stated`. If it is an assistant turn, the fact is `model_inferred`, because the assistant saying "your shipping site is the Lisbon warehouse" is not the user saying it. If the value does not appear in the cited turn as a whole token (so `INC-482` does not match `INC-4821`), the extractor paraphrased or invented it, and it is dropped. This small check is what keeps "the user told us" honest.
 
 `ConversationMemory` also applies Chapter 5's literal guard to every summary before accepting it: a summary that contains an identifier or multi-digit number found in none of its sources (the previous summary, the folded turns, the verified facts) is rejected. A rejected summary leaves the turns in the verbatim window, so nothing is lost except prompt length, and the rejection is recorded so it can be counted.
 
@@ -105,7 +105,7 @@ recency = 0.5 ** (age_days / half_life_days)
 
 **Relevance** is cosine similarity between the query and the memory embedding. **Recency** decays exponentially with a half-life: a memory updated 30 days ago gets 0.5 with a 30-day half-life, 90 days ago gets 0.125. **Salience** is the stored importance. **Source weight** down-weights model inferences relative to stated and system-of-record facts.
 
-The relevance gate is the part teams leave out, and the arithmetic shows why it matters. Take illustrative weights of 0.6, 0.25, and 0.15 with a 30-day half-life. Memory A is "Ana prefers Spanish", relevance 0.82 to "what language should I reply in", 90 days old, salience 0.5. Its score is 0.492 + 0.031 + 0.075 = 0.598. Memory B is "Ana uses a docking station", relevance 0.20, written this morning, salience 1.0. Without a gate its score is 0.12 + 0.25 + 0.15 = 0.52. B is nearly tied with A while being irrelevant, purely because it is new and someone marked it important. Ten fresh, salient, irrelevant memories would push the relevant one out of a top-5 entirely. A gate at 0.25 discards B before blending. Recency and salience are tie-breakers among relevant memories, not substitutes for relevance.
+The relevance gate is the part teams leave out, and the arithmetic shows why it matters. Take illustrative weights of 0.6, 0.25, and 0.15 with a 30-day half-life. Memory A is "Ana prefers Spanish", relevance 0.82 to "what language should I reply in", 90 days old, salience 0.5. Its score is 0.492 + 0.031 + 0.075 = 0.598. Memory B is "Ana uses a docking station", relevance 0.20, written this morning, salience 1.0. Without a gate its score is 0.12 + 0.25 + 0.15 = 0.52. B trails A by only 0.08 while being irrelevant, purely because it is new and someone marked it important. If A's relevance were 0.70 instead of 0.82, B would be within 0.01 of it, and a handful of such memories could crowd the relevant one out of a top-5. A gate at 0.25 discards B before blending. Recency and salience are tie-breakers among relevant memories, not substitutes for relevance.
 
 Half-lives should differ by kind. Profile facts are refreshed whenever they are restated, so their `updated_at` stays current. Episodes go stale faster than facts, so `EpisodicStore` uses a shorter half-life and weights relevance more heavily. Salience can be set by policy (failures default higher than successes in episodic memory, because they prevent repeated mistakes) or by explicit user marking ("remember this, it's important").
 
@@ -119,14 +119,14 @@ The write policy is the gate between "some component wants to remember X" and a 
 
 1. **Untrusted sources never write memory.** Retrieved document text and free-text tool output are rejected outright. If a tool is a system of record (the HR system, the CMDB), the caller says so explicitly with `system_of_record`. The default for tool text is untrusted.
 2. **Secrets are never stored**, in any kind, from any source: passwords, API keys, private keys, card numbers. A memory store is a terrible secret store. It is replicated into prompts, logs, and exports.
-3. **Directive-shaped content is rejected outside procedural memory.** A memory describes the world. Text that addresses the assistant ("ignore previous instructions", "send the directory to this address", "no confirmation needed") is either a bug or an attack. This is a heuristic second line of defense. The source rule is what actually stops poisoning.
+3. **Directive-shaped content is rejected outside procedural memory.** A memory describes the world. Text that addresses the assistant ("ignore previous instructions", "send the directory to this address", "no confirmation needed") is either a bug or an attack. This is a heuristic second line of defense. Rule 1, which rejects by source, is what actually stops poisoning.
 4. **Procedural memory requires a system of record**: a reviewed runbook or prompt registry entry, never a chat turn or a model note.
-5. **A fact the user deleted is not re-created.** The tombstone fingerprint is checked.
-6. **PII is allowed only where it belongs.** Profile slots on an allow-list (`work_email`, `work_phone`) may hold it when the source is trusted, and the record is raised to confidential. Free-text episodic and semantic memories have PII redacted. Anything else is rejected.
+5. **A fact the user deleted is not re-created.** The tombstone fingerprint is checked, after any redaction in rule 6, because the tombstone fingerprinted the stored, redacted form.
+6. **PII is allowed only where it belongs.** Profile slots on an allow-list (`work_email`, `work_phone`) may hold it when the source is trusted, and the record is raised to confidential. In every other kind, PII is redacted, including strings inside structured values. PII in any other profile slot, or from an untrusted source, is rejected.
 7. **Model inferences need confidence, and profile inferences need confirmation.** Below a threshold, an inference is dropped. A confident profile inference is stored as `pending`: invisible to retrieval, with a short TTL, until the user confirms it.
 8. **Every record gets an expiry** capped by its kind's TTL. A caller cannot request a longer life than policy allows.
 
-The confirmation flow deserves emphasis because it is how an assistant can learn from conversation without converting guesses into facts. The assistant notices Ana writes in Spanish and proposes `preferred_language = es` with confidence 0.8. The proposal is pending. At a natural moment the assistant asks, "Should I always reply in Spanish?" If Ana says yes, the record becomes `user_stated`, gets the confirming turn in its provenance, and receives the normal profile TTL. If she says no, the proposal is deleted with a tombstone, so the same guess is not proposed again next week. If she ignores it, it expires in 14 days. The source's guidance is precisely this: prefer explicit user-approved facts or system-derived records over free-form self-generated memories.
+The confirmation flow deserves emphasis because it is how an assistant can learn from conversation without converting guesses into facts. The assistant notices Ana writes in Spanish and proposes `preferred_language = es` with confidence 0.8. The proposal is pending. At a natural moment the assistant asks, "Should I always reply in Spanish?" If Ana says yes, the record becomes `user_stated`, gets the confirming turn in its provenance, and receives the normal profile TTL. If she says no, the proposal is deleted with a tombstone, so the same guess is not proposed again next week. If she ignores it, it expires in 14 days and can no longer be confirmed. The general principle: prefer facts the user approved, or records from a system, over free-form memories the model wrote for itself.
 
 One more write-path rule is easy to miss: **run the policy before computing the embedding**. Sending a rejected secret to an embedding provider is itself a disclosure. `write()` runs the policy, then a `prepare` hook (which computes the embedding on the redacted, approved text), then consolidation.
 
@@ -134,7 +134,7 @@ One more write-path rule is easy to miss: **run the policy before computing the 
 
 Without consolidation, memory grows by repetition. Ana mentions her language preference in twelve conversations, and the store holds twelve near-identical facts that crowd out everything else at recall time. Consolidation decides, for each approved candidate, whether it is new, a duplicate, an update, or a losing conflict.
 
-**Exact duplicates** (same kind, key, and normalized value) refresh the existing record. Provenance is merged, confidence and salience take the maximum, the expiry is renewed, and the version increments. Restating a fact keeps it alive. That is the right behavior, because a fact the user keeps mentioning is a fact that is still true.
+**Exact duplicates** (same kind, key, and normalized value) refresh the existing record. Provenance is merged, confidence, salience, and sensitivity take the maximum, the expiry is extended (never shortened, and an unconfirmed guess leaves it alone), and the version increments. Restating a fact keeps it alive, which is right, because a fact the user keeps mentioning is probably still true.
 
 **Near duplicates** among keyless free-text memories are detected by embedding similarity above a high threshold (0.92 by default, illustrative). The newer wording replaces the older, and provenance is merged. Near-duplicate merging is lossy: if the older memory contained a detail the newer one lacks, the detail is gone. Keep the threshold high, and keep the provenance so the original turns can be consulted.
 
@@ -156,9 +156,9 @@ TTL by kind is a starting point. Some facts carry their own expiry: "I'm on pare
 
 Memory concentrates personal data in a place designed to be read back into prompts. Three properties must hold.
 
-**Tenant and user scope are enforced in the store, not in the caller.** Every `MemoryStore` method takes an `Owner`, and there is no method that reads across tenants. The SQL always begins with `WHERE tenant = ?`, built by the store, never from a caller-supplied filter. A record id cannot be re-used in another tenant: `put` refuses to move an id across tenants. The same user id in two tenants is two different owners. Northwind's target of zero cross-tenant leakage is a property you test, with the same test running against every store implementation.
+**Tenant and user scope are enforced in the store, not in the caller.** Every `MemoryStore` method takes an `Owner`, and there is no method that reads across tenants. The SQL always begins with `WHERE tenant = ?`, built by the store, never from a caller-supplied filter. A record id cannot be re-used by another owner: `put` refuses to change an existing record's owner, across tenants or within one. The same user id in two tenants is two different owners. Northwind's target of zero cross-tenant leakage is a property you test, with the same test running against every store implementation.
 
-**Deletion is hard, cascading, and suppressing.** When a user asks to forget something, the row is deleted, not flagged. Every record derived from it, found transitively through `mem:<id>` provenance, is deleted too. That covers a summary that quoted the fact and a team note that cited the summary. A tombstone records that the deletion happened, and its fingerprint blocks re-creation. Conversation redaction follows the same logic for session state: rewrite the log, drop the facts, rebuild the summary. For a full account erasure, `delete_owner` removes every record and every tombstone for the user, because after erasure there is nothing left to suppress, and fingerprints are themselves derived from personal data.
+**Deletion is hard, cascading, and suppressing.** When a user asks to forget something, the row is deleted, not flagged. Every record derived from it, found transitively through `mem:<id>` provenance, is deleted too. That covers a summary that quoted the fact and a team note that cited the summary. A tombstone records that the deletion happened, and its fingerprint blocks re-creation. Conversation redaction follows the same logic for session state: rewrite the log, drop the facts, rebuild the summary. For a full account erasure, `delete_owner` deletes every record the user owns with the same cascade into derived records, then removes every tombstone for the user and for the records the erasure cascaded into, because after erasure there is nothing left to suppress, and fingerprints are themselves derived from personal data.
 
 **Export answers a data-subject request.** `export(owner)` returns every record in every status, including expired and superseded ones, along with the list of deletions, without embeddings. Vectors are derived data with no meaning to a person. Content, value, source, and provenance are what the request is about.
 
@@ -171,7 +171,7 @@ Memory poisoning turns a one-time manipulation into durable false state (Chapter
 Three defenses work together, and `memorykit` tests each against the shared Northwind fixture.
 
 1. **Source rejection.** Text from `retrieved_content` or `tool_output` cannot become memory. The test feeds the newsletter's injection paragraph to `SemanticMemory.remember` and asserts that the write is rejected, that nothing is stored, and that the embedder was never called.
-2. **Laundering detection.** The obvious bypass is to have the model summarize the document and store the summary as `model_inferred`. The content is still directive-shaped: it names an exfiltration target and claims no confirmation is needed. The instruction heuristic rejects it. Heuristics can be evaded, so this is defense in depth, not the primary control.
+2. **Laundering detection.** The obvious bypass is to have the model summarize the document and store the summary as `model_inferred`. The content is still directive-shaped: it names an exfiltration target and claims no confirmation is needed. The instruction heuristic rejects it. Heuristics can be evaded, so this is a second layer behind source rejection.
 3. **Limits on what model-written memory can do.** Model inferences rank below stated facts, profile inferences need user confirmation, and procedural memory, the only kind that changes behavior, cannot be written by the model at all. Even a poisoned semantic memory that slips through can only appear as a labeled, dated, down-weighted note. It cannot become an instruction.
 
 The operational counterpart is that poisoning attempts are visible in telemetry: a spike in rejections with reason `untrusted_source` or `instruction_like_content`, concentrated on one document id in provenance, means someone is testing your write path.
@@ -200,7 +200,9 @@ Follow one session of Northwind Assist through `memorykit`. When Ana opens a cha
 
 As turns accumulate, `ConversationMemory` compacts past its trigger: exact facts are extracted, verified against their cited turns, and assigned a source; older turns fold into the summary. At session end, allow-listed facts are promoted. Her stated `preferred_language` becomes an active profile fact with provenance `turn:s1#2`. The `shipping_site` that only the assistant mentioned becomes a pending proposal. Her personal phone number is rejected because `phone` is not an allowed profile slot. The ticket id stays in the session.
 
-The incident agent, meanwhile, finishes a POS outage run. The harness records an episode; the policy redacts the caller's phone number, the prepare hook embeds the redacted text, and the episode is stored as tenant-wide `system_of_record` memory with provenance `run:r-101`, ready to be returned as a labeled hint the next time a register declines cards. Every field of that episode comes from the harness, not from the model's prose: the task from the run's `GoalSet`, the actions from `RunResult.trajectory()`, the outcome from the stop reason (`COMPLETED` with a passed Definition of Done is a success, a budget or verification stop is a failure), and the run id as provenance (Chapter 19). Only the optional lesson is model-written, which is why it is rendered as unverified. On the next run the hints go into the goal as a labeled block, below the instructions, so the planner can use them and the Definition of Done still decides whether the run succeeded. A week later, Ana asks the assistant to forget her shipping site. Every record for the key is deleted with tombstones, and a later re-processing of the old transcript cannot bring it back.
+The incident agent, meanwhile, finishes a POS outage run. The harness records an episode; the policy redacts the caller's phone number, the prepare hook embeds the redacted text, and the episode is stored as tenant-wide `system_of_record` memory with provenance `run:r-101`, ready to be returned as a labeled hint the next time a register declines cards. Every field of that episode comes from the harness rather than the model's prose: the task from the run's `GoalSet`, the actions from `RunResult.trajectory()`, the outcome from the stop reason (`COMPLETED` with a passed Definition of Done is a success, a budget or verification stop is a failure), and the run id as provenance (Chapter 19). Only the optional lesson is model-written, which is why it is rendered as unverified. On the next run the hints go into the goal as a labeled block, below the instructions, so the planner can use them and the Definition of Done still decides whether the run succeeded.
+
+A week later, Ana asks the assistant to forget her shipping site. Every record for the key is deleted with tombstones, and a later re-processing of the old transcript cannot bring it back.
 
 ## Architecture
 
@@ -587,8 +589,8 @@ class InMemoryStore:
     def put(self, record: MemoryRecord, *, expected_version: int | None = None) -> MemoryRecord:
         with self._lock:
             current = self._records.get(record.id)
-            if current is not None and current.owner.tenant != record.owner.tenant:
-                raise PermissionError("record id belongs to another tenant")
+            if current is not None and current.owner != record.owner:
+                raise PermissionError("record id belongs to another owner")
             if expected_version is not None:
                 found = current.version if current else 0
                 if found != expected_version:
@@ -653,13 +655,17 @@ class InMemoryStore:
         return list(found.values())
 
     def delete_owner(self, owner: Owner) -> int:
-        """Erase everything a user owns, including their tombstones (nothing left to suppress)."""
+        """Erase everything a user owns, with the same cascade into derived records as `delete`,
+        then every tombstone the erasure produced or the user owned: fingerprints are derived from
+        personal data. Each root is its own transaction, so a crash mid-way is safe to retry.
+        Returns the number of the user's own records erased."""
         with self._lock:
             ids = [r.id for r in self._records.values() if r.owner == owner]
-            for i in ids:
-                del self._records[i]
-            self._tombstones = [t for t in self._tombstones if t.owner != owner]
-            return len(ids)
+        stones = [t for i in ids for t in self.delete(owner, i, reason="account erased")]
+        erased_ids = {t.record_id for t in stones}
+        with self._lock:
+            self._tombstones = [t for t in self._tombstones if t.owner != owner and t.record_id not in erased_ids]
+        return sum(1 for t in stones if t.owner == owner)
 
     def is_suppressed(self, record: MemoryRecord) -> bool:
         fp = fingerprint(record, self._secret)
@@ -799,6 +805,17 @@ def redact_pii(text: str) -> str:
     return text
 
 
+def _redact_value(value: object) -> object:
+    """Redact strings anywhere inside a structured value (dicts, lists), not only a bare string."""
+    if isinstance(value, str):
+        return redact_pii(value)
+    if isinstance(value, dict):
+        return {k: _redact_value(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_redact_value(v) for v in value]
+    return value
+
+
 def looks_like_instruction(text: str) -> bool:
     return any(rx.search(text) for rx in INSTRUCTION_PATTERNS)
 
@@ -848,8 +865,6 @@ class WritePolicy:
             return reject("instruction_like_content")
         if r.kind == MemoryKind.PROCEDURAL and r.source != Source.SYSTEM_OF_RECORD:
             return reject("procedural_requires_system_of_record")
-        if store is not None and store.is_suppressed(r):
-            return reject("suppressed_by_user_deletion")
 
         reasons: list[str] = []
         pii = find_pii(text)
@@ -862,9 +877,11 @@ class WritePolicy:
                 reasons.append(f"pii_allowed:{r.key}")
             else:
                 r.content = redact_pii(r.content)
-                if isinstance(r.value, str):
-                    r.value = redact_pii(r.value)
+                r.value = _redact_value(r.value)
                 reasons.append("redacted:" + ",".join(pii))
+        # After redaction: tombstones fingerprint the stored (redacted) form, so compare like with like.
+        if store is not None and store.is_suppressed(r):
+            return reject("suppressed_by_user_deletion")
 
         decision = Decision.ACCEPT
         if r.source == Source.MODEL_INFERRED:
@@ -919,6 +936,15 @@ def _merge_provenance(a: list[str], b: list[str]) -> list[str]:
     return list(dict.fromkeys([*a, *b]))
 
 
+def _renewed_expiry(e: MemoryRecord, candidate: MemoryRecord) -> datetime | None:
+    """A restatement can extend a memory's life, never shorten it; an unconfirmed guess changes nothing."""
+    if candidate.status == MemoryStatus.PENDING:
+        return e.expires_at
+    if e.expires_at is None or candidate.expires_at is None:
+        return None
+    return max(e.expires_at, candidate.expires_at)
+
+
 def consolidate(
     store: MemoryStore,
     candidate: MemoryRecord,
@@ -939,7 +965,8 @@ def consolidate(
                 "salience": max(e.salience, candidate.salience),
                 "provenance": _merge_provenance(e.provenance, candidate.provenance),
                 "source": better_source,
-                "expires_at": candidate.expires_at,
+                "sensitivity": _at_least(e.sensitivity, candidate.sensitivity),
+                "expires_at": _renewed_expiry(e, candidate),
                 "version": e.version + 1,
             })
             store.put(refreshed, expected_version=e.version)
@@ -978,7 +1005,8 @@ def consolidate(
                     "confidence": max(e.confidence, candidate.confidence),
                     "salience": max(e.salience, candidate.salience),
                     "updated_at": now,
-                    "expires_at": candidate.expires_at,
+                    "sensitivity": _at_least(e.sensitivity, candidate.sensitivity),
+                    "expires_at": _renewed_expiry(e, candidate),
                     "version": e.version + 1,
                 })
                 store.put(merged, expected_version=e.version)
@@ -1294,8 +1322,8 @@ class UserProfileMemory:
         self._require_user(owner)
         now = self.clock()
         pending = self.store.get(owner, record_id)
-        if pending is None or pending.status != MemoryStatus.PENDING:
-            raise ProfileError(f"no pending proposal {record_id} for {owner}")
+        if pending is None or pending.status != MemoryStatus.PENDING or pending.is_expired(now):
+            raise ProfileError(f"no pending proposal {record_id} for {owner}")   # an expired guess is gone
         confirmed = pending.model_copy(update={
             "source": Source.USER_STATED,
             "status": MemoryStatus.ACTIVE,
@@ -1525,7 +1553,8 @@ class ConversationMemory:
         turn = by_index.get(f.turn_index)
         if turn is None or not f.value.strip():
             return None
-        if normalize_text(f.value) not in normalize_text(turn.content):
+        # Whole-token match: "INC-482" must not verify against "INC-4821", nor "150" against "$1500".
+        if not re.search(rf"(?<!\w){re.escape(normalize_text(f.value))}(?!\w)", normalize_text(turn.content)):
             return None  # the extractor paraphrased or invented it; an exact fact must be exact
         source = Source.USER_STATED if turn.role == "user" else Source.MODEL_INFERRED
         return SessionFact(
@@ -1756,7 +1785,7 @@ __all__ = ["Episode", "EpisodicStore", "ScoredEpisode", "Outcome"]
 
 ### Tests
 
-Store tests are parametrized over both implementations, so tenant isolation, expiry, cascading deletes, and export are a contract, not a property of one backend. Three representative tests follow; the full suite is on disk.
+Store tests are parametrized over both implementations, so tenant isolation, expiry, cascading deletes, and export are checked as a contract that every backend must meet. Three representative tests follow; the full suite is on disk.
 
 ```python
 # path: book/projects/memorykit/tests/test_store.py  (excerpt)
@@ -1823,7 +1852,7 @@ def test_redaction_rewrites_log_facts_and_summary():
 
 **The record is the contract.** Every other module manipulates `MemoryRecord`. `Source` has five values, but only three can ever be stored: `UNTRUSTED_SOURCES` exists so the policy and the tests name the same set. `SOURCE_PRECEDENCE` is a plain dictionary because conflict precedence is a product decision you will want to read and change in one place.
 
-**The store enforces scope.** `_visible` and the SQL builder apply the tenant predicate unconditionally, and user scope is exact unless `include_shared` is passed. `get` requires the exact owner, so a guessed record id from another user returns nothing. `put` refuses to move an id across tenants, which closes the "overwrite someone else's memory by id" hole. `delete` collects the transitive closure of derived records within the tenant before deleting anything, writes a tombstone for each, and labels derived deletions with their cause. Expiry is checked in the read predicate, so `purge_expired` is a retention job, not a correctness requirement.
+**The store enforces scope.** `_visible` and the SQL builder apply the tenant predicate unconditionally, and user scope is exact unless `include_shared` is passed. `get` requires the exact owner, so a guessed record id from another user returns nothing. `put` refuses to give an existing id a different owner, even within the same tenant, which closes the "overwrite someone else's memory by id" hole. `delete` collects the transitive closure of derived records within the tenant before deleting anything, writes a tombstone for each, and labels derived deletions with their cause. Expiry is checked in the read predicate, so `purge_expired` exists for retention; correctness does not depend on it.
 
 **`write()` is the only door.** The policy evaluates a copy of the candidate and returns the record as it would be stored: TTL capped, PII redacted, status set. Only then does `prepare` run. In `SemanticMemory` and `EpisodicStore` that is where the embedding is computed, which is why the poisoning test can assert the embedder was never called. Consolidation then queries active records of the same kind and key. The order of checks in `consolidate` matters: exact duplicates refresh first, so restating a fact never registers as a conflict; pending proposals are inserted without displacing anything; keyed conflicts go through `candidate_wins`; keyless near duplicates merge. Supersede marks every active record for the key, not just the newest, which repairs the state if two writers ever raced.
 
@@ -1843,15 +1872,15 @@ def test_redaction_rewrites_log_facts_and_summary():
 
 **Security.** The write policy is a security control and should be owned and reviewed like one. Log every rejection with reason, source, and provenance, but not the rejected content, which may be a secret. Keep procedural memory in a reviewed registry with versioning. Enforce tenant scope twice: in the store's query builder and in database row-level security. Encrypt the store at rest, and treat memory content as at least confidential by default, since it is data about people. Memories rendered into prompts are untrusted items and get the same labeling as retrieved documents (Chapters 5 and 26).
 
-**Operations.** Run the purge job daily. Give users a page listing what the assistant remembers, with edit and delete: users correct what they can see. Treat embedding-model upgrades as migrations, and switch only after `needs_reembedding` reaches zero.
+**Operations.** Run the purge job daily. Give users a page listing what the assistant remembers, with edit and delete, so they can correct it. Treat embedding-model upgrades as migrations, and switch only after `needs_reembedding` reaches zero.
 
-**Observability.** Memory changes answers without changing code, so trace it at the memory level, not only the HTTP level (Chapter 31). Record one span per recall (`memory.recall`) with the owner's tenant, the kinds queried, candidate and returned counts, the top relevance score, and the `needs_reembedding` count, plus the ids of the memories rendered into the prompt; without those ids a surprising answer cannot be traced to the memory that caused it. Record one span per write (`memory.write`) with the decision, the reasons, the consolidation action, and the source, never the content. Record compaction with extraction counts, facts dropped by verification, and guard rejections. Dashboards follow from these attributes: write decisions by reason (a spike in `untrusted_source` or `instruction_like_content` on one document is a poisoning probe), conflict rate per key, recall forbidden-rate from audit samples, and memory tokens per request against the context budget. Alert on any recalled record whose tenant differs from the request's tenant, on a nonzero `needs_reembedding` count after a migration window, and on a purge job that has not succeeded for two days.
+**Observability.** Memory changes answers without changing code, so trace it at the memory level, not only the HTTP level (Chapter 31). Record one span per recall (`memory.recall`) with the owner's tenant, the kinds queried, candidate and returned counts, the top relevance score, and the `needs_reembedding` count, plus the ids of the memories rendered into the prompt; without those ids a surprising answer cannot be traced to the memory that caused it. Record one span per write (`memory.write`) with the decision, the reasons, the consolidation action, and the source, never the content. Record compaction with extraction counts, facts dropped by verification, and guard rejections. Dashboards follow from these attributes: write decisions by reason (the poisoning signal described earlier), conflict rate per key, recall forbidden-rate from audit samples, and memory tokens per request against the context budget. Alert on any recalled record whose tenant differs from the request's tenant, on a nonzero `needs_reembedding` count after a migration window, and on a purge job that has not succeeded for two days.
 
-**Concurrency.** Two sessions of the same user can promote conflicting facts at the same moment. Version checks in `put` turn a lost update into a `VersionConflict` that the caller retries by re-reading. For shared tenant memory written by many agents, prefer append-only episodes over mutable shared notes. The source's warning applies: shared memory simplifies coordination but creates concurrency and stale-state problems, and event logs are a better source of truth than mutable summaries.
+**Concurrency.** Two sessions of the same user can promote conflicting facts at the same moment. Version checks in `put` turn a lost update into a `VersionConflict` that the caller retries by re-reading. For shared tenant memory written by many agents, prefer append-only episodes over mutable shared notes. Shared memory simplifies coordination but creates concurrency and stale-state problems.
 
 ## Common mistakes
 
-- **One vector store for all memory.** Profile facts, episodes, procedures, and conversation state end up with one retention period, one access rule, and no way to resolve conflicts.
+- **One vector store for all memory.** The symptom is that you cannot delete, expire, or resolve conflicts in one kind without touching the others.
 - **Storing model output as fact.** An agent's self-written note is stored with the same status as something the user said or HR recorded, and nothing downstream can tell them apart.
 - **No source field.** Without it you cannot implement poisoning defenses, precedence, or down-weighting, and you cannot retrofit it onto existing rows.
 - **Scope applied after retrieval.** Searching a global index and filtering the results by tenant leaks through similarity scores and through bugs in the filter. Scope must be in the query.
@@ -1886,7 +1915,7 @@ def test_redaction_rewrites_log_facts_and_summary():
 
 **Summaries versus raw history.** Summaries keep context small and lose detail. Raw history is exact and expensive. Keep both: the log as the source of truth, the summary as a view, and facts as the exact layer between them.
 
-**Personalization versus predictability.** Memory makes responses differ between users and over time, which complicates debugging and evaluation. Record which memories were rendered into each request (Chapter 31), so a surprising answer can be traced to the memory that caused it.
+**Personalization versus predictability.** Memory makes responses differ between users and over time, which complicates debugging and evaluation. Recording the rendered memory ids (see Observability) is what keeps this debuggable.
 
 ## Evaluation and testing
 
@@ -1900,7 +1929,7 @@ Evaluate memory at three levels, cheapest first.
 - *Write-policy accuracy.* Build cases of candidate records labeled should-store or must-refuse: injection paragraphs from the threat model, laundered summaries, secrets, PII in the wrong slot, legitimate preferences, harness episodes. Report false accepts and false rejects separately. A false accept on a poisoning case is a security defect owned by the security reviewer. A false reject is a usefulness defect owned by the product team. `evaluate_write_policy` implements this.
 - *Extraction fidelity.* On transcripts with labeled facts, measure precision and recall of extracted facts after verification, and the rate at which verification drops extractor output. A rising drop rate after a model change is an early warning.
 
-**End-to-end evaluation** answers whether memory helps. Run the same multi-session scenarios with memory on and off, and compare task success, the number of turns to completion, how often the user repeats information, and answer correctness on questions that depend on earlier sessions. Add scenarios where memory should not be used: a stale fact contradicted by the system of record, a current-turn instruction that overrides a preference, a question from a colleague about another user. Score with deterministic assertions where possible and with a rubric judge where not (Chapter 24). For agents, inspect trajectories, not just final answers, as the source insists: an agent that reached the right answer by trusting a poisoned memory has still failed.
+**End-to-end evaluation** answers whether memory helps. Run the same multi-session scenarios with memory on and off, and compare task success, the number of turns to completion, how often the user repeats information, and answer correctness on questions that depend on earlier sessions. Add scenarios where memory should not be used: a stale fact contradicted by the system of record, a current-turn instruction that overrides a preference, a question from a colleague about another user. Score with deterministic assertions where possible and with a rubric judge where not (Chapter 24). For agents, inspect trajectories as well as final answers: an agent that reached the right answer by trusting a poisoned memory has still failed.
 
 Track in production: the recall forbidden rate (via audit sampling), user corrections and deletions per thousand sessions, conflict rate per key, and the share of answers in which rendered memory was cited or used. A memory feature whose memories are never used in answers is pure cost.
 

@@ -42,14 +42,31 @@ class ArgConstraint(Protocol):
     def __call__(self, value: Any, ctx: GuardContext) -> str | None: ...
 
 
+_ONE_ADDRESS = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}\.?")
+
+
+def _strings(value: Any) -> Iterable[str]:
+    """Every string inside a tool argument, so each is scanned as written (a newline stays a newline)."""
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for v in value.values():
+            yield from _strings(v)
+    elif isinstance(value, (list, tuple)):
+        for v in value:
+            yield from _strings(v)
+
+
 def recipient_domains(allowed: Iterable[str]) -> ArgConstraint:
     allowed_set = {a.lower() for a in allowed}
 
     def check(value: Any, ctx: GuardContext) -> str | None:
         recipients = value if isinstance(value, list) else [value]
         for r in recipients:
-            if not isinstance(r, str) or "@" not in r:
-                return "recipient is not an email address"
+            r = r.strip() if isinstance(r, str) else r
+            # exactly one plain address per entry: "evil@x.com,bob@ok.example" must not pass on its last @
+            if not isinstance(r, str) or not _ONE_ADDRESS.fullmatch(r):
+                return "recipient is not an email address (one plain address per entry)"
             domain = r.rsplit("@", 1)[1].lower().rstrip(".")
             if domain not in allowed_set:
                 return f"recipient domain '{domain}' not allowlisted"
@@ -143,15 +160,18 @@ class ToolPolicyCheck(BaseCheck):
                     return Verdict.block(f"{call.name}.{arg}: {problem}", findings=[Finding("constraint", detail=arg)])
 
         if rule.outbound:
-            blob = json.dumps(call.arguments, ensure_ascii=False)
-            if any(c in blob for c in self.canaries):
+            # Scan each string value as written: in json.dumps a newline becomes the two characters
+            # "\n", and the "n" defeats the word-boundary anchors the detectors rely on.
+            values = list(_strings(call.arguments))
+            if any(c in v for v in values for c in self.canaries):
                 return Verdict.block("canary marker in outbound arguments", findings=[Finding("canary")])
-            secrets_found = detect_secrets(blob)
+            secrets_found = [s for v in values for s in detect_secrets(v)]
             if secrets_found:
                 return Verdict.block("possible secret in outbound arguments",
                                      findings=[Finding(s.kind) for s in secrets_found])
             if self.block_pii_outbound:
-                pii = [p for p in detect_pii(blob) if p.kind != "email" or p.value not in _recipients(call)]
+                recipients = _recipients(call)
+                pii = [p for v in values for p in detect_pii(v) if p.kind != "email" or p.value not in recipients]
                 if pii:
                     return Verdict.block("PII in outbound arguments", findings=[Finding(p.kind) for p in pii])
 

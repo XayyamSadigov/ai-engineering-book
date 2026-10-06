@@ -27,11 +27,14 @@ PIIKind = Literal["email", "phone", "card", "iban", "ip"]
 ALL_KINDS: tuple[str, ...] = ("email", "card", "iban", "ip", "phone")  # resolution priority order
 
 EMAIL_RE = re.compile(r"(?<![\w.+-])[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}(?![\w-])")
-CARD_RE = re.compile(r"(?<![\d-])(?:\d[ -]?){12,18}\d(?![\d-])")
+# Space or dash groupings of any shape (Luhn filters the false hits), or the strict dotted 4-4-4-4
+# form; a looser dot rule would join neighboring IPs or amounts into one "card".
+CARD_RE = re.compile(r"(?<![\d.])(?:(?:\d[ -]{0,2}){12,18}\d|\d{4}(?:\.\d{4}){3})(?![\d])")
 IBAN_RE = re.compile(r"\b[A-Z]{2}\d{2}(?: ?[A-Z0-9]){11,30}\b")
 IPV4_RE = re.compile(r"(?<![\d.])(?:\d{1,3}\.){3}\d{1,3}(?![\d.])")
 IPV6_RE = re.compile(r"(?<![:\w])(?:[0-9A-Fa-f]{1,4}:){2,7}[0-9A-Fa-f]{0,4}(?![:\w])|::1\b")
-PHONE_RE = re.compile(r"(?<![\w+/-])(?:\+\d{1,3}[ .-]?)?(?:\(\d{1,4}\)[ .-]?)?\d{2,4}(?:[ .-]?\d{2,4}){2,4}(?![\w/]|-\w)")
+PHONE_RE = re.compile(r"(?<![\w+/-])(?:\+\d{1,3}[ .-]?(?:\(\d{1,4}\)[ .-]?)?\d{1,4}|(?:\(\d{1,4}\)[ .-]?)?\d{2,4})"
+                      r"(?:[ .-]?\d{2,4}){2,4}(?![\w/]|-\w)")
 TOKEN_RE = re.compile(r"<PII:(email|phone|card|iban|ip):([0-9a-f]{10})>")
 
 

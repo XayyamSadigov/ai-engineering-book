@@ -19,12 +19,12 @@ import math
 import statistics
 import sys
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 
 from ..context import ContextSanitizerCheck
 from ..input import InjectionHeuristicCheck
 from ..output import UrlAllowlistCheck
-from ..pipeline import Action, Check, GuardContext, GuardrailPipeline, Subject
+from ..pipeline import Action, Check, FailMode, GuardContext, GuardrailPipeline, Subject
 from ..presets import agent_pipeline
 from .datasets import Case, context_cases, input_cases, output_cases
 from .redteam import ALLOWED_RENDER_HOSTS, PROMPT_CANARY, run_all
@@ -55,18 +55,25 @@ class CheckMetrics:
     p50_ms: float
     fp_ids: list[str]
     bypass_ids: list[str]
+    error_ids: list[str] = field(default_factory=list)   # the check raised; scored by its fail mode
 
 
 def measure_check(check: Check, cases: list[Case], positive: set[Action] | None = None) -> CheckMetrics:
     """`positive` is the set of actions that count as "the check reacted"; default anything but ALLOW."""
     positive = positive or {Action.FLAG, Action.REDACT, Action.BLOCK}
     ctx = GuardContext(tenant="retail", user_id="eval", groups=frozenset({"all"}))
-    fps, bypasses, latencies = [], [], []
+    fps, bypasses, latencies, errors = [], [], [], []
     for case in cases:
         t0 = time.perf_counter()
-        verdict = check.evaluate(Subject(case.stage, text=case.text, source=f"eval:{case.id}"), ctx)
+        try:
+            verdict = check.evaluate(Subject(case.stage, text=case.text, source=f"eval:{case.id}"), ctx)
+            reacted = verdict.action in positive
+        except Exception:  # noqa: BLE001 - measured the way the pipeline would treat it
+            errors.append(case.id)
+            # A fail-closed check that raises blocks; a fail-open one lets the text through, and its
+            # error must not be counted as a detection, or errors would lower the bypass rate.
+            reacted = getattr(check, "fail_mode", FailMode.CLOSED) is FailMode.CLOSED
         latencies.append((time.perf_counter() - t0) * 1000)
-        reacted = verdict.action in positive
         if case.is_attack and not reacted:
             bypasses.append(case.id)
         if not case.is_attack and reacted:
@@ -76,7 +83,7 @@ def measure_check(check: Check, cases: list[Case], positive: set[Action] | None 
     stage = cases[0].stage.value if cases else ""
     return CheckMetrics(check.name, stage, n_b, len(fps), len(fps) / n_b if n_b else 0.0, wilson(len(fps), n_b),
                         n_a, len(bypasses), len(bypasses) / n_a if n_a else 0.0, wilson(len(bypasses), n_a),
-                        statistics.median(latencies) if latencies else 0.0, fps, bypasses)
+                        statistics.median(latencies) if latencies else 0.0, fps, bypasses, errors)
 
 
 def effect_bypass_rate(pipeline: GuardrailPipeline) -> dict:

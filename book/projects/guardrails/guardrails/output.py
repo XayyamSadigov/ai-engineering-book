@@ -13,11 +13,12 @@
 A note that belongs in code, not just in a book: nothing in this module, or anywhere else in a
 well-built system, passes model output to `eval`, `exec`, a shell, or a string-built SQL query.
 Generated SQL goes through a parser and an allowlist of read-only statements over a semantic
-layer (Chapter 16); generated code runs in a sandbox (Chapter 16) or not at all.
+layer (Chapter 36, Case B); generated code runs in a sandbox (Chapter 16) or not at all.
 """
 from __future__ import annotations
 
 import html
+import html.parser
 import json
 import re
 from typing import Callable, Iterable
@@ -77,18 +78,27 @@ class SchemaCheck(BaseCheck):
 
 
 # --------------------------------------------------------------------------- URLs
-MD_IMAGE = re.compile(r"!\[([^\]]*)\]\(\s*<?([^)\s>]+)>?(?:\s+\"[^\"]*\")?\s*\)")
-MD_LINK = re.compile(r"(?<!!)\[([^\]]*)\]\(\s*<?([^)\s>]+)>?(?:\s+\"[^\"]*\")?\s*\)")
-HTML_IMG = re.compile(r"<img\b[^>]*?\bsrc\s*=\s*['\"]?([^'\"\s>]+)[^>]*>", re.I)
-HTML_A = re.compile(r"<a\b[^>]*?\bhref\s*=\s*['\"]?([^'\"\s>]+)[^>]*>(.*?)</a\s*>", re.I | re.S)
+_ALT = r"((?:[^\[\]]|\[[^\]]*\])*)"                                     # alt/link text, one level of brackets
+_TITLE = r"""(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?"""                      # "t", 't' or (t)
+MD_IMAGE = re.compile(r"!\[" + _ALT + r"\]\(\s*<?([^)\s>]+)>?" + _TITLE + r"\s*\)")
+MD_LINK = re.compile(r"(?<!!)\[" + _ALT + r"\]\(\s*<?([^)\s>]+)>?" + _TITLE + r"\s*\)")
+HTML_A = re.compile(r"(<a\b[^>]*>)(.{0,2000}?)</a\s*>", re.I | re.S)   # bounded: many unclosed <a> stay linear
+# Any tag that can make a browser fetch or navigate. Every URL-bearing attribute must pass, so a
+# decoy `data-src` or an `alt="src=..."` cannot stand in for the real `src`.
+HTML_TAG = re.compile(r"<(?:img|a|source|video|audio|iframe|embed|object|link|form|input)\b[^>]*>", re.I)
+_URL_ATTRS = {"src", "href", "srcset", "poster", "action", "formaction", "data", "background", "cite"}
 REF_DEF = re.compile(r"^\s*\[[^\]]+\]:\s*(\S+).*$", re.M)          # [x]: https://... reference links
-BARE_URL = re.compile(r"(?i)\b(?:https?|ftp|data|javascript|vbscript|file):[^\s<>\"')\]]+|\bwww\.[^\s<>\"')\]]+")
+BARE_URL = re.compile(r"(?i)\b(?:https?|ftp|data|javascript|vbscript|file):[^\s<>\"')\]]+|\bwww\.[^\s<>\"')\]]+"
+                      r"|(?<![\w/\\:)\]])//[A-Za-z0-9\[][^\s<>\"')\]]*")   # scheme-less //host, not code like a//b
 SAFE_SCHEMES = {"http", "https", "mailto"}
 
 
 def host_allowed(url: str, allowed_hosts: Iterable[str], allow_subdomains: bool = True) -> bool:
     """Parse properly: userinfo tricks (`https://good.example@evil.example/`), trailing dots,
     case and lookalike suffixes (`good.example.evil.example`) all resolve to the real host."""
+    url = url.strip().replace("\\", "/")   # browsers treat a backslash as a slash; urlsplit does not
+    if url.startswith("//"):
+        url = "https:" + url
     candidate = url if "://" in url or url.lower().startswith(("mailto:", "data:", "javascript:")) else "https://" + url
     try:
         parts = urlsplit(candidate)
@@ -111,6 +121,31 @@ def host_allowed(url: str, allowed_hosts: Iterable[str], allow_subdomains: bool 
         if host == a or (allow_subdomains and host.endswith("." + a)):
             return True
     return False
+
+
+class _Attrs(html.parser.HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.attrs: list[tuple[str, str | None]] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        self.attrs = attrs
+
+
+def tag_urls(tag: str) -> list[str]:
+    """Every URL a browser could take from one HTML tag: src, href, srcset candidates, data-*."""
+    parser = _Attrs()
+    parser.feed(tag)
+    urls: list[str] = []
+    for name, value in parser.attrs:
+        if value is None:
+            continue
+        name = name.lower()
+        if name == "srcset":
+            urls += [c.strip().split()[0] for c in value.split(",") if c.strip()]
+        elif name in _URL_ATTRS or (name.startswith("data-") and re.match(r"(?i)\s*(?:[a-z][a-z0-9+.-]*:|//)", value)):
+            urls.append(value.strip())
+    return urls
 
 
 class UrlAllowlistCheck(BaseCheck):
@@ -150,17 +185,18 @@ class UrlAllowlistCheck(BaseCheck):
             findings.append(Finding("link", m.start(), m.end()))
             return f"{m.group(1)} [link removed]"
 
-        def html_img(m: re.Match[str]) -> str:
-            if self._ok(m.group(1)):
-                return m.group(0)
-            findings.append(Finding("html_image", m.start(), m.end()))
-            return "[image removed]"
-
         def html_a(m: re.Match[str]) -> str:
-            if self._ok(m.group(1)):
+            if all(self._ok(u) for u in tag_urls(m.group(1))):
                 return m.group(0)
             findings.append(Finding("html_link", m.start(), m.end()))
             return f"{m.group(2)} [link removed]"
+
+        def html_tag(m: re.Match[str]) -> str:   # images, unclosed anchors, media, frames, forms
+            if all(self._ok(u) for u in tag_urls(m.group(0))):
+                return m.group(0)
+            is_img = m.group(0)[1:4].lower() == "img"
+            findings.append(Finding("html_image" if is_img else "html_link", m.start(), m.end()))
+            return "[image removed]" if is_img else "[link removed]"
 
         def ref_def(m: re.Match[str]) -> str:
             if self._ok(m.group(1)):
@@ -175,9 +211,9 @@ class UrlAllowlistCheck(BaseCheck):
             return "[link removed]"
 
         text = MD_IMAGE.sub(img, text)
-        text = HTML_IMG.sub(html_img, text)
         text = MD_LINK.sub(link, text)
         text = HTML_A.sub(html_a, text)
+        text = HTML_TAG.sub(html_tag, text)
         text = REF_DEF.sub(ref_def, text)
         text = BARE_URL.sub(bare, text)
 

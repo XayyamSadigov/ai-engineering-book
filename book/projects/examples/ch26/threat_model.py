@@ -116,11 +116,22 @@ class ThreatModel:
             for a in t.assets:
                 if a not in asset_names:
                     problems.append(f"{t.threat_id}: unknown asset {a!r}")
-            if not t.controls:
-                problems.append(f"{t.threat_id}: no controls listed")
+            if not isinstance(t.assets, tuple) or not isinstance(t.controls, tuple):
+                problems.append(f"{t.threat_id}: assets and controls must be tuples (missing trailing comma?)")
+            elif not t.controls or any(not isinstance(c, str) or not c.strip() for c in t.controls):
+                problems.append(f"{t.threat_id}: controls must be a non-empty tuple of non-blank names")
             if not t.harmful_effect.strip():
                 problems.append(f"{t.threat_id}: harmful effect is empty")
         return problems
+
+    def coverage_gaps(self) -> list[str]:
+        """Entry points with no threat and boundaries with no entry point. Not errors, but each
+        one is a question for the next review: is it really safe, or just not thought about yet?"""
+        threatened = {t.entry_point for t in self.threats}
+        used = {e.boundary for e in self.entry_points}
+        gaps = [f"entry point {e.name!r} has no threat" for e in self.entry_points if e.name not in threatened]
+        gaps += [f"boundary {b.name!r} has no entry point" for b in self.boundaries if b.name not in used]
+        return gaps
 
     def by_risk(self) -> list[Threat]:
         return sorted(self.threats, key=lambda t: (-t.risk, t.threat_id))

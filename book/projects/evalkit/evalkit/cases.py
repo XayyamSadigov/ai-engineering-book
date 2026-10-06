@@ -20,7 +20,7 @@ from collections.abc import Callable, Iterable, Iterator
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class DatasetError(ValueError):
@@ -28,7 +28,10 @@ class DatasetError(ValueError):
 
 
 class EvalCase(BaseModel):
-    """One evaluation case. `input` and `expected` are any JSON-serializable values."""
+    """One evaluation case. `input` and `expected` are any JSON-serializable values. Unknown
+    fields are rejected: a typo such as `expeced` or `tag` would otherwise silently drop data."""
+
+    model_config = ConfigDict(extra="forbid")
 
     id: str
     input: Any
@@ -123,7 +126,11 @@ class Dataset:
 
     # ------------------------------------------------------------------ persistence
     @classmethod
-    def load_jsonl(cls, path: str | Path, *, name: str | None = None, version: str | None = None) -> "Dataset":
+    def load_jsonl(cls, path: str | Path, *, name: str | None = None, version: str | None = None,
+                   verify: bool = True) -> "Dataset":
+        """Load a dataset; when the header records a `content_hash`, check it (`verify=False` skips).
+        The hash covers each case's canonical JSON, so adding a field to `EvalCase` changes every
+        stored hash: re-freeze datasets deliberately after such a change."""
         path = Path(path)
         header: dict[str, Any] = {}
         cases: list[EvalCase] = []
@@ -142,12 +149,15 @@ class Dataset:
                     cases.append(EvalCase.model_validate(obj))
                 except ValueError as exc:
                     raise DatasetError(f"{path}:{lineno}: invalid case: {exc}") from exc
-        return cls(
+        ds = cls(
             cases,
             name=name or header.get("name") or path.stem,
             version=version or str(header.get("version", "0")),
             description=header.get("description", ""),
         )
+        if verify and header.get("content_hash"):
+            ds.verify_hash(str(header["content_hash"]))
+        return ds
 
     def save_jsonl(self, path: str | Path) -> Path:
         path = Path(path)

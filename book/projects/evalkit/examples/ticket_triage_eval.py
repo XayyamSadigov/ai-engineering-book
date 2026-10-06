@@ -93,7 +93,7 @@ def build_dataset() -> Dataset:
             )
         )
     return Dataset(cases, name="northwind-tickets", version="1",
-                   description="Ticket triage golden set: 60 labelled tickets plus 4 injection cases.")
+                   description="Ticket triage golden set: 60 labeled tickets plus 4 injection cases.")
 
 
 # ---------------------------------------------------------------------------- the system under test

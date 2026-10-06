@@ -229,6 +229,8 @@ def expected_calibration_error(y_true: Sequence[bool], probs: Sequence[float], n
 
 def brier_score(y_true: Sequence[bool], probs: Sequence[float]) -> float:
     """Mean squared error between probability and outcome; rewards calibration and sharpness."""
+    if len(y_true) != len(probs):
+        raise ValueError("y_true and probs must have the same length")
     if not y_true:
         return 0.0
     return sum((p - float(y)) ** 2 for y, p in zip(y_true, probs)) / len(y_true)

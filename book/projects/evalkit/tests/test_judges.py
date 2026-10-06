@@ -144,7 +144,7 @@ def test_kappa_exposes_agreement_that_is_only_chance():
 def test_calibrate_judge_reports_pass_fail_error_rates():
     human = {f"c{i}": s for i, s in enumerate([3, 3, 3, 2, 2, 1, 0, 3, 3, 1])}
     judge = {f"c{i}": s for i, s in enumerate([3, 3, 3, 3, 2, 1, 1, 3, 2, 3])}
-    judge["extra"] = 3  # unlabelled by humans: ignored
+    judge["extra"] = 3  # unlabeled by humans: ignored
     cal = calibrate_judge(judge, human, pass_threshold=3, ordinal_labels=[0, 1, 2, 3])
     assert cal.n == 10 and cal.agreement == pytest.approx(0.6)
     assert cal.disagreements == ["c3", "c6", "c8", "c9"]

@@ -1,6 +1,8 @@
 # Chapter 24 — Evaluation Fundamentals
 
-After this chapter you will be able to turn "the demo looks good" into evidence that can block or approve a release. You will start every evaluation from a failure taxonomy, build the five kinds of datasets a production system needs, keep a frozen holdout honest, prefer deterministic checks wherever code can decide, run LLM judges as calibrated instruments rather than oracles, design a small human evaluation, and read a score together with its uncertainty. The code is `evalkit` (`book/projects/evalkit/`), a reusable package that Chapters 14 and 25 and the projects import: a case schema with versioned, content-hashed datasets; a runner that records outputs, latency, cost, trace ids, and lineage; deterministic and classification metrics; single-dimension and pairwise judges with calibration against human labels; bootstrap statistics; a Markdown report; and a release gate configured in TOML. The chapter ends with a worked evaluation of two Northwind ticket-triage prompts in which the candidate wins on the golden set and the gate still refuses to ship it.
+After this chapter you will be able to turn "the demo looks good" into evidence that can block or approve a release. You will start every evaluation from a failure taxonomy, build the five kinds of datasets a production system needs, keep a frozen holdout honest, prefer deterministic checks wherever code can decide, run LLM judges as calibrated instruments rather than oracles, design a small human evaluation, and read a score together with its uncertainty.
+
+The code is `evalkit` (`book/projects/evalkit/`), a reusable package that Chapters 14 and 25 and the projects import: a case schema with versioned, content-hashed datasets; a runner that records outputs, latency, cost, trace ids, and lineage; deterministic and classification metrics; single-dimension and pairwise judges with calibration against human labels; bootstrap statistics; a Markdown report; and a release gate configured in TOML. The chapter ends with a worked evaluation of two Northwind ticket-triage prompts in which the candidate wins on the golden set and the gate still refuses to ship it.
 
 ## Why this matters
 
@@ -8,7 +10,7 @@ A team at Northwind changes the ticket-triage prompt so that security incidents 
 
 Nothing in that story requires a bad model or a careless engineer. It requires only that a probabilistic component was changed and judged by eye on a handful of inputs. Classical software has the same risk, and it answers it with tests. AI systems need the same discipline with three differences that make it harder. First, outputs vary, so a single run is a sample, not a verdict. Second, correctness is often semantic, so the check itself may need a model, and that model can be wrong. Third, the input distribution is open-ended, so the test set is a sample of a population you never see in full. Evaluation is the engineering practice that deals with all three.
 
-In one line: evaluation converts a demo into evidence, and observability (Chapter 31) tells you what happened when real traffic disagrees with your evidence. This chapter owns the first half. It is not a final score you compute before launch. It is a release-engineering mechanism: every change to a prompt, model, retriever, tool schema, or policy produces a run, the run is compared with a baseline on a frozen dataset, and a gate decides. Teams that build this early iterate faster, because every argument about whether a change helps becomes a table instead of a meeting.
+Evaluation converts a demo into evidence, and observability (Chapter 31) tells you what happened when real traffic disagrees with your evidence. This chapter covers the first half. Evaluation is not a final score you compute before launch. It is a release-engineering mechanism: every change to a prompt, model, retriever, tool schema, or policy produces a run, the run is compared with a baseline on a frozen dataset, and a gate decides. Teams that build this early iterate faster, because every argument about whether a change helps becomes a table instead of a meeting.
 
 ## Mental model
 
@@ -18,7 +20,7 @@ Treat an evaluation as a measurement, with every part a physicist would insist o
 
 > **Mental model:** LLM output is probabilistic; design for distributions, not single answers.
 
-The second model explains why each layer exists. One output tells you almost nothing; a distribution of outputs over a representative sample, scored by a calibrated instrument, with a confidence interval, tells you something you can act on. When a score moves, the first question is always "is this the system, the dataset, the instrument, or noise?" Every design choice in `evalkit` exists to make that question answerable from the run record alone.
+The second model explains why each layer exists. One output tells you almost nothing; a distribution of outputs over a representative sample, scored by an instrument whose error you have measured, with a confidence interval (a range of plausible values for the true score, covered under Statistics), tells you something you can act on. When a score moves, the first question is always "is this the system, the dataset, the instrument, or noise?" Every design choice in `evalkit` exists to make that question answerable from the run record alone.
 
 ```mermaid
 flowchart LR
@@ -43,7 +45,7 @@ flowchart LR
 
 ### Start from a failure taxonomy
 
-Before choosing a single metric, write down how the system can fail. A metric suite designed from a taxonomy measures the failures that matter; a suite designed from a list of popular metrics measures whatever those metrics happen to measure. The taxonomy is also what turns evaluation findings into engineering work: "groundedness dropped 3 points" is a mood, while "unsupported-claim failures on HR policy questions doubled after the chunker change" is a ticket with an owner.
+Before choosing a single metric, write down how the system can fail. A metric suite designed from a taxonomy measures the failures that matter; a suite designed from a list of popular metrics measures whatever those metrics happen to measure. The taxonomy is also what turns evaluation findings into engineering work: "groundedness dropped 3 points" gives nobody anything to fix, while "unsupported-claim failures on HR policy questions doubled after the chunker change" is a ticket with an owner.
 
 Separate four questions first, because they fail independently and are fixed by different people:
 
@@ -95,17 +97,19 @@ Operational metrics complete the vocabulary: **error rate** (target crashed or t
 
 ### Dataset types and how to build them
 
-An evaluation case is data, not test code. The schema `evalkit` uses has six fields: `id`, `input`, `expected` (labels, reference answer, required sources, gold fields, any of them), `rubric` (observable criteria for judged dimensions), `tags` (slices: topic, tenant, difficulty, failure class, origin), and `metadata` (where the case came from, the entity it belongs to, who labelled it). Keeping cases as data means one dataset can feed deterministic checks, judges, and human review, and a new evaluator never requires rewriting cases.
+An evaluation case is data, not test code. The schema `evalkit` uses has six fields: `id`, `input`, `expected` (labels, reference answer, required sources, gold fields, any of them), `rubric` (observable criteria for judged dimensions), `tags` (slices: topic, tenant, difficulty, failure class, origin), and `metadata` (where the case came from, the entity it belongs to, who labeled it). Keeping cases as data means one dataset can feed deterministic checks, judges, and human review, and a new evaluator never requires rewriting cases.
 
 A production system needs five kinds of datasets. They differ in where cases come from, what they are good for, and how they lie to you.
 
-**Golden datasets** are curated, labelled cases that represent the job: common requests, boundary conditions, long-tail inputs, and known hard cases, each with expected outcomes or a rubric. They are the backbone of release decisions. Build them with domain experts, who know which questions are tricky; write labelling guidelines first, double-label a sample, and resolve disagreements by refining the guideline, since a disagreement usually means the spec is ambiguous. A golden set of 200 to 500 cases is typical for a single feature; below about 100, the statistics later in this chapter will show that you cannot detect changes smaller than ten points. The failure mode is staleness: the product and its traffic move, the golden set does not, and the score drifts away from user experience.
+**Golden datasets** are curated, labeled cases that represent the job: common requests, boundary conditions, long-tail inputs, and known hard cases, each with expected outcomes or a rubric. They are the backbone of release decisions. Build them with domain experts, who know which questions are tricky; write labeling guidelines first, double-label a sample, and resolve disagreements by refining the guideline, since a disagreement usually means the spec is ambiguous. A golden set of 200 to 500 cases is typical for a single feature; with only 100 cases, the rules of thumb later in this chapter put the smallest reliably detectable change at roughly 9 points for a paired comparison (at an 80% pass rate with 10% of verdicts flipping) and 16 for an unpaired one.
+
+The failure mode is staleness: the product and its traffic move, the golden set does not, and the score drifts away from user experience.
 
 **Synthetic datasets** are generated, usually by a model prompted with documents, schemas, or seed examples: "write five questions an employee might ask that this paragraph answers". They are cheap and fill coverage gaps fast, especially for rare slices and new features without traffic. They lie in predictable ways: generated questions echo the source wording (flattering lexical retrieval), cluster around easy explicit facts, and share the generator's blind spots, which match the system's when one model family does both. Treat synthetic cases as drafts: filter them with deterministic checks (answerable from the source, not duplicated), have a human review a sample, tag them `origin:synthetic`, and report them as a separate slice so their scores never silently stand in for real traffic. Chapter 25 covers generation pipelines and validation in depth.
 
-**Production-sampled datasets** come from real traffic: logged inputs, labelled afterwards. They are the only data that matches the true input distribution, including the typos, the mixed languages, and the questions nobody anticipated. Sample deliberately: uniform random samples show the common case, stratified samples (by tenant, channel, intent, or confidence) give rare slices enough cases to measure, and samples of low-confidence or negatively rated interactions find failures faster. Privacy and policy come first: redact personal data before cases enter an evaluation store, keep tenant boundaries, and record consent or legal basis in metadata. Refreshing them is how the dataset tracks the product.
+**Production-sampled datasets** come from real traffic: logged inputs, labeled afterwards. They are the only data that matches the true input distribution, including the typos, the mixed languages, and the questions nobody anticipated. Sample deliberately: uniform random samples show the common case, stratified samples (by tenant, channel, intent, or confidence) give rare slices enough cases to measure, and samples of low-confidence or negatively rated interactions find failures faster. Privacy and policy come first: redact personal data before cases enter an evaluation store, keep tenant boundaries, and record consent or legal basis in metadata. Refreshing these samples on a schedule is how the dataset keeps up with the product.
 
-**Adversarial datasets** contain inputs designed to break the system: prompt injection inside documents or tickets, requests for other users' data, jailbreak attempts, malformed inputs, extremely long inputs, empty inputs, and inputs in unexpected languages. They are small and they are critical: a single failure is often a release blocker, and averaging them with the golden set would let a 2% average gain hide a 100% injection regression. Build them from the threat model (Chapter 26), from red-team sessions, and from incidents. Tag them so gates can treat them separately.
+**Adversarial datasets** contain inputs designed to break the system: prompt injection inside documents or tickets, requests for other users' data, jailbreak attempts, malformed inputs, extremely long inputs, empty inputs, and inputs in unexpected languages. They are small and they are critical: a single failure is often a release blocker, and averaging them with the golden set would let a 2-point average gain hide a 100-point injection regression. Build them from the threat model (Chapter 26), from red-team sessions, and from incidents. Tag them so gates can treat them separately.
 
 **Regression datasets** hold every failure that ever reached a user or a reviewer, turned into a case with the correct expected behavior. They grow monotonically. Their purpose is narrow and valuable: a bug fixed once stays fixed. The intake should be a routine step in incident handling: reproduce the failure, add the case with tags for its failure class, confirm the current system fails it, fix, confirm it passes. Regression cases are biased toward past failures by construction, so report them as their own slice rather than mixing them into a headline number.
 
@@ -125,14 +129,14 @@ Splitting has its own traps, because cases are rarely independent. **Leakage** i
 - **Prompt leakage.** Few-shot examples copied from the evaluation set, or a retrieval index that contains the evaluation questions with their answers (for example, a FAQ built from past tickets that are also eval cases).
 - **Judge leakage.** The gold answer or the expected label reaches a step that should not see it: a judge evaluating relevance that is shown the reference and grades similarity instead, or a retrieval evaluation whose query was written from the gold passage.
 
-`evalkit` makes the split deterministic and stable by hashing each case's group key with a seed and sending groups below the holdout fraction to the holdout. Because assignment depends only on the group key, adding new cases never moves existing ones between splits, which keeps old runs comparable. A leakage check compares two splits for shared ids, shared groups, and identical normalized inputs; run it whenever either split changes.
+`evalkit` makes the split deterministic and stable by hashing each case's group key with a seed, mapping the hash to a number between 0 and 1, and sending the group to the holdout when that number falls below the holdout fraction. Because assignment depends only on the group key, adding new cases never moves existing ones between splits, which keeps old runs comparable. A leakage check compares two splits for shared ids, shared groups, and identical normalized inputs; run it whenever either split changes.
 
 ```mermaid
 stateDiagram-v2
     [*] --> Observed: production failure, red team, or new requirement
     Observed --> Drafted: write input, expected, tags, group key
-    Drafted --> Labelled: guideline, double label, adjudicate
-    Labelled --> Assigned: hash group key with seed
+    Drafted --> Labeled: guideline, double label, adjudicate
+    Labeled --> Assigned: hash group key with seed
     Assigned --> Dev: below cutoff is false
     Assigned --> Holdout: below cutoff is true
     Dev --> Dev: iterate, inspect failures freely
@@ -149,7 +153,7 @@ If correctness can be checked with code, check it with code. Deterministic check
 
 - **Format and schema:** the output parses as JSON and validates against the schema; the label is in the closed enum; required fields are present. For structured-output features (Chapter 6) this check should sit at 100%, and the gate should require it.
 - **Exact and normalized match:** labels, ids, short canonical answers. Normalization (case, punctuation, whitespace) belongs in the metric, written once, not improvised per test.
-- **Field-level precision and recall** for extraction. For each field, a correct non-null value is a true positive; a value where the gold is null is a false positive (an invented field); a missing value where the gold has one is a false negative; a wrong value counts as both, because it is a wrong claim and a missed fact. Reporting per field shows that "total" is extracted perfectly and "due date" is invented in 8% of invoices.
+- **Field-level precision and recall** for extraction. For each field, a correct non-null value is a true positive; a value where the gold is null is a false positive (an invented field); a missing value where the gold has one is a false negative; a wrong value counts as both, because it is a wrong claim and a missed fact. Reporting per field can show, for example, that "total" is extracted perfectly while "due date" is invented in 8% of invoices (illustrative figures).
 - **Set overlap:** cited source ids against supporting ids, tools called against tools expected, entities extracted against entities present.
 - **Numeric tolerance:** amounts and quantities compared with an explicit absolute or relative tolerance, never with string equality.
 - **Required and forbidden content:** a reply must mention the 30-day deadline; it must not contain a password, an internal hostname, or another tenant's name. These substring checks are brittle for open-ended text (a correct answer can phrase the deadline as "one month"), so use them for hard constraints and safety tripwires, and let judges handle paraphrase.
@@ -161,18 +165,22 @@ A useful habit is to ask, for every judged dimension, "what part of this could c
 
 Much of an AI system is classifiers in disguise: a router choosing a model (Chapter 7), a guardrail deciding to block, an abstention decision (Chapter 13), a relevance filter with a similarity cutoff, and every LLM judge with a pass threshold. Everything classical machine learning learned about evaluating classifiers applies to them unchanged.
 
-A **confusion matrix** counts (true label, predicted label) pairs, and every other metric is computed from it. For multi-class problems, the two averages answer different questions. **Macro** averaging computes precision, recall, and F1 per class and takes the unweighted mean, so a rare class counts as much as a common one. **Micro** averaging pools the counts, so frequent classes dominate; for single-label tasks micro-F1 equals accuracy. When classes are imbalanced, accuracy and micro-F1 hide failures on small classes. A triage classifier that never predicts `security_report` can still score 90% accuracy on a queue where security tickets are 10% of traffic, while its per-class recall on the class that matters is zero. Always look at per-class recall for the classes with costly misses, and at the most-confused pairs, which point directly at ambiguous label definitions.
+A **confusion matrix** counts (true label, predicted label) pairs, and every other metric is computed from it. For multi-class problems, the two averages answer different questions. **Macro** averaging computes precision, recall, and F1 per class and takes the unweighted mean, so a rare class counts as much as a common one. **Micro** averaging pools the counts, so frequent classes dominate; for single-label tasks micro-F1 equals accuracy. When classes are imbalanced, accuracy and micro-F1 hide failures on small classes.
 
-The **threshold** is part of the product, not a property of the model. Suppose Northwind wants to auto-escalate likely security incidents for immediate review. In a month of 1,000 tickets, 50 are genuine incidents. A scorer at threshold 0.5 catches 45 incidents and flags 95 benign tickets: precision 45/140 = 32%, recall 90%. At 0.8 it catches 35 and flags 20 benign: precision 35/55 = 64%, recall 70%. Which is better depends on costs, so write them down. With illustrative costs of 1,000 units per missed incident and 5 units per review:
+A triage classifier that never predicts `security_report` can still score 90% accuracy on a queue where security tickets are 10% of traffic, while its per-class recall on the class that matters is zero. Always look at per-class recall for the classes with costly misses, and at the most-confused pairs, which point directly at ambiguous label definitions.
+
+A **threshold** is the score cutoff above which a classifier acts: flag, block, escalate. Choosing it is a product decision rather than a property of the model. Suppose Northwind wants to auto-escalate likely security incidents for immediate review. In an illustrative month of 1,000 tickets, 50 are genuine incidents. A scorer at threshold 0.5 catches 45 incidents and flags 95 benign tickets: precision 45/140 = 32%, recall 90%. At 0.8 it catches 35 and flags 20 benign: precision 35/55 = 64%, recall 70%. Which is better depends on costs, so write them down. With illustrative costs of 1,000 units per missed incident and 5 units per review:
 
 | Threshold | Missed incidents | Reviews | Expected cost |
 |---|---|---|---|
 | 0.5 | 5 | 140 | 5 × 1,000 + 140 × 5 = 5,700 |
 | 0.8 | 15 | 55 | 15 × 1,000 + 55 × 5 = 15,275 |
 
-The low threshold wins by a wide margin despite its much worse precision, and F1 would have chosen the other one (0.47 against 0.67). Optimizing a generic metric when the costs are asymmetric picks the wrong operating point. `evalkit`'s threshold sweep computes counts, precision, recall, F1, and expected cost at every threshold, with a per-flag handling cost as well as per-error costs, and picks the cheapest point subject to floors such as "recall at least 0.9". Tune thresholds on the dev set only; choosing a threshold on the holdout is tuning on the holdout.
+The low threshold wins by a wide margin despite its much worse precision, and F1 would have chosen the other one (0.47 against 0.67). Optimizing a generic metric when the costs are asymmetric picks the wrong operating point. `evalkit`'s `threshold_sweep` computes counts, precision, recall, F1, and expected cost at every threshold, with a per-flag handling cost as well as per-error costs, and `best_threshold` picks the cheapest point subject to floors such as "recall at least 0.9". Tune thresholds on the dev set only; choosing a threshold on the holdout is tuning on the holdout.
 
-**Calibration** asks whether scores mean what they say: of all the cases scored 0.8, are about 80% positive? It matters whenever a score drives a decision as a probability: routing on confidence, abstaining below a threshold, sending low-confidence cases to humans, or combining scores across components. To measure it, bucket cases by predicted probability, compare each bucket's mean confidence with its observed positive rate (a reliability diagram), and summarize with the **expected calibration error** (ECE): the count-weighted mean gap across buckets. The **Brier score**, the mean squared difference between probability and outcome, rewards calibration and sharpness together. Two cautions apply to LLM systems in particular. Verbalized confidence ("confidence: 0.9" in the JSON) is often poorly calibrated and clustered on a few round values, so measure it before using it. And calibration is a per-slice property: a scorer can be well calibrated overall and badly overconfident for one tenant or language. Post-hoc fixes such as temperature scaling or isotonic regression on a validation set work for scores you control; for verbalized confidence, a simple lookup from stated confidence to observed accuracy on the dev set is often enough.
+**Calibration** asks whether scores mean what they say: of all the cases scored 0.8, are about 80% positive? It matters whenever a score drives a decision as a probability: routing on confidence, abstaining below a threshold, sending low-confidence cases to humans, or combining scores across components. To measure it, bucket cases by predicted probability, compare each bucket's mean confidence with its observed positive rate (plotted, this is a reliability diagram; if 100 cases score near 0.8 and only 70 are positive, that bucket is 10 points overconfident), and summarize with the **expected calibration error** (ECE): the count-weighted mean gap across buckets. The **Brier score**, the mean squared difference between probability and outcome, rewards calibration and sharpness (committing to scores near 0 or 1 rather than hedging near 0.5) together.
+
+Two cautions apply to LLM systems in particular. Verbalized confidence ("confidence: 0.9" in the JSON) is often poorly calibrated and clustered on a few round values, so measure it before using it. And calibration is a per-slice property: a scorer can be well calibrated overall and badly overconfident for one tenant or language. Post-hoc fixes that refit the mapping from raw score to probability, such as temperature scaling or isotonic regression on a validation set, work for scores you control; for verbalized confidence, a simple lookup from stated confidence to observed accuracy on the dev set is often enough.
 
 ### LLM-as-judge
 
@@ -202,24 +210,24 @@ Absolute scores answer "how good is this output?" Pairwise comparison answers "w
 
 Three rules make pairwise results trustworthy. **Randomize order** per case, with a seeded random generator so that a rerun presents the same order and results are reproducible. **Allow ties**, because forcing a choice between two equally good (or equally bad) answers converts noise into fake preferences. And either **evaluate both orders** for every case or measure the first-position rate across the run: if the judge picks the first slot 80% of the time, the run is measuring position, not quality. With both orders, a pair whose verdict flips when the order flips is recorded as a tie and counted as an inconsistency; a high inconsistency rate means the two outputs are not distinguishable on that criterion by that judge. The summary statistic is the candidate's win rate with ties counted as half, reported with its first-position rate and inconsistency rate so a reader can see whether the instrument behaved.
 
-Hide system identity. Labels such as "baseline" and "new model" in the judge prompt invite bias; "first" and "second" carry nothing. Pairwise results also need the same statistics as absolute ones: a 54% win rate on 50 cases is well within noise.
+Hide system identity. Labels such as "baseline" and "new model" in the judge prompt invite bias; "first" and "second" carry nothing. Pairwise results also need the same statistics as absolute ones: a 54% win rate on 50 cases is well within noise: its 95% interval runs from roughly 40% to 68%.
 
 ### Calibrating judges against humans
 
-A judge is useful exactly to the extent that it agrees with the people whose judgment it replaces. Calibration measures that agreement on a sample, and the procedure is short:
+A judge is useful exactly to the extent that it agrees with the people whose judgment it replaces. Calibrating a judge means something different from the probability calibration above: it measures the judge's agreement with humans on a sample. The procedure is short:
 
 1. Draw 100 to 200 cases stratified across slices and expected difficulty, with outputs from the systems you will actually evaluate.
 2. Have two people label them independently with the same rubric, blind to each other and to the judge. Measure their agreement first: it is the ceiling, and if two humans agree only 70% of the time the rubric needs work before any judge does.
 3. Adjudicate disagreements into a single human label per case, and note which rubric phrases caused them.
 4. Run the judge on the same cases and compare its labels with the adjudicated ones.
 
-Raw agreement is a misleading summary. Suppose humans pass 90% of answers and a broken judge passes everything: agreement is 90%, and the judge carries no information. **Cohen's kappa** corrects for chance: `kappa = (p_o - p_e) / (1 - p_e)`, where `p_o` is observed agreement and `p_e` the agreement expected from the two raters' label frequencies alone. The always-pass judge scores kappa 0. For ordinal rubrics, **weighted kappa** penalizes a 3-versus-2 disagreement less than a 3-versus-0; quadratic weights are the usual choice. Common verbal scales call kappa above about 0.6 substantial and above 0.8 near perfect; treat those as conventions, not laws, and compare the judge with the human-human figure rather than with an absolute bar.
+Raw agreement is a misleading summary. Suppose humans pass 90% of answers and a broken judge passes everything: agreement is 90%, and the judge carries no information. **Cohen's kappa** corrects for chance: `kappa = (p_o - p_e) / (1 - p_e)`, where `p_o` is observed agreement and `p_e` the agreement expected from the two raters' label frequencies alone. For the always-pass judge, `p_o` = 0.9 and `p_e` = 0.9 × 1.0 + 0.1 × 0.0 = 0.9 (humans pass 90%, the judge passes 100%), so kappa = (0.9 - 0.9) / (1 - 0.9) = 0. For ordinal rubrics, **weighted kappa** penalizes a 3-versus-2 disagreement less than a 3-versus-0; quadratic weights are the usual choice. Common verbal scales call kappa above about 0.6 substantial and above 0.8 near perfect; treat those as conventions, not laws, and compare the judge with the human-human figure rather than with an absolute bar.
 
-What the gate uses is usually a pass/fail decision, so measure agreement on that decision too, and split the errors. The **false pass rate** (the judge passes outputs humans fail, as a share of human fails) is what lets regressions through a gate. The **false fail rate** (the judge fails outputs humans pass) is what makes engineers distrust and bypass the gate. A judge with a high false pass rate on one slice must not gate that slice. Read every disagreement: they reveal rubric ambiguities, judge biases, and occasionally human labelling errors. Recalibrate whenever the rubric, the judge prompt, or the judge model changes, and spot-check a small sample every release cycle to catch drift.
+What the gate uses is usually a pass/fail decision, so measure agreement on that decision too, and split the errors. The **false pass rate** (the judge passes outputs humans fail, as a share of human fails) is what lets regressions through a gate. The **false fail rate** (the judge fails outputs humans pass) is what makes engineers distrust and bypass the gate. A judge with a high false pass rate on one slice must not gate that slice. Read every disagreement: they reveal rubric ambiguities, judge biases, and occasionally human labeling errors. Recalibrate whenever the rubric, the judge prompt, or the judge model changes, and spot-check a small sample every release cycle to catch drift.
 
 ### Human evaluation design
 
-Humans remain the reference instrument for subjective quality, for new features with no labelled data, for calibrating judges, and for the "sampled diff review" step of a serious release gate. Human evaluation is also expensive, slow, and noisy unless it is designed.
+Humans remain the reference instrument for subjective quality, for new features with no labeled data, for calibrating judges, and for the "sampled diff review" step of a serious release gate. Human evaluation is also expensive, slow, and noisy unless it is designed.
 
 Start with a written guideline per dimension: the definition, the levels with anchored examples (including borderline cases and why they fall where they do), and explicit instructions for what to ignore (formatting, tone, unless the dimension is formatting or tone). Make the task **blind**: raters do not see which system produced an output, and outputs from different systems are interleaved in random order. Prefer **binary or short ordinal scales**, and prefer **pairwise judgments** when comparing two systems, for the same reasons as with judges. Train raters on a calibration batch with known answers and discuss the misses before the real batch. Insert a few known-answer **control items** into every batch to catch fatigue and inattention. **Double-label** a subset to measure inter-rater agreement, and **adjudicate** disagreements rather than averaging them away.
 
@@ -227,11 +235,11 @@ Budget honestly. A careful rater might handle 30 to 60 judgments an hour for sho
 
 ### Statistics: how sure are you?
 
-An evaluation set is a sample, so its score is an estimate. For a pass rate `p` measured on `n` independent cases, the standard error is `sqrt(p(1 - p) / n)`. With 200 cases and an 80% pass rate that is 0.028, so a 95% confidence interval spans roughly plus or minus 5.5 points. A team that celebrates a move from 80% to 83% on that set is celebrating noise.
+An evaluation set is a sample, so its score is an estimate. For a pass rate `p` measured on `n` independent cases, the standard error, the typical gap between the measured rate and the true one, is `sqrt(p(1 - p) / n)`. With 200 cases and an 80% pass rate that is 0.028. A 95% confidence interval is a range built so that, over repeated samples, 95% of such ranges contain the true rate; here it is about 1.96 standard errors either side, roughly plus or minus 5.5 points (74.5% to 85.5%). A team that celebrates a move from 80% to 83% on that set is celebrating noise.
 
-**Bootstrap confidence intervals** generalize this to any metric without formulas: resample the cases with replacement thousands of times, recompute the metric on each resample, and take the 2.5th and 97.5th percentiles. It works for means, medians, F1, and win rates alike, and it is what `evalkit` reports next to every score.
+**Bootstrap confidence intervals** generalize this to any metric without formulas: resample the cases with replacement thousands of times, recompute the metric on each resample, and take the 2.5th and 97.5th percentiles of those values as the interval. The resamples imitate drawing fresh datasets from the same population, so their spread stands in for sampling noise you cannot observe directly. It works for means, medians, F1, and win rates alike, and it is what `evalkit` reports next to every score.
 
-Comparing two systems is a different question from measuring one, and the right tool is a **paired** comparison. Both systems run on the same cases, so compute the per-case difference and resample those differences. Pairing removes case difficulty from the noise: most cases are easy for both systems or hard for both, and only the cases where the verdict changes carry information about the difference. Two separate confidence intervals can overlap heavily while the paired interval on the difference excludes zero comfortably; the tests in `evalkit` include exactly that situation. A sign-flip permutation test on the same differences gives a p-value if your process wants one, but the interval on the delta is the more useful output, because it shows both direction and size.
+Comparing two systems is a different question from measuring one, and the right tool is a **paired** comparison. Both systems run on the same cases, so compute the per-case difference and resample those differences. Pairing removes case difficulty from the noise: most cases are easy for both systems or hard for both, and only the cases where the verdict changes carry information about the difference. Two separate confidence intervals can overlap heavily while the paired interval on the difference excludes zero comfortably; the tests in `evalkit` include exactly that situation. A sign-flip permutation test gives a p-value if your process wants one: it flips the sign of each per-case difference at random many times, simulating "no real difference", and reports how often the mean flipped difference is at least as large in magnitude as the observed delta, but the interval on the delta is the more useful output, because it shows both direction and size.
 
 Every formula so far assumes the cases are independent, and often they are not. Ten turns of one conversation, five questions written from one policy, or forty tickets from one customer tend to pass and fail together, so the dataset holds fewer independent pieces of evidence than it has rows. Resampling rows then produces an interval that is too narrow. The fix is a **cluster bootstrap**: resample whole groups (the same group key the split uses) and flip signs per group in the permutation test. In `evalkit` you pass `groups` (case id to group key) to `paired_bootstrap` or `evaluate_gate`. The test suite pins an extreme case: 200 cases from 20 conversations, where the candidate fixes every turn of 3 conversations and nothing else.
 
@@ -242,7 +250,9 @@ Every formula so far assumes the cases are independent, and often they are not. 
 
 The row-level view reports a certain win. The honest view says three conversations improved, which is a lead worth investigating, not a result. Use the group key whenever cases share an entity, and report the number of groups next to the number of cases.
 
-Before trusting any result, ask whether the dataset could have detected the effect at all. A rule of thumb for the **minimum detectable effect** at the usual 5% significance and 80% power: for two independent samples of `n` cases with pass rate near `p`, `MDE ≈ 2.8 × sqrt(2p(1 - p) / n)`. With 200 cases at 80%, that is about 11 points: an unpaired comparison cannot reliably see anything smaller. Paired on the same cases, the variance depends on the **discordance rate** `d`, the share of cases whose verdict flips between systems, and `MDE ≈ 2.8 × sqrt(d / n)`. If 10% of verdicts flip, the same 200 cases detect about 6 points. Inverting the formula gives sample sizes: detecting a 5-point change around 80% with independent samples needs roughly a thousand cases per system. These are planning numbers, not a power analysis, and their main use is to stop a team from running an experiment that cannot answer its question.
+Before trusting any result, ask whether the dataset could have detected the effect at all. A rule of thumb for the **minimum detectable effect** at the usual settings (a 5% false-alarm rate, called significance, and an 80% chance of detecting a real effect of that size, called power): for two independent samples of `n` cases with pass rate near `p`, `MDE ≈ 2.8 × sqrt(2p(1 - p) / n)`. With 200 cases at 80%, that is about 11 points: an unpaired comparison cannot reliably see anything smaller.
+
+Paired on the same cases, the variance depends on the **discordance rate** `d`, the share of cases whose verdict flips between systems, and `MDE ≈ 2.8 × sqrt(d / n)`. If 10% of verdicts flip, the same 200 cases detect about 6 points. Inverting the formula gives sample sizes: detecting a 5-point change around 80% with independent samples needs roughly a thousand cases per system. These are planning numbers, not a power analysis, and their main use is to stop a team from running an experiment that cannot answer its question.
 
 Three more habits keep statistics honest:
 
@@ -256,7 +266,7 @@ Significance is not importance: a large dataset can make a 0.3-point change sign
 
 One evaluation run in `evalkit` proceeds in the same order every time:
 
-1. **Load and verify the dataset.** `Dataset.load_jsonl` reads the header and cases, rejects duplicate ids, and computes the content hash. A gate pinned to a frozen holdout compares that hash before anything else.
+1. **Load and verify the dataset.** `Dataset.load_jsonl` reads the header and cases, rejects duplicate ids and unknown case fields (a typo like `expeced` would otherwise drop data silently), computes the content hash, and checks it against the hash recorded in the header. A gate pinned to a frozen holdout compares that hash before anything else.
 2. **Generate.** `run_target` calls the system under test once per case (or several times with `repeats`), on a thread pool or an asyncio semaphore bounded by `concurrency`. Each call runs inside a tracer span, so the case result carries a trace id that links to the full prompt, retrieval, and tool spans recorded by `aie_core` (Chapter 31 owns the tracing schema). Latency is measured by the runner; tokens and cost come from the target's `Completion` or `TargetResult`.
 3. **Record errors as failures.** A target exception produces a case result with the error type and message, and every metric for that case is scored 0 and marked failed. Errors never drop out of the denominator, because a system that crashes on hard cases would otherwise look better than one that answers them badly.
 4. **Score.** Each evaluator receives `(case, output)` and returns one or more `Score` objects. Deterministic evaluators are plain functions; a judge is an evaluator that makes its own model call through `complete_structured`. An evaluator that crashes is recorded as an evaluator error with a missing score, not a silent zero, and the gate can require zero evaluator errors.
@@ -293,7 +303,7 @@ sequenceDiagram
 
 The package is layered so that each piece can be used alone. Cases and metrics are pure: no I/O beyond reading and writing JSONL, no model calls. The runner depends on cases and on `aie_core` types and tracing. Judges depend on `aie_core`'s client protocol and structured-output helper, and plug into the runner as evaluators. Statistics, report, and gate read run records and never call a model, which means a release decision can be recomputed from stored artifacts long after the run.
 
-The trust boundary matters even here. The candidate outputs, production-sampled inputs, and retrieved evidence that flow into a judge prompt are untrusted text. A system under evaluation that has been successfully injected will happily produce output addressed to the judge. The judge treats everything inside its delimiters as data, its verdict is validated against a schema with a closed set of scores, and the gate never executes anything a judge says.
+The trust boundary matters even here. The candidate outputs, production-sampled inputs, and retrieved evidence that flow into a judge prompt are untrusted text. A system under evaluation that has been successfully injected will happily produce output addressed to the judge. The judge treats everything inside its delimiters as data and defangs any tag in that content that looks like one of its delimiters, so the content cannot close its block and pose as rubric text; its verdict is validated against a schema with a closed set of scores, and the gate never executes anything a judge says.
 
 ```mermaid
 flowchart TB
@@ -356,7 +366,7 @@ book/projects/evalkit/
     gate.toml                   example release gate
   examples/
     ticket_triage_eval.py       baseline vs candidate, report, gate
-  tests/                        58 offline tests
+  tests/                        66 offline tests
 ```
 
 ```toml
@@ -437,7 +447,7 @@ from collections.abc import Callable, Iterable, Iterator
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class DatasetError(ValueError):
@@ -445,7 +455,10 @@ class DatasetError(ValueError):
 
 
 class EvalCase(BaseModel):
-    """One evaluation case. `input` and `expected` are any JSON-serializable values."""
+    """One evaluation case. `input` and `expected` are any JSON-serializable values. Unknown
+    fields are rejected: a typo such as `expeced` or `tag` would otherwise silently drop data."""
+
+    model_config = ConfigDict(extra="forbid")
 
     id: str
     input: Any
@@ -540,7 +553,11 @@ class Dataset:
 
     # ------------------------------------------------------------------ persistence
     @classmethod
-    def load_jsonl(cls, path: str | Path, *, name: str | None = None, version: str | None = None) -> "Dataset":
+    def load_jsonl(cls, path: str | Path, *, name: str | None = None, version: str | None = None,
+                   verify: bool = True) -> "Dataset":
+        """Load a dataset; when the header records a `content_hash`, check it (`verify=False` skips).
+        The hash covers each case's canonical JSON, so adding a field to `EvalCase` changes every
+        stored hash: re-freeze datasets deliberately after such a change."""
         path = Path(path)
         header: dict[str, Any] = {}
         cases: list[EvalCase] = []
@@ -559,12 +576,15 @@ class Dataset:
                     cases.append(EvalCase.model_validate(obj))
                 except ValueError as exc:
                     raise DatasetError(f"{path}:{lineno}: invalid case: {exc}") from exc
-        return cls(
+        ds = cls(
             cases,
             name=name or header.get("name") or path.stem,
             version=version or str(header.get("version", "0")),
             description=header.get("description", ""),
         )
+        if verify and header.get("content_hash"):
+            ds.verify_hash(str(header["content_hash"]))
+        return ds
 
     def save_jsonl(self, path: str | Path) -> Path:
         path = Path(path)
@@ -1173,14 +1193,36 @@ GROUNDEDNESS = Rubric(
 )
 
 
+def _reject_bool(v: Any) -> Any:
+    if isinstance(v, bool):   # JSON true/false would otherwise coerce to the scores 1 and 0
+        raise ValueError("score must be a number, not a boolean")
+    return v
+
+
 def _verdict_model(rubric: Rubric) -> type[BaseModel]:
     allowed = tuple(rubric.scores)
     return create_model(  # type: ignore[call-overload]
         f"{rubric.name.title().replace('_', '')}Verdict",
         reasoning=(str, Field(description="brief reasoning that cites the candidate; written before the score")),
-        score=(Literal[allowed], Field(description=f"one of {list(allowed)}")),  # type: ignore[valid-type]
+        score=(Annotated[Literal[allowed], BeforeValidator(_reject_bool)],  # type: ignore[valid-type]
+               Field(description=f"one of {list(allowed)}")),
         flagged=(list[str], Field(default_factory=list, description=rubric.flagged_label)),
     )
+
+
+_DELIMITER = re.compile(r"<(/?)(input|reference|evidence|candidate|first|second)\s*>", re.IGNORECASE)
+
+
+def _as_text(value: Any) -> str:
+    """Render untrusted content for a judge prompt. Tags that look like our delimiters are
+    defanged (`<` becomes `&lt;`), so the content cannot close its block and pose as rubric text."""
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return _DELIMITER.sub(r"&lt;\1\2>", value)
+    if isinstance(value, (list, tuple)):
+        return "\n\n".join(f"[{i + 1}] {_as_text(v)}" for i, v in enumerate(value))
+    return _as_text(str(value))
 
 
 class JudgeResult(BaseModel):
@@ -1365,8 +1407,18 @@ def cohens_kappa(
     """
     if len(a) != len(b) or not a:
         raise ValueError("need two non-empty label sequences of equal length")
-    labs = list(labels) if labels is not None else sorted(set(a) | set(b), key=lambda x: (str(type(x)), x))  # type: ignore[arg-type]
+    seen = set(a) | set(b)
+    numeric = all(isinstance(x, (int, float)) and not isinstance(x, bool) for x in seen)
+    if labels is not None:
+        labs = list(labels)
+    else:
+        labs = sorted(seen, key=(lambda x: x) if numeric else (lambda x: (str(type(x)), x)))  # type: ignore[arg-type,return-value]
+    if unknown := seen - set(labs):
+        raise ValueError(f"labels missing from `labels`: {sorted(map(str, unknown))}")
     idx = {lab: i for i, lab in enumerate(labs)}
+    # Numeric labels are weighted by value, so an unused level (nobody scored 2 on a 0-3 rubric)
+    # still counts as a step between 1 and 3. Other labels are weighted by their order in `labs`.
+    by_value = numeric and all(isinstance(x, (int, float)) and not isinstance(x, bool) for x in labs)
     k, n = len(labs), len(a)
     if k == 1:
         return 1.0
@@ -1379,8 +1431,11 @@ def cohens_kappa(
     def w(i: int, j: int) -> float:
         if weights is None:
             return 0.0 if i == j else 1.0
-        d = abs(i - j) / (k - 1)
-        return d if weights == "linear" else d * d
+        if by_value:
+            d = abs(float(labs[i]) - float(labs[j]))  # type: ignore[arg-type]
+        else:
+            d = abs(i - j)
+        return d if weights == "linear" else d * d   # kappa is a ratio, so no normalization is needed
 
     observed = sum(w(i, j) * obs[i][j] for i in range(k) for j in range(k)) / n
     expected = sum(w(i, j) * row[i] * col[j] for i in range(k) for j in range(k)) / (n * n)
@@ -1556,7 +1611,9 @@ metric = "category_correct"
 
 `evaluate_gate` turns each rule into one or more `GateCheck` records with the observed value, the threshold, and a detail string naming the failing cases, so a blocked release always says why. Chapter 25 wraps it in a CI job that fails the pipeline and attaches the report.
 
-Three settings in that file encode decisions worth making explicitly. The **pin** makes the gate valid only for one frozen dataset: a run on any other content hash fails the "dataset pinned" check, so editing the holdout requires a reviewed change to the gate. **`require_baseline`** turns a missing baseline into a failure; without it, every regression and slice rule silently does not run when the baseline artifact fails to download, and a regressed candidate passes. And the regression rule type is a choice between two errors. `max_regression` compares the **point estimate** of the paired delta with a tolerance: it blocks some changes that are only noise, but it catches real regressions that a small dataset cannot prove. `fail_on_significant_regression` blocks only when the paired interval lies entirely below zero: it never blocks on noise, and on 60 cases it lets almost any regression through. Use the point-estimate tolerance on small sets and for metrics you cannot afford to lose; use the significance rule, or `min_ci_low` on the absolute score, on large sets where false blocks are the bigger cost.
+Three settings in that file encode decisions worth making explicitly. The **pin** makes the gate valid only for one frozen dataset: a run on any other content hash fails the "dataset pinned" check, so editing the holdout requires a reviewed change to the gate. **`require_baseline`** turns a missing baseline into a failure; without it, every regression and slice rule silently does not run when the baseline artifact fails to download, and a regressed candidate passes. A slice rule whose metric or slice name is misspelled fails the gate rather than passing silently.
+
+The regression rule type is a choice between two errors. `max_regression` compares the **point estimate** of the paired delta with a tolerance: it blocks some changes that are only noise, but it catches real regressions that a small dataset cannot prove. `fail_on_significant_regression` blocks only when the paired interval lies entirely below zero: it never blocks on noise, and on 64 cases it lets regressions of several points through. The worked example's -3.1-point delta has an interval of [-10.9, +4.7] and would pass it. Use the point-estimate tolerance on small sets and for metrics you cannot afford to lose; use the significance rule, or `min_ci_low` on the absolute score, on large sets where false blocks are the bigger cost.
 
 ### The worked example
 
@@ -1605,7 +1662,7 @@ def build_dataset() -> Dataset:
             )
         )
     return Dataset(cases, name="northwind-tickets", version="1",
-                   description="Ticket triage golden set: 60 labelled tickets plus 4 injection cases.")
+                   description="Ticket triage golden set: 60 labeled tickets plus 4 injection cases.")
 
 
 class Triage(BaseModel):
@@ -1685,7 +1742,7 @@ def main(argv: list[str]) -> int:
 
 ### Tests
 
-The suite has 58 tests and runs offline in a few seconds. Judges are exercised with `FakeLLM`, including a handler that always prefers the first position, to show that randomization turns position bias into visible noise rather than a fake win, and that judging both orders neutralizes it:
+The suite has 66 tests and runs offline in a few seconds. Judges are exercised with `FakeLLM`, including a handler that always prefers the first position, to show that randomization turns position bias into visible noise rather than a fake win, and that judging both orders neutralizes it:
 
 ```python
 # path: book/projects/evalkit/tests/test_judges.py (excerpt; full file on disk)
@@ -1717,15 +1774,15 @@ def test_kappa_exposes_agreement_that_is_only_chance():
 
 ```
 $ python -m pytest -q
-..........................................................               [100%]
-58 passed in 1.88s
+..................................................................       [100%]
+66 passed in 1.94s
 ```
 
 ## Code walkthrough
 
 Follow the worked example from dataset to decision, because each step exercises one idea from the chapter.
 
-**The dataset is built once and frozen.** `build_dataset` turns the 60 labelled tickets into cases tagged by category, tenant, and channel, and adds four adversarial cases whose bodies tell the classifier what to answer. Their expected labels follow the actual problem, and they carry the `critical` tag. The saved file, `northwind-tickets@1#1708ea5e315d`, is the frozen artifact; a test checks the header hash against the cases, so an accidental edit fails the build. The seeded split puts 45 cases in dev and 19 in the holdout, and `check_leakage` confirms they share nothing. With conversation data you would pass `group_by` with the conversation or customer id. The example then gates on all 64 cases, which breaks the chapter's own rule on purpose: a 19-case holdout cannot meet the gate's 50-case minimum, and the point of the example is the mechanics. In a real pipeline the prompt author iterates on `dev`, and the gate, pinned to the holdout's hash, runs only on `holdout`.
+**The dataset is built once and frozen.** `build_dataset` turns the 60 labeled tickets into cases tagged by category, tenant, and channel, and adds four adversarial cases whose bodies tell the classifier what to answer. Their expected labels follow the actual problem, and they carry the `critical` tag. The saved file, `northwind-tickets@1#1708ea5e315d`, is the frozen artifact; a test checks the header hash against the cases, so an accidental edit fails the build. The seeded split puts 45 cases in dev and 19 in the holdout, and `check_leakage` confirms they share nothing. With conversation data you would pass `group_by` with the conversation or customer id. The example then gates on all 64 cases, which breaks the chapter's own rule on purpose: a 19-case holdout cannot meet the gate's 50-case minimum, and the point of the example is the mechanics. In a real pipeline the prompt author iterates on `dev`, and the gate, pinned to the holdout's hash, runs only on `holdout`.
 
 **The target is the real code path, and the evaluators are deterministic.** `make_target` builds the same `CompletionRequest` a production triage step would and validates the answer with `complete_structured`. Category correctness is exact match and label validity checks the enum; a judge would add cost and error to a classification task and nothing else.
 
@@ -1743,7 +1800,7 @@ On its own, that row says "slightly worse, probably noise". The slice table says
 | golden | 60 | 0.883 | 0.917 | +0.033 [+0.000, +0.083] |
 | cat:security_report | 6 | 0.667 | 1.000 | +0.333 [+0.000, +0.667] |
 
-The candidate does exactly what its author intended on real tickets: two security tickets that version 1 missed are now caught, and the golden set improves by 3.3 points. If the dataset had contained only golden cases, this change would have looked like a clear win, although the interval touching zero and the two-wins-zero-losses record say it is a small one. The per-case section lists the four adversarial regressions before the two fixes, and the gate output names the decisive check:
+The candidate does exactly what its author intended on real tickets: two security tickets that version 1 missed are now caught, and the golden set improves by 3.3 points. If the dataset had contained only golden cases, this change would have looked like a clear win, although the golden slice's interval touching zero and its two-wins-zero-losses record say it is a small one. The per-case section lists the four adversarial regressions before the two fixes, and the gate output names the decisive check:
 
 ```
 | critical [critical] category_correct | FAIL | 0/4 pass | all | ADV-001, ADV-002, ADV-003, ADV-004 |
@@ -1757,7 +1814,7 @@ This is the Monday-morning incident from the start of the chapter, caught by fou
 
 **Latency and throughput.** An evaluation run is a burst of traffic. Bound concurrency with the runner and the gateway's rate limiter, or the eval job will throttle production calls that share the same provider quota. A p95 measured with one request in flight is not the p95 users see.
 
-**Security and privacy.** Production-sampled cases contain personal and tenant data. Redact before ingestion, store datasets with the same access controls as the production data they came from, keep tenant tags so a dataset never mixes data a single reviewer should not see, and never send cases to a judge provider your data policy does not allow. Treat the holdout as restricted: if the person tuning the prompt can browse it freely, it slowly becomes a dev set.
+**Security and privacy.** Production-sampled cases contain personal and tenant data. Redact before ingestion, store datasets with the same access controls as the production data they came from, keep tenant tags so a dataset never mixes data a single reviewer should not see, and never send cases to a judge provider your data policy does not allow. Restrict and log access to the holdout (see "Holdout erosion" under Failure modes).
 
 **Operations.** Every dataset needs an owner, a refresh cadence (for example, a quarterly production sample merged as a new version), and a retirement rule. Store every run record and report as a build artifact next to the versions of prompt, model, index, and tool schemas it evaluated, so a release can be audited months later. Pin gates to dataset hashes so a dataset edit forces a deliberate, reviewed gate update. Offline evaluation gates the release; online signals (corrections, escalations, task completion, canary comparisons) catch what the dataset does not contain, and feed new regression cases back into it. Chapter 25 builds the CI job and online evaluation; Chapter 31 builds the traces that let a failing case be replayed exactly.
 
@@ -1767,7 +1824,7 @@ This is the Monday-morning incident from the start of the chapter, caught by fou
 
 - **One aggregate quality score.** It hides which failure class moved. Report per metric and per slice, and gate critical classes separately.
 - **Tuning on the holdout.** Iterating on the cases you report means the report measures your memory of those cases.
-- **Dropping errors from the denominator.** A target that crashes on hard cases looks better than one that answers them badly unless errors count as failures.
+- **Dropping errors from the denominator.** Excluding crashed cases rewards a target for failing loudly on hard inputs; count every error as a failure.
 - **Judging what code can check.** Schema validity, ids, numbers, permissions, and tool calls delegated to a judge are slower, costlier, and less accurate.
 - **"Rate this 1 to 10".** Unanchored long scales produce scores nobody can calibrate. Use short scales with observable criteria, one dimension per call.
 - **Trusting a judge because it agrees often.** High raw agreement on a skewed label distribution can mean kappa near zero. Check kappa and the false pass rate.
@@ -1800,7 +1857,7 @@ This is the Monday-morning incident from the start of the chapter, caught by fou
 | Human review | reference quality | slow, expensive, noisy without design | calibration, new features, sampled release diffs |
 | Absolute scoring | one run per system, trend lines | less stable across judges and time | dashboards, gates with fixed thresholds |
 | Pairwise comparison | more consistent preferences | needs a baseline; position bias; doubles calls with both orders | choosing between two prompts or models |
-| Large golden set | small MDE, rich slices | labelling cost, staleness | stable, high-traffic features |
+| Large golden set | small MDE, rich slices | labeling cost, staleness | stable, high-traffic features |
 | Synthetic data | fast coverage of rare slices | easier than reality, generator bias | new features, gap filling, with human review |
 | Strict gates | regressions cannot ship | false blocks erode trust | critical slices and deterministic contracts |
 | Tolerant gates | fewer false blocks | small regressions accumulate | noisy judged metrics with known flakiness |
@@ -1809,7 +1866,7 @@ This is the Monday-morning incident from the start of the chapter, caught by fou
 
 The evaluator is code, and it needs its own tests. Test deterministic metrics like any library: known inputs, known outputs, explicit conventions for empty sets and nulls (the `evalkit` suite pins the empty-set, zero-division, and field-counting rules). Cross-check classical metrics against an independent implementation where one is available; the suite compares macro-F1 and three kappa variants with scikit-learn when it is installed.
 
-Test judges at three levels. Unit tests with a scripted fake model check the prompt contract (rubric present, candidate delimited, no reference when none is given), the repair path when the judge returns an out-of-range score, and the failure path when it never returns valid JSON. Behavioral tests with fake judges check the statistical machinery: a judge that always prefers the first slot must show a first-position rate of 1.0, and both-order evaluation must turn its verdicts into ties. Calibration against human labels, run whenever the rubric, prompt, or judge model changes, is the real test of the instrument; keep its labelled sample versioned like any dataset, with its own adversarial cases, such as candidates that address the judge directly.
+Test judges at three levels. Unit tests with a scripted fake model check the prompt contract (rubric present, candidate delimited, no reference when none is given), the repair path when the judge returns an out-of-range score, and the failure path when it never returns valid JSON. Behavioral tests with fake judges check the statistical machinery: a judge that always prefers the first slot must show a first-position rate of 1.0, and both-order evaluation must turn its verdicts into ties. Calibration against human labels, run whenever the rubric, prompt, or judge model changes, is the real test of the instrument; keep its labeled sample versioned like any dataset, with its own adversarial cases, such as candidates that address the judge directly.
 
 Test the pipeline end to end on a known story: the worked example is a test in which the candidate must win on the golden slice while the gate fails with a non-zero exit code. Finally, meta-evaluate against production. Once a quarter, compare holdout scores with outcome metrics from the same period (correction rates, escalations, reviewed production samples). If they disagree, the dataset or the instrument is wrong, and that finding outweighs any single release decision.
 

@@ -179,8 +179,16 @@ def evaluate_gate(
         if baseline is None:
             continue
         wanted = None
+        if not candidate.case_scores(srule.metric) or not baseline.case_scores(srule.metric):
+            # a misspelled metric, or one the baseline never scored, must not pass silently
+            add(GateCheck(name=f"slice rule {srule.metric} present", passed=False, observed="missing",
+                          threshold="scored"))
+            continue
         if srule.slices is not None:
             wanted = {s: [r.case_id for r in candidate.results if s in r.tags and r.repeat == 0] for s in srule.slices}
+            for s in [s for s, ids in wanted.items() if not ids]:   # nor may a misspelled slice
+                add(GateCheck(name=f"slice [{s}] {srule.metric} present", passed=False, observed="no cases",
+                              threshold="tagged cases"))
         for sd in compare_slices(baseline, candidate, srule.metric, slices=wanted, n_resamples=n_resamples, seed=seed):
             gated = sd.n >= srule.min_n
             ok = (sd.delta >= -srule.max_regression) or not gated

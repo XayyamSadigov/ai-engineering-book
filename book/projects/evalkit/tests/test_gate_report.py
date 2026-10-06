@@ -128,7 +128,7 @@ def test_report_without_and_with_baseline():
     assert "Gate `demo`" in diff and "## Per-case changes" in diff
     assert "| c02 | 1.000 | 0.000 | -1.000 | billing |" in diff
     assert "| c25 | 0.000 | 1.000 | +1.000 | vpn |" in diff
-    assert diff.index("c02") < diff.index("c25")  # regressions listed before fixes
+    assert diff.index("| c02 |") < diff.index("| c25 |")  # regressions listed before fixes
 
 
 @pytest.mark.parametrize("repeats", [2])

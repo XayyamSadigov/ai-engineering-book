@@ -84,12 +84,17 @@ def value_renderings(value: Any) -> list[str]:
     return sorted(out)
 
 
+def mentions(text: str, value: Any) -> bool:
+    """Whether `text` contains a rendering of `value` as a whole token: "1488.00" is not found
+    inside "11,488.00", "INV-104" not inside "INV-1042", "0" not inside "2026-01-0077" or "0.0045"."""
+    low = text.lower()
+    return any(re.search(rf"(?<!\w)(?<!\d[.,]){re.escape(r)}(?![\w]|[.,]\d)", low) for r in value_renderings(value) if r)
+
+
 def locate_value(text: str, value: Any) -> str | None:
-    """The first document line that contains a rendering of `value` (used by stand-in extractors)."""
-    renders = value_renderings(value)
+    """The first document line that mentions `value` (used by stand-in extractors)."""
     for line in text.splitlines():
-        low = line.lower()
-        if any(r and r in low for r in renders):
+        if mentions(line, value):
             return line.strip()
     return None
 
@@ -101,7 +106,7 @@ def evidence_status(document: str, quote: str | None, gold_value: Any) -> str:
     q = _norm_text(quote)
     if q not in _norm_text(document):
         return "not_found"  # fabricated or paraphrased quote: cannot be verified
-    return "correct" if any(r in q for r in value_renderings(gold_value)) else "wrong_location"
+    return "correct" if mentions(q, gold_value) else "wrong_location"
 
 
 def line_item_prf(predicted: Sequence[Mapping[str, Any]], gold: Sequence[Mapping[str, Any]]) -> tuple[float, float]:
@@ -176,5 +181,5 @@ def per_field_report(run_details: Sequence[Mapping[str, str]], fields: Sequence[
     return out
 
 
-__all__ = ["FIELD_WEIGHTS", "CRITICAL_FIELDS", "weighted_field_prf", "value_renderings", "locate_value",
+__all__ = ["FIELD_WEIGHTS", "CRITICAL_FIELDS", "weighted_field_prf", "value_renderings", "mentions", "locate_value",
            "evidence_status", "line_item_prf", "ExtractionEvaluator", "EXTRACTION_METRICS", "per_field_report"]

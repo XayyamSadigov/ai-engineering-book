@@ -49,7 +49,7 @@ def test_corrections_become_regression_cases_with_trace_lineage() -> None:
         FeedbackEvent(trace_id="tr-2", timestamp=T0 + timedelta(hours=1), kind="correction", field="category",
                       value="vpn_network"),  # "correction" to the same value is not a failure
     ])
-    cases = corrections_to_cases(outcomes)
+    cases = corrections_to_cases(outcomes, redact=lambda x: x)   # the test traces hold no personal data
     assert [c.id for c in cases] == ["PROD-tr-1"]
     assert cases[0].expected == {"category": "account_access"}
     assert cases[0].metadata["versions"]["prompt"] == "v1" and "origin:production-correction" in cases[0].tags

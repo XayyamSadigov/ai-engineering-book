@@ -1,7 +1,8 @@
 # path: book/projects/examples/ch25/ci/github/eval-gate.yml
 # Copy to .github/workflows/eval-gate.yml at the repository root.
 # Merge requests: unit tests, then the fast eval suite, then the release gate.
-# Nightly: the full suite (repeated trials, judges) against the same gate.
+# Nightly: the full suite (repeated trials, judges); the gate checks the suites listed in gates.toml.
+# Gate thresholds and baselines always come from the default branch, never from the PR under test.
 name: eval-gate
 
 on:
@@ -70,11 +71,22 @@ jobs:
         run: |
           # --eval-suite fast on merge requests; full on the nightly schedule
           python -m pytest -q --eval-suite "$SUITE" --eval-out eval-out/runs -m "eval_fast or eval_full"
+      - name: Trusted gate config and baselines
+        # A PR could otherwise relax thresholds or regenerate baselines in the same diff it is judged on.
+        # The gate config must exist on the default branch first; until it does, this step fails closed.
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          git fetch --depth=1 origin "${{ github.event.repository.default_branch || github.ref_name }}"
+          mkdir -p trusted/baselines
+          git show FETCH_HEAD:./ci/gates.toml > trusted/gates.toml
+          for f in $(git ls-tree --name-only FETCH_HEAD ci/baselines/); do
+            git show "FETCH_HEAD:./$f" > "trusted/baselines/$(basename "$f")"
+          done
       - name: Release gate
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
-          python ci/release_gate.py --config ci/gates.toml --runs eval-out/runs \
-            --baselines ci/baselines --out eval-out
+          python ci/release_gate.py --config trusted/gates.toml --runs eval-out/runs \
+            --baselines trusted/baselines --out eval-out
       - name: Upload eval report
         if: always()
         uses: actions/upload-artifact@v4

@@ -11,6 +11,7 @@ lexical retrieval and makes the synthetic slice look easier than production traf
 """
 from __future__ import annotations
 
+import hashlib
 import re
 import statistics
 from collections import Counter
@@ -167,7 +168,8 @@ def validate_candidates(
         seen.append(q)
         per_doc[cand.doc_id] += 1
         kept.append(EvalCase(
-            id=f"{id_prefix}-{cand.doc_id}-{per_doc[cand.doc_id]:02d}",
+            # derived from the question, so ids stay unique across batches for the same document
+            id=f"{id_prefix}-{cand.doc_id}-{hashlib.sha256(normalize_text(q).encode()).hexdigest()[:8]}",
             input={"question": q},
             expected={"required_sources": [cand.doc_id], "answer": cand.item.answer,
                       "answer_quote": cand.item.answer_quote},

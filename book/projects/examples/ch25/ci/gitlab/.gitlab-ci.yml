@@ -1,7 +1,8 @@
 # path: book/projects/examples/ch25/ci/gitlab/.gitlab-ci.yml
 # Include from the root .gitlab-ci.yml:   include: { local: book/projects/examples/ch25/ci/gitlab/.gitlab-ci.yml }
 # Merge request pipelines run unit tests, the fast eval suite, and the gate; scheduled pipelines
-# run the full suite. The report is attached to every pipeline, pass or fail.
+# run the full suite. The report is attached to every pipeline, pass or fail. Gate thresholds and
+# baselines come from the default branch, never from the merge request under test.
 stages:
   - test
   - eval
@@ -46,7 +47,13 @@ eval-gate:
     - SUITE=fast; if [ "$CI_PIPELINE_SOURCE" = "schedule" ]; then SUITE=full; fi
     # --eval-suite fast on merge requests; full on schedules
     - python -m pytest -q --eval-suite "$SUITE" --eval-out eval-out/runs -m "eval_fast or eval_full"
-    - python ci/release_gate.py --config ci/gates.toml --runs eval-out/runs --baselines ci/baselines --out eval-out
+    # trusted gate config and baselines: a merge request must not relax the gate it is judged by
+    # (the config must exist on the default branch first; until it does, the job fails closed)
+    - apt-get update -qq && apt-get install -y -qq git >/dev/null
+    - git fetch --depth=1 origin "$CI_DEFAULT_BRANCH"
+    - mkdir -p trusted/baselines && git show FETCH_HEAD:./ci/gates.toml > trusted/gates.toml
+    - for f in $(git ls-tree --name-only FETCH_HEAD ci/baselines/); do git show "FETCH_HEAD:./$f" > "trusted/baselines/$(basename "$f")"; done
+    - python ci/release_gate.py --config trusted/gates.toml --runs eval-out/runs --baselines trusted/baselines --out eval-out
   artifacts:
     when: always
     expire_in: 90 days

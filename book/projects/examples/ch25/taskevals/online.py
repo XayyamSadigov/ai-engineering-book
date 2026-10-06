@@ -10,7 +10,7 @@ index version (Chapter 31 owns the trace schema); without the join, a thumbs-dow
 from __future__ import annotations
 
 import math
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from datetime import datetime, timedelta
 from statistics import NormalDist
 from typing import Any, Literal
@@ -124,8 +124,10 @@ def outcome_metrics(outcomes: Sequence[Outcome], *, group_by: str = "prompt",
     return out
 
 
-def corrections_to_cases(outcomes: Iterable[Outcome], *, field: str = "category") -> list[EvalCase]:
-    """Every human correction becomes a candidate regression case (redact before storing)."""
+def corrections_to_cases(outcomes: Iterable[Outcome], *, field: str = "category",
+                         redact: Callable[[Any], Any]) -> list[EvalCase]:
+    """Every human correction becomes a candidate regression case. `redact` is required and is
+    applied to the production input, so raw personal data never lands in an eval set by default."""
     cases = []
     for o in outcomes:
         truth = o.labels.get(field, o.corrections.get(field))
@@ -133,7 +135,7 @@ def corrections_to_cases(outcomes: Iterable[Outcome], *, field: str = "category"
             continue
         cases.append(EvalCase(
             id=f"PROD-{o.trace.trace_id}",
-            input=o.trace.input,
+            input=redact(o.trace.input),
             expected={field: truth},
             tags=["origin:production-correction", f"tenant:{o.trace.tenant}", f"{field}:{truth}"],
             metadata={"trace_id": o.trace.trace_id, "versions": o.trace.versions, "group": o.trace.trace_id,

@@ -86,13 +86,20 @@ def evaluate_suite(sg: SuiteGate, runs: Path, baselines: Path | None, reports: P
         return SuiteVerdict(suite=sg.name, status="error", message=f"cannot read run {path}: {type(exc).__name__}")
     baseline = None
     if baselines is not None and (baselines / path.name).exists():
-        baseline = Run.load_json(baselines / path.name)
+        try:
+            baseline = Run.load_json(baselines / path.name)
+        except (OSError, ValueError, ValidationError) as exc:   # an unreadable baseline is a pipeline error
+            return SuiteVerdict(suite=sg.name, status="error",
+                                message=f"cannot read baseline {baselines / path.name}: {type(exc).__name__}")
     result = evaluate_gate(sg.gate.model_copy(update={"name": sg.name}), candidate, baseline)
     checks = list(result.checks)
     if sg.aggregates:
         if sg.aggregator not in AGGREGATORS:
             return SuiteVerdict(suite=sg.name, status="error", message=f"unknown aggregator {sg.aggregator!r}")
-        checks += aggregate_checks(sg.aggregates, AGGREGATORS[sg.aggregator](candidate))
+        try:
+            checks += aggregate_checks(sg.aggregates, AGGREGATORS[sg.aggregator](candidate))
+        except (ValueError, AttributeError, KeyError) as exc:
+            return SuiteVerdict(suite=sg.name, status="error", message=f"aggregates failed: {type(exc).__name__}: {exc}")
     result = result.model_copy(update={"checks": checks, "passed": all(c.passed for c in checks)})
     reports.mkdir(parents=True, exist_ok=True)
     (reports / f"{sg.name}.md").write_text(

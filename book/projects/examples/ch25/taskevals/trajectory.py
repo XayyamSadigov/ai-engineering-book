@@ -208,12 +208,18 @@ def assert_approval_before_side_effects(traj: Trajectory, tools: Mapping[str, To
     """Every executed call to an approval-gated tool has an earlier `approved` decision for that call."""
     violations: list[str] = []
     approvals = {s.call_id: (i, s.decision) for i, s in enumerate(traj.steps) if s.type == "approval"}
+    ids = [c.call_id for c in traj.tool_calls]
     for call in traj.tool_calls:
         info = tools.get(call.tool or "")
         if info is None or not info.requires_approval:
             continue
+        if ids.count(call.call_id) > 1:   # a reused id could borrow another call's approval or result
+            violations.append(f"{call.tool}:{call.call_id} (call id reused)")
+            continue
         found = traj.result_for(call.call_id or "")
-        if found is None or found[1].status != "ok":
+        # "unrecorded" is a replayed call with no recorded result: it would have executed, so it
+        # needs approval as much as an "ok" one does. Replay fails closed here.
+        if found is None or found[1].status not in ("ok", "unrecorded"):
             continue  # never executed: nothing to approve
         result_idx = found[0]
         appr = approvals.get(call.call_id)

@@ -23,7 +23,7 @@ Solutions: `../solutions/ch25-solutions.md`
 
 **E2.** The extraction team wants to add contracts with 40 fields to the suite. Propose a weighting scheme, critical fields, evidence requirements, and slices, and explain how you would keep the fast suite under five minutes.
 
-**E3.** Your team runs evaluations in GitLab CI on merge requests from forks as well as internal branches, and the nightly suite uses a real provider. Design the pipeline so that secrets are never exposed, the fast suite still runs for forks, and baselines can only be updated by the release process.
+**E3.** Your team runs evaluations in CI on merge requests from forks as well as internal branches, and the nightly suite uses a real provider. Design the pipeline so that secrets are never exposed, the fast suite still runs for forks, and baselines can only be updated by the release process.
 
 **E4.** Product wants the canary to promote as soon as possible when the new version is clearly better. Explain the risk of adding early promotion to the planned-looks rule, and propose a design that allows it without inflating the error you care about.
 
@@ -33,7 +33,7 @@ Solutions: `../solutions/ch25-solutions.md`
 
 **P2.** Extend `evidence_status` to verify the quote's label as well as its value (for example, a total's quote must contain "total" and must not contain "subtotal"), and add test cases from the untaxed statements that the current check passes incorrectly.
 
-**P3.** Add a `summarization` suite to `suites.py` over the incident reports in `shared-data/docs/` (files starting with `inc-`), with key facts written by hand, a stand-in summarizer with baseline and regressed versions, and a gate section that requires coverage, faithfulness, qualifiers, and compression together.
+**P3.** Add a `summarization` suite to `suites.py` over the incident reports in `shared-data/docs/` (the two incident postmortems, `incident-2025-11-pos-outage.md` and `incident-2026-02-tracking-latency.md`), with key facts written by hand, a stand-in summarizer with baseline and regressed versions, and a gate section that requires coverage, faithfulness, qualifiers, and compression together.
 
 **P4.** Implement a nightly job that runs the classification suite three times with a nondeterministic stand-in (seeded noise on confidence and occasional label flips), reports pass^3 and the flaky cases, and fails the gate when the flaky rate exceeds a configured limit. Add the rule to `gates.toml` through a new aggregate.
 

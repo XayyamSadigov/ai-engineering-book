@@ -13,7 +13,7 @@ K3. In the ACL-disabled run, recall@5 barely changes while `no_permission_leak` 
 
 K4. What is the difference between the retrieval cache and the answer cache in what they store, and why does that difference make one of them safer to enable by default?
 
-K5. Explain why the model-facing tool schema accepts PII tokens in e-mail fields while toolkit validates real addresses. What attack does re-hydrating only inside the tool layer prevent?
+K5. Explain why the model-facing tool schema accepts PII tokens in email fields while toolkit validates real addresses. What attack does re-hydrating only inside the tool layer prevent?
 
 K6. What does `attack_detected` measure, why is it reported and not gated, and what would happen to the system over time if it were gated?
 
@@ -43,6 +43,6 @@ P5. **Compose end to end.** Bring up the Compose stack with the Project 3 backen
 
 D1. After a deploy, the cost dashboard shows retail spend dropping by 60 percent while request volume is flat and no cache settings changed. Thumbs-down feedback rose. The `request` spans show `degrade.level = 1` on most requests, and `/v1/admin/status` shows both breakers closed. What is the likely cause, which attribute or setting confirms it, and what would you change?
 
-D2. A lead reports that approving a reply returns `403 approval_mismatch` even though nobody edited the text. The audit log shows `tool.approval_requested` with one `args_hash` and `tool.denied` on execution with a different one. The requester's message contained an e-mail address. Where do the two hashes come from, and what changed between proposal and execution?
+D2. A lead reports that approving a reply returns `403 approval_mismatch` even though nobody edited the text. The audit log shows `tool.approval_requested` with one `args_hash` and `tool.denied` on execution with a different one. The requester's message contained an email address. Where do the two hashes come from, and what changed between proposal and execution?
 
 D3. In a load test, p95 time to first `delta` measured at the client is 7.8 seconds, while the `llm.complete` spans show a provider time to first token of 0.9 seconds and the `request` spans finish in 8.1 seconds. No errors are logged. Name two causes consistent with these numbers and the trace or header that distinguishes them.

@@ -29,9 +29,9 @@ would you put in a CI gate first, and why?
 pipeline. Which checks change their fail mode, thresholds, or action, and which new checks are needed?
 Justify each change by the asset it protects.
 
-**E2.** The output stage currently strips off-allowlist links silently except for a marker. Product asks
-for zero markers ("it looks broken"). Argue for or against, and propose a design that satisfies security
-and product without hiding removals from audit.
+**E2.** The output stage currently replaces off-allowlist links with a visible "[link removed]" marker.
+Product asks for zero markers ("it looks broken"). Argue for or against, and propose a design that
+satisfies security and product without hiding removals from audit.
 
 **E3.** Design the streaming variant of the output stage for the RAG assistant: buffering rules, which
 checks run per chunk and which on the full answer, what happens when a later check blocks after earlier
@@ -52,8 +52,9 @@ buffers to safe boundaries, runs the output stage on each buffered segment, and 
 has not seen. Test it with a markdown image split across three chunks.
 
 **P3.** Write an adapter that implements the `authorize(call, ctx)` delegate on top of Chapter 16's
-`toolkit.policy.PolicyEngine`, mapping its allow, deny, and needs-approval decisions to `ToolDecision`, and
-add a red-team test where the engine's group deny stops a call that the guardrail rules alone would allow.
+`toolkit.policy.PolicyEngine`, mapping its allow, deny, and needs-approval decisions to `ToolDecision`,
+and add a red-team test where the engine's group deny stops a call that the guardrail rules alone would
+allow.
 
 **P4.** Extend the measurement script with a per-check false-positive gate (`--max-fp check=rate`) and a
 labeled set of at least 30 additional benign user questions from your own domain. Report how the

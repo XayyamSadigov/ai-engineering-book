@@ -63,13 +63,14 @@ the replay test detecting the change.
 ### Debugging exercises
 
 **D1.** After a dependency upgrade, Northwind's ticket-triage eval accuracy drops from 0.91 to 0.84
-with no change in the repository. The prompt registry version on model-call spans is unchanged, but
-the prompt hash attribute differs from last week's traces. No retries are visible. Diagnose, name the
-telemetry that confirms it, and say what should have caught it before deploy.
+(illustrative numbers) with no change in the repository. The prompt registry version on model-call
+spans is unchanged, but the prompt hash attribute differs from last week's traces. No retries are
+visible. Diagnose, name the telemetry that confirms it, and say what should have caught it before
+deploy.
 
 **D2.** During a provider incident, the cost dashboard shows nine model calls per failed request. The
 code configures a `ModelGateway` with `max_attempts=3`; the orchestration framework's node has its
-default retry policy; the framework's model wrapper has its default retry. Explain the nine, identify
+default retry policy of three attempts. Explain the nine, identify
 which layer should keep retries, and state the test that would have shown this.
 
 **D3.** An approval workflow built on a graph framework occasionally creates two tickets for one

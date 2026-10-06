@@ -7,7 +7,7 @@ Solutions: `../solutions/ch38-solutions.md`
 
 **K1.** Why must an idempotency key be derived from the event log rather than generated when the tool executes? What exactly goes wrong with a fresh key per attempt?
 
-**K2.** Name the four crash points around a side-effecting tool call and the information the harness has after each one.
+**K2.** Name the crash points around a side-effecting tool call (before the remote commit, after the commit but before acknowledgment, and after the ledger write but before the `ToolResult` event) and what the harness knows after each one.
 
 **K3.** What problem does a fence token solve that a lease alone does not?
 

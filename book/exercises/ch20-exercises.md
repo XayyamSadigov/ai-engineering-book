@@ -23,7 +23,7 @@ Solutions: `../solutions/ch20-solutions.md`
 
 **E2.** Design two more deviation rules for Project 5 and specify their inputs, the reason string, and a test that shows each fires exactly when it should. One must use the deploy data.
 
-**E3.** Project 5's seventeen sequential calls are too slow for a team that wants a draft within thirty seconds. Propose changes that reduce critical-path calls without removing per-step isolation or the Definition of Done, and estimate the new call count on the critical path.
+**E3.** Project 5's seventeen sequential calls are too slow for a team that wants a draft within thirty seconds. Beyond the two changes named under Production considerations, propose changes that reduce critical-path calls without removing per-step isolation or the Definition of Done, and estimate the new call count on the critical path.
 
 **E4.** A product manager proposes a three-level hierarchy (platform lead, tier leads, specialists) for incident research. Write the evaluation plan that would justify or reject it against Project 5, including the baseline, metrics, and decision rule.
 

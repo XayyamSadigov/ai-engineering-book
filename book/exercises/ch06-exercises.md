@@ -31,7 +31,7 @@ Solutions: `../solutions/ch06-solutions.md`
 
 **P1.** Add a reference-check port, `PurchaseOrderDirectory`, with an in-memory adapter seeded from a small fixture. Extend invoice processing so that a PO that does not exist, or belongs to a different vendor, produces a non-repairable error violation. Add tests for both cases and for a valid PO.
 
-**P2.** Detect truncated output: when the extraction completion's `finish_reason` is `length`, do not re-ask with the same limit. Retry once with a higher `max_tokens`, and if that also truncates, route to review with reason `TRUNCATED`. Write a test with a scripted truncated completion.
+**P2.** Handle truncated output better. Today a truncated extraction raises `TruncatedOutputError` and goes to review as `SCHEMA_FAILURE`; never re-ask with the same limit. Retry once with a higher `max_tokens`, and if that also truncates, route to review with reason `TRUNCATED`. Write a test with a scripted truncated completion.
 
 **P3.** Replace the single accept threshold with per-field thresholds for critical fields. Extend `run_eval` to choose each threshold from data for a target precision on that field, and make the routing policy load them from configuration.
 

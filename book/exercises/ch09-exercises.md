@@ -39,7 +39,7 @@ Solutions: `../solutions/ch09-solutions.md`
 
 ### Debugging exercises
 
-**D1.** After a rollout, retail users report that Northwind Assist "does not know anything about Lumen POS anymore", while logistics users see no change. The search spans for retail queries show `returned` values of 0 to 3 with k = 8 and `underfilled = true` on most requests; logistics spans look normal. The rollout moved the knowledge index from the NumPy store to pgvector with default settings. The retail tenant holds about 2% of all chunks. Diagnose the cause and propose two fixes.
+**D1.** After a rollout, retail users report that Northwind Assist "does not know anything about Lumen POS anymore", while logistics users see no change. The search spans for retail queries show `returned` values of 0 to 3 with k = 8 and `underfilled = true` on most requests; logistics spans look normal. The rollout moved the knowledge index from the NumPy store to pgvector 0.7 with `hnsw.ef_search` left at its default of 40. The retail tenant holds about 2% of all chunks. Diagnose the cause and propose two fixes.
 
 **D2.** Retrieval quality collapses on Monday morning. Top scores in search spans, previously spread between 0.3 and 0.8, now sit between 0.02 and 0.11 for every query. Ingestion logs show nothing unusual and chunk counts are unchanged. The deploy log shows that on Friday the embedding service's configuration was updated to "the latest model" for a different team's feature. What happened, which span field confirms it, and what structural change prevents it?
 

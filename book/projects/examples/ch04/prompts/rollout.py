@@ -81,16 +81,18 @@ class PromptRollout:
             self.last_error = None
         return ReloadResult(ok=True)
 
-    def arm(self, prompt_id: str, unit_key: str) -> str:
+    def arm(self, prompt_id: str, unit_key: str, registry: PromptRegistry | None = None) -> str:
         """`canary` or `prod` for this unit. No canary alias, or 0%, means everyone gets prod."""
-        aliases = self._registry.aliases.get(prompt_id, {})
+        reg = registry if registry is not None else self._registry
+        aliases = reg.aliases.get(prompt_id, {})
         percent = self.canary_percent.get(prompt_id, 0.0)
         if "canary" in aliases and bucket(prompt_id, unit_key) < percent:
             return "canary"
         return "prod"
 
     def select(self, prompt_id: str, unit_key: str) -> PromptVersion:
-        return self._registry.get(prompt_id, self.arm(prompt_id, unit_key))
+        reg = self._registry  # read once, so a concurrent reload cannot split arm and lookup
+        return reg.get(prompt_id, self.arm(prompt_id, unit_key, reg))
 
 
 __all__ = ["bucket", "ReloadResult", "PromptRollout"]

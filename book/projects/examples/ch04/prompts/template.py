@@ -152,8 +152,21 @@ def _finalize(value: Any) -> Any:
     return value
 
 
+class _PromptSandbox(ImmutableSandboxedEnvironment):
+    """Sandbox that also hides every attribute of an ``Untrusted`` value.
+
+    Without this, ``{{ body.raw }}`` would read the unescaped text through a public
+    attribute and print it outside any data block.
+    """
+
+    def is_safe_attribute(self, obj: Any, attr: str, value: Any) -> bool:
+        if isinstance(obj, Untrusted):
+            return False
+        return super().is_safe_attribute(obj, attr, value)
+
+
 def _make_env() -> ImmutableSandboxedEnvironment:
-    env = ImmutableSandboxedEnvironment(
+    env = _PromptSandbox(
         undefined=StrictUndefined,
         autoescape=False,  # HTML escaping is the wrong escaping for prompts
         trim_blocks=True,

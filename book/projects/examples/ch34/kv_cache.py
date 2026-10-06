@@ -90,6 +90,7 @@ def max_concurrent_sequences(
 
     ``tensor_parallel`` devices share weights and cache evenly, so the estimate is for the whole
     group. ``headroom_fraction`` is memory you refuse to plan into: fragmentation and bursts.
+    ``runtime_overhead_bytes`` is per device (CUDA context, workspaces), so it scales with the group.
     """
     precision = precision or Precision()
     if not 0 <= headroom_fraction < 1:
@@ -97,14 +98,15 @@ def max_concurrent_sequences(
     total = gpu_memory_bytes * tensor_parallel
     weights = weight_bytes(shape, precision.weight_bytes)
     headroom = int(total * headroom_fraction)
-    usable = total - weights - headroom - runtime_overhead_bytes
+    runtime = runtime_overhead_bytes * tensor_parallel
+    usable = total - weights - headroom - runtime
     per_seq = kv_bytes_per_sequence(shape, tokens_per_sequence, precision.kv_bytes)
     max_seq = 0 if usable <= 0 or per_seq == 0 else usable // per_seq
     return ConcurrencyEstimate(
         gpu_memory_bytes=total,
         weight_bytes=weights,
         headroom_bytes=headroom,
-        runtime_overhead_bytes=runtime_overhead_bytes,
+        runtime_overhead_bytes=runtime,
         usable_kv_bytes=max(usable, 0),
         per_sequence_bytes=per_seq,
         max_sequences=int(max_seq),

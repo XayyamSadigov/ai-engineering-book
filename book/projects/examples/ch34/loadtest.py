@@ -148,10 +148,11 @@ async def run_one(
                         first_token_at = now
                     last_token_at = now
                     tokens += 1
-    except (httpx.HTTPError, json.JSONDecodeError, asyncio.CancelledError) as exc:
+    except (httpx.HTTPError, json.JSONDecodeError) as exc:
         result.error = f"{type(exc).__name__}: {exc}"
         result.e2e_s = time.perf_counter() - start
         return result
+    # asyncio.CancelledError is not caught: Ctrl-C or an outer deadline must stop the sweep.
 
     end = time.perf_counter()
     result.e2e_s = end - start
@@ -215,7 +216,11 @@ async def sweep(cfg: LoadTestConfig, transport: httpx.AsyncBaseTransport | None 
     rng = random.Random(cfg.seed)
     headers = {"Authorization": f"Bearer {cfg.api_key}"}
     summaries: list[LevelSummary] = []
-    async with httpx.AsyncClient(base_url=cfg.base_url, headers=headers, transport=transport) as client:
+    # The default pool caps connections at 100; above that the client itself would queue and the
+    # wait would be reported as server TTFT.
+    width = max(cfg.concurrency_levels)
+    limits = httpx.Limits(max_connections=width, max_keepalive_connections=width)
+    async with httpx.AsyncClient(base_url=cfg.base_url, headers=headers, transport=transport, limits=limits) as client:
         if cfg.warmup_requests:
             await run_level(client, cfg, concurrency=1, n_requests=cfg.warmup_requests, rng=rng)
         for level in cfg.concurrency_levels:

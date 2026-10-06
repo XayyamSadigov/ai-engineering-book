@@ -353,3 +353,33 @@ def test_envelope_from_request_and_schema_fallback_on_a_target_without_it():
     parsed, _ = complete_structured(client, CompletionRequest(messages=[Message.user("vpn drops")]), Label)
     assert parsed.label == "vpn"
     assert "response_format" not in sent[0]  # prompt-and-parse path, not an unsupported schema mode
+
+
+def walkthrough_config() -> LoadTestConfig:
+    """The setup behind the walkthrough table (fake timings and SLOs, illustrative)."""
+    return LoadTestConfig(base_url="http://fake/v1", prompts=[f"Summarize ticket {i}" for i in range(8)],
+                          max_tokens_choices=[32, 64], concurrency_levels=[1, 4, 8, 16, 32], requests_per_level=32,
+                          warmup_requests=2, ttft_slo_s=0.15, e2e_slo_s=1.0)
+
+
+def test_walkthrough_shape_has_a_knee_at_capacity():
+    server = FakeServer(capacity=8, prefill_s=0.02, tpot_s=0.005, queue_slot_s=0.01)
+    cfg = walkthrough_config().model_copy(update={"concurrency_levels": [4, 8, 16, 32]})  # skip the slow level 1
+    s = asyncio.run(sweep(cfg, transport=server.transport()))
+    by = {x.concurrency: x for x in s}
+    assert server.peak_decoding == 8                                     # capacity is a real limit
+    assert by[16].ttft_p50 > 5 * by[8].ttft_p50                          # queueing shows up in TTFT
+    assert by[32].requests_per_s < 1.2 * by[8].requests_per_s            # throughput levels off
+    assert by[16].goodput_requests_per_s < 0.5 * by[8].goodput_requests_per_s
+    assert abs(by[32].tpot_p50 - by[4].tpot_p50) < 0.003                 # decode speed did not change
+    assert find_operating_point(s, cfg).concurrency == 8
+
+
+def test_cancelling_a_sweep_stops_it():
+    import time
+    server = FakeServer(capacity=1, prefill_s=0.05, tpot_s=0.01)
+    cfg = walkthrough_config().model_copy(update={"concurrency_levels": [1], "requests_per_level": 20, "warmup_requests": 0})
+    t0 = time.perf_counter()
+    with pytest.raises(asyncio.TimeoutError):
+        asyncio.run(asyncio.wait_for(sweep(cfg, transport=server.transport()), timeout=0.2))
+    assert time.perf_counter() - t0 < 2.0

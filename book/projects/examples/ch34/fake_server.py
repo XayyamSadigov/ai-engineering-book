@@ -2,8 +2,10 @@
 """An in-process fake of an OpenAI-compatible streaming server for offline tests.
 
 It is deliberately simple but has the two properties that make load tests interesting:
-a per-token decode delay (so TTFT < E2E) and a capacity limit (so queue time, and therefore
-TTFT, grows once more requests are active than the fake "batch" can hold). Plug it into an
+a per-token decode delay (so TTFT < E2E) and a real capacity limit: at most ``capacity``
+sequences decode at once and the rest wait for a slot, so queue time, and therefore TTFT,
+grows once more requests are active than the fake "batch" can hold, while throughput levels
+off at the knee instead of growing without bound. Plug it into an
 ``httpx.AsyncClient`` through ``httpx.MockTransport``.
 """
 from __future__ import annotations
@@ -22,11 +24,20 @@ class FakeServer:
     capacity: int = 4  # concurrent sequences the fake "GPU" decodes without queueing
     prefill_s: float = 0.01  # fixed prompt-processing delay
     tpot_s: float = 0.002  # per-token decode delay
-    queue_slot_s: float = 0.02  # extra wait per request above capacity (crude queue model)
+    queue_slot_s: float = 0.02  # scheduler overhead added when a request had to wait for a slot
     fail_above: int | None = None  # return HTTP 429 when more than this many are active
     active: int = 0
     seen: list[dict] = field(default_factory=list)
     peak_active: int = 0
+    peak_decoding: int = 0
+    decoding: int = 0
+    _slots: dict = field(default_factory=dict, repr=False)  # one semaphore per event loop
+
+    def slots(self) -> asyncio.Semaphore:
+        loop = asyncio.get_running_loop()
+        if loop not in self._slots:
+            self._slots[loop] = asyncio.Semaphore(self.capacity)
+        return self._slots[loop]
 
     def transport(self) -> httpx.MockTransport:
         return httpx.MockTransport(self.handle)
@@ -57,17 +68,24 @@ class _SSEStream(httpx.AsyncByteStream):
         s = self.server
         s.active += 1
         s.peak_active = max(s.peak_active, s.active)
+        slots = s.slots()
         try:
-            over = max(0, s.active - s.capacity)
-            await asyncio.sleep(s.prefill_s + over * s.queue_slot_s)  # queue + prefill => TTFT
-            created = int(time.time())
-            for i in range(self.n_tokens):
-                if i:
-                    await asyncio.sleep(s.tpot_s)
-                yield _chunk(self.model, created, f"tok{i} ")
-            usage = {"prompt_tokens": 10, "completion_tokens": self.n_tokens, "total_tokens": 10 + self.n_tokens}
-            yield _chunk(self.model, created, None, finish="stop", usage=usage)
-            yield b"data: [DONE]\n\n"
+            queued = slots.locked()                              # every decode slot is busy
+            async with slots:                                    # wait for a slot: the real queue
+                s.decoding += 1
+                s.peak_decoding = max(s.peak_decoding, s.decoding)
+                try:
+                    await asyncio.sleep(s.prefill_s + (s.queue_slot_s if queued else 0.0))  # prefill => TTFT
+                    created = int(time.time())
+                    for i in range(self.n_tokens):
+                        if i:
+                            await asyncio.sleep(s.tpot_s)
+                        yield _chunk(self.model, created, f"tok{i} ")
+                    usage = {"prompt_tokens": 10, "completion_tokens": self.n_tokens, "total_tokens": 10 + self.n_tokens}
+                    yield _chunk(self.model, created, None, finish="stop", usage=usage)
+                    yield b"data: [DONE]\n\n"
+                finally:
+                    s.decoding -= 1
         finally:
             s.active -= 1
 

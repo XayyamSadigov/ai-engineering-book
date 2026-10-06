@@ -4,7 +4,7 @@
 A `Runnable` is a function with a uniform calling convention (`invoke`,
 `batch`, `stream`) and composition operators. `a | b` builds a sequence;
 a dict of runnables builds a fan-out. Retries are a wrapper, not magic.
-Nothing here is specific to LLMs: the "framework" is sixty lines of glue.
+Nothing here is specific to LLMs: the "framework" is about a hundred lines of glue.
 """
 from __future__ import annotations
 
@@ -96,12 +96,15 @@ class Retrying(Runnable[In, Out]):
         attempt = 0
         while True:
             attempt += 1
+            t0 = time.perf_counter()
             try:
                 out = self.inner.invoke(x, log)
                 if log is not None and attempt > 1:
-                    log.record(self.name, x, out, 0.0, attempt)
+                    log.record(self.name, x, out, (time.perf_counter() - t0) * 1000, attempt)
                 return out
-            except self.retry_on:
+            except self.retry_on as exc:
+                if log is not None:   # every failed attempt is visible, including the last one
+                    log.record(self.name, x, f"error: {exc!r}", (time.perf_counter() - t0) * 1000, attempt)
                 if attempt >= self.max_attempts:
                     raise
                 time.sleep(self.base_delay_s * (2 ** (attempt - 1)))

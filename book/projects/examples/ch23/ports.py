@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
@@ -65,16 +66,17 @@ class AnswerService:
                   "If the evidence is insufficient, reply exactly: INSUFFICIENT\n\n"
                   f"Evidence:\n{evidence}\n\nQuestion: {question}\nAnswer:")
         text = self.llm.complete(prompt).strip()
-        if text == "INSUFFICIENT":
+        bracketed = {i.strip() for group in re.findall(r"\[([^\]]+)\]", text) for i in group.split(",")}
+        cited = [p.id for p in passages if p.id in bracketed]   # [hr-01] and [hr-01, hr-02] both count
+        if text.rstrip(".! ").upper() == "INSUFFICIENT" or not cited:   # an uncited answer is not an answer
             return Answer(text="The knowledge base does not cover this.", citations=[], abstained=True)
-        cited = [p.id for p in passages if f"[{p.id}]" in text]
         return Answer(text=text, citations=cited)
 
 
 # --- a stand-in for a framework object ------------------------------------
 class FrameworkRetrieverLike:
     """Pretend third-party class with its own vocabulary: `get_relevant_documents`
-    returns objects with `page_content` and `metadata`. API shape at the time of writing;
+    returns objects with `page_content` and `metadata`, modeled on an older retriever API;
     check current docs. We never let this type cross into the domain."""
 
     def __init__(self, docs: list[dict[str, Any]]) -> None:
@@ -110,10 +112,16 @@ class RecordingLLM:
     path: Path
     _cache: dict[str, str] = field(default_factory=dict)
 
+    def __post_init__(self) -> None:
+        if self.path.exists():   # add to earlier recordings instead of replacing them
+            self._cache.update(json.loads(self.path.read_text()))
+
     def complete(self, prompt: str) -> str:
         out = self.inner.complete(prompt)
         self._cache[_key(prompt)] = out
-        self.path.write_text(json.dumps(self._cache, indent=2, sort_keys=True))
+        tmp = self.path.with_suffix(self.path.suffix + ".tmp")
+        tmp.write_text(json.dumps(self._cache, indent=2, sort_keys=True))
+        tmp.replace(self.path)   # a crash mid-write never leaves a half-written fixture file
         return out
 
 

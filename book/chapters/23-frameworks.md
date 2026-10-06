@@ -3,14 +3,14 @@
 After this chapter you will be able to read any LLM framework's documentation and translate each
 concept into a primitive you already built: a prompt template is Chapter 4's registry entry, a
 runnable chain is function composition with a logging convention, a state graph is Chapter 17's
-`Graph`, a query engine is Chapter 10's retrieve-pack-generate pipeline, a DSPy optimizer is a search
-over few-shot demonstrations driven by Chapter 24's metrics. You will be able to score a framework
-against ten selection criteria, keep your domain logic independent of whichever one you adopt, test a
-framework-backed component from recorded fixtures, and migrate off a framework without rewriting the
-domain. The code lives in `book/projects/examples/ch23/`: a composable pipeline that shows what
-LCEL-style composition does under the hood, a typed prompt specification with a metric-driven
-optimizer that shows DSPy's idea, and a ports-and-adapters layout with a record-and-replay LLM
-fixture.
+`Graph`, a query engine is Chapter 10's retrieve-pack-generate pipeline, a DSPy optimizer is a
+search over prompt contents (few-shot demonstrations, sometimes instructions) driven by Chapter 24's
+metrics. You will be able to score a framework against ten selection criteria, keep your domain
+logic independent of whichever one you adopt, test a framework-backed component from recorded
+fixtures, and migrate off a framework without rewriting the domain. The code lives in
+`book/projects/examples/ch23/`: a composable pipeline that shows what LCEL-style composition does
+under the hood, a typed prompt specification with a metric-driven optimizer that shows DSPy's idea,
+and a ports-and-adapters layout with a record-and-replay LLM fixture.
 
 ## Why this matters
 
@@ -24,12 +24,12 @@ add a human-approval step and finds the agent abstraction has no seam for it. No
 failures of the framework. They are failures of understanding what the framework was doing on the
 team's behalf.
 
-The source material puts the principle bluntly: agent frameworks are useful only after you understand
+The principle is blunt: agent frameworks are useful only after you understand
 the underlying primitives, because framework APIs change and the primitives do not. This book took
 that literally. Between Chapter 3 and Chapter 19 you wrote, with tests, every component a framework
 offers: client and gateway, prompt registry, structured output, chunkers, retrieval, grounded
 generation, tool registry, workflow engine, MCP, and agent runtime. The purpose of this chapter is not
-to teach you five frameworks. It is to show that you already know them, and to give you the
+to teach you the frameworks from scratch. It is to show that you already know them, and to give you the
 discipline to use one without losing sight of what it hides.
 
 > **Mental model:** Reliability is engineered around the model, not expected from it. A framework is
@@ -80,12 +80,17 @@ framework sections; each is a walk through part of it.
 | Metrics, datasets, judges, statistics | 24 | `evalkit` | evaluator, metric, optimizer objective |
 | Spans with prompt, tokens, cost, evidence IDs | 31 | `Tracer`, `Span`, `AITracer` | tracing SDK, callbacks |
 
+The framework sections below describe each library's API and defaults at the time of writing.
+Names, defaults, and module layout change between releases, so treat each specific claim as
+something to confirm against current documentation and source code, which is the habit this chapter
+teaches.
+
 ### LangChain
 
 LangChain is a broad application framework: model wrappers, prompt templates, output parsers,
 retrievers, tools, and a composition layer, LCEL (LangChain Expression Language), that pipes them
-together with `|`. Its value is ecosystem breadth. Its cost, in the source's words, is architecture by
-abstraction: stacking components without understanding the data flow between them.
+together with `|`. Its value is ecosystem breadth. Its typical cost is what this chapter calls
+architecture by abstraction: stacking components without understanding the data flow between them.
 
 **Chat models.** The primitive is Chapter 3's `LLMClient` behind a `ModelGateway`:
 
@@ -109,7 +114,7 @@ ai_message.content; ai_message.usage_metadata
 Added: many providers behind one interface, async and batch variants, normalized usage metadata.
 Hidden: default retry count and backoff, default timeout, how a content-filter error is mapped, and
 in some integrations a default `max_tokens`. Each is a number you set deliberately in Chapter 3; read
-the wrapper's source for those four values and set them explicitly.
+the wrapper's source code for those four values and set them explicitly.
 
 **Prompt templates.** The primitive is Chapter 4's registry entry: a named, versioned template with
 declared variables, rendered with escaping, covered by golden tests, its version on every trace.
@@ -155,7 +160,7 @@ chain.invoke({"question": q}); chain.batch([...]); chain.stream({"question": q})
 chain = chain.with_retry(stop_after_attempt=3).with_fallbacks([other_chain])
 ```
 
-Added, and this is real: every step gets a span with inputs and outputs, `stream` propagates token
+Added: every step gets a span with inputs and outputs, `stream` propagates token
 deltas through the pipeline, `batch` parallelizes, async comes free. Hidden: `with_retry` retries the
 whole wrapped runnable, so a chain re-renders the prompt and re-pays for the model call even when a
 cheap parser failed; the retried exception classes default to everything; and attempts are invisible
@@ -163,21 +168,23 @@ in cost accounting unless the tracer records them. The `runnable.py` example bui
 operators in about a hundred lines so you can see exactly where attempts are logged.
 
 **Tools.** The primitive is Chapter 16: a `ToolSpec`, a registry, argument validation outside the
-model, a policy that classifies side effects and requires approval for irreversible ones, idempotency
-keys, timeouts, result truncation. The `@tool` decorator derives the schema from a signature and
-docstring; `model.bind_tools(tools)` attaches the specs to the request. Added: schema generation and
-a convenient loop in prebuilt agents. Hidden: everything after the model proposes a call. The
-decorator has no concept of side-effect class, approval, idempotency, or permission, and a prebuilt
-agent that executes directly from the proposal has removed the "code authorizes" half of the book's
-sixth mental model. Use the schema generation; keep execution in your `ToolExecutor`, which owns validation, policy, approval, and idempotency for every tool in the `ToolRegistry`.
+model, a policy that classifies side effects and requires approval for irreversible ones,
+idempotency keys, timeouts, result truncation. The `@tool` decorator derives the schema from a
+signature and docstring; `model.bind_tools(tools)` attaches the specs to the request. Added: schema
+generation and a convenient loop in prebuilt agents. Hidden: everything after the model proposes a
+call. The decorator has no concept of side-effect class, approval, idempotency, or permission, and a
+prebuilt agent that executes directly from the proposal has removed the "code authorizes" half of
+the book's sixth mental model ("the model proposes, code authorizes," Chapter 1). Use the schema
+generation; keep execution in your `ToolExecutor`, which owns validation, policy, approval, and
+idempotency for every tool in the `ToolRegistry`.
 
 ### LangGraph
 
-LangGraph models a workflow as a graph over typed state: nodes read and write state, edges choose the
-next node, a checkpointer persists state after every step, interrupts pause for a human. That is the
-docstring of Chapter 17's `workflow_engine.py`, which does the same in about 250 lines;
-Chapter 19's `AgentRuntime` adds the event log, budgets, and termination conditions LangGraph leaves to
-you.
+LangGraph models a workflow as a graph over typed state: nodes read and write state, edges choose
+the next node, a checkpointer persists state after every step, interrupts pause for a human. That is
+the docstring of Chapter 17's `workflow_engine.py`, which does the same in about 250 lines; Chapter
+19's `AgentRuntime` adds the event log, budgets, and termination conditions that LangGraph largely
+leaves to you.
 
 **StateGraph and nodes.** The primitive is `Graph(state_type)` with `add_node(name, fn)` over a
 pydantic state:
@@ -211,7 +218,7 @@ builder.add_edge(START, "classify")
 Added: reducers make parallel branches that write the same key well-defined, and partial updates make
 nodes shorter. Hidden: merge semantics live in the annotation, so a reader of the node cannot tell
 whether a returned list replaces or appends. Document each reducer where you declare the state, and
-follow the source's advice: define your own domain state schema; the library should orchestrate your
+define the domain state schema yourself: the library should orchestrate your
 design, not become it.
 
 **Conditional edges.** The primitive is `add_router(src, fn)` with `fn: (S) -> str`. LangGraph's
@@ -220,16 +227,16 @@ framework uses to draw the graph. Both are pure functions of state, which is wha
 unit-testable without a model.
 
 **Checkpointers.** The primitive is Chapter 17's `Checkpointer` protocol (`save`, `latest`,
-`history`), called after every node, and the two resume paths built on it: `resume(handle, decision)`
-after a human pause and `resume_from_checkpoint(run_id)` after a crash. LangGraph attaches the
-checkpointer at `compile(checkpointer=...)` and keys it by a `thread_id` in the invocation config.
-Added: production backends (for example PostgreSQL and Redis savers), state history, and forking a
-run from an earlier checkpoint. Hidden: the granularity (per node or per super-step of parallel
-nodes), the serialization of your state, and the fact that a checkpoint does not know whether the
-side effect inside the node running at crash time completed. The source's rule applies: the event log
-records tool request, approval, result, and idempotency key, so on restart the harness determines
-whether an action completed instead of asking the model. A checkpointer gives you the state; Chapter
-16's `IdempotencyStore` gives you the answer.
+`history`), called after every node, and the two resume paths built on it: `resume(handle,
+decision)` after a human pause and `resume_from_checkpoint(run_id)` after a crash. LangGraph
+attaches the checkpointer at `compile(checkpointer=...)` and keys it by a `thread_id` in the
+invocation config. Added: production backends (for example PostgreSQL and Redis savers), state
+history, and forking a run from an earlier checkpoint. Hidden: the granularity (per node, or per
+super-step: one round of parallel nodes), the serialization of your state, and the fact that a
+checkpoint does not know whether the side effect inside the node running at crash time completed.
+Chapter 19's rule applies: the event log records tool request, approval, result, and idempotency
+key, so on restart the harness determines whether an action completed instead of asking the model. A
+checkpointer gives you the state; Chapter 16's `IdempotencyStore` gives you the answer.
 
 **Interrupts and human-in-the-loop.** The primitive is `pause_before=True` on a node, a
 `ResumeHandle` returned to the caller, and `on_decision` to fold the human's answer into state.
@@ -286,6 +293,7 @@ Chapter 12's retriever. A query engine is Chapter 10's pipeline in one object: r
 `GroundedGenerator`, and it is where the hidden prompt lives. Its modes are strategies for fitting
 evidence into the budget: compact packs as many chunks as fit per call; refine makes one call per
 chunk and asks the model to improve the previous answer; tree-summarize summarizes hierarchically.
+
 Each mode carries default prompt text, and that text is what tells the model how to use evidence and
 whether it may answer from prior knowledge. Chapter 13's grounded contract (data is not instructions;
 cite or abstain) is a prompt you wrote and tested. Pull the synthesizer's template out, version it in
@@ -335,14 +343,16 @@ instruction wordings with a model and search over the combination. "Prompt optim
 metric" means exactly this: a search over prompt contents driven by a metric and data. It is not
 fine-tuning; the weights do not change, the prompt does.
 
-The evaluation requirements follow from Chapter 24. A metric that is a faithful proxy for what you
+Four evaluation requirements follow from Chapter 24. A metric that is a faithful proxy for what you
 care about, because the optimizer maximizes whatever you hand it. Enough labeled examples, dozens for
 demonstration bootstrapping and hundreds for instruction search, because a metric on twelve examples
 has a confidence interval wider than the improvement you seek. A frozen holdout the optimizer never
 sees, because selecting demonstrations on the set you report on is Chapter 24's leakage. And a re-run
-when the model changes, because the compiled prompt is tuned to one model. Treat a compiled module as
-a build artifact: produced by a reproducible job from a dataset version and a model version, stored
-under a version, promoted through Chapter 25's CI gate like any prompt change.
+when the model changes, because the compiled prompt is tuned to one model.
+
+Treat a compiled module as a build artifact: produced by a reproducible job from a dataset version
+and a model version, stored under a version, promoted through Chapter 25's CI gate like any prompt
+change.
 
 ### Provider agent SDKs and MCP SDKs
 
@@ -404,13 +414,14 @@ vendor-neutral ones built on OpenTelemetry's GenAI semantic conventions) record 
 call, tool call, retrieval, and chain step, with prompt, completion, tokens, and cost as attributes,
 and ship them to a UI. The primitive is Chapter 31's trace model and `aie_core.observability`: a
 `Tracer` yielding `Span` objects with the attribute schema Chapter 31 fixes (prompt version, model,
-tokens, cost, cache hits, evidence IDs, policy results, eval scores). Added: automatic instrumentation
-of the framework's objects, a UI, dataset collection from traces, often an evaluation harness joining
-online traces with offline scores. Hidden: redaction (by default usually none, so prompts with
-customer data leave your network), sampling (usually none, so cost scales with traffic), and attribute
-names that will not match Chapter 31's schema unless you map them. Emit spans through your own
-`Tracer` with your attribute names, and make the vendor SDK one `Tracer` implementation behind it.
-Then the UI is a convenience and not a dependency.
+tokens, cost, cache hits, evidence IDs, policy results, eval scores).
+
+Added: automatic instrumentation of the framework's objects, a UI, dataset collection from traces,
+often an evaluation harness joining online traces with offline scores. Hidden: redaction (by default
+usually none, so prompts with customer data leave your network), sampling (usually none, so cost
+scales with traffic), and attribute names that will not match Chapter 31's schema unless you map
+them. Emit spans through your own `Tracer` with your attribute names, and make the vendor SDK one
+`Tracer` implementation behind it. Then the UI is a convenience and not a dependency.
 
 ## How it works
 
@@ -554,7 +565,7 @@ show in full.
 A `Runnable` is a function with a uniform calling convention (`invoke`,
 `batch`, `stream`) and composition operators. `a | b` builds a sequence;
 a dict of runnables builds a fan-out. Retries are a wrapper, not magic.
-Nothing here is specific to LLMs: the "framework" is sixty lines of glue.
+Nothing here is specific to LLMs: the "framework" is about a hundred lines of glue.
 """
 from __future__ import annotations
 
@@ -646,12 +657,15 @@ class Retrying(Runnable[In, Out]):
         attempt = 0
         while True:
             attempt += 1
+            t0 = time.perf_counter()
             try:
                 out = self.inner.invoke(x, log)
                 if log is not None and attempt > 1:
-                    log.record(self.name, x, out, 0.0, attempt)
+                    log.record(self.name, x, out, (time.perf_counter() - t0) * 1000, attempt)
                 return out
-            except self.retry_on:
+            except self.retry_on as exc:
+                if log is not None:   # every failed attempt is visible, including the last one
+                    log.record(self.name, x, f"error: {exc!r}", (time.perf_counter() - t0) * 1000, attempt)
                 if attempt >= self.max_attempts:
                     raise
                 time.sleep(self.base_delay_s * (2 ** (attempt - 1)))
@@ -719,24 +733,30 @@ class Signature:
         """Read `name: value` sections for every output field, typed."""
         out: dict[str, Any] = {}
         names = [f.name for f in self.outputs]
-        for i, f in enumerate(self.outputs):
-            pattern = rf"(?:^|\n){f.name}:\s*(.*?)(?=\n(?:{'|'.join(map(re.escape, names))}):|\Z)"
-            m = re.search(pattern, text, flags=re.S)
-            if m:
-                raw = m.group(1)
-            elif i == 0:   # first field may arrive unlabeled: take text up to the next label
-                raw = re.split(rf"\n(?:{'|'.join(map(re.escape, names))}):", text, maxsplit=1)[0]
-            else:
-                raw = ""
-            raw = raw.strip()
-            out[f.name] = _coerce(raw, f.kind, f.name)
+        # The prompt ends with "<first output>:", so the completion usually starts with its value.
+        # Restore the label so the first match of every label is the model's real answer, not a
+        # later demo-style block the model went on to write.
+        labels = "|".join(map(re.escape, names))
+        if not re.match(rf"\s*(?:{labels}):", text):
+            text = f"{names[0]}: {text}"
+        for f in self.outputs:
+            pattern = rf"(?:^|\n){f.name}:\s*(.*?)(?=\n(?:{labels}):|\Z)"
+            m = re.search(pattern, text.lstrip(), flags=re.S)
+            if m is None:
+                raise ValueError(f"field {f.name!r}: missing from the completion")
+            out[f.name] = _coerce(m.group(1).strip(), f.kind, f.name)
         return out
 
 
 def _coerce(raw: str, kind: type, name: str) -> Any:
     try:
-        if kind is bool:
-            return raw.lower() in {"true", "yes", "1"}
+        if kind is bool:   # strict: an unrecognized value is an error, never a silent False
+            token = raw.split()[0].strip(".,;:!*").lower() if raw.split() else ""
+            if token in {"true", "yes", "1"}:
+                return True
+            if token in {"false", "no", "0"}:
+                return False
+            raise ValueError(raw)
         return kind(raw)
     except ValueError as exc:
         raise ValueError(f"field {name!r}: cannot parse {raw!r} as {kind.__name__}") from exc
@@ -756,7 +776,6 @@ class Predict:
         self.calls += 1
         completion = self.llm(self.signature.render(inputs, self.demos))
         result = self.signature.parse(completion)
-        # First output field may come back without its label; keep that lenient path.
         return result
 
 
@@ -782,7 +801,7 @@ class BootstrapFewShot:
             pred = module(**{k: ex[k] for k in input_names})
             if self.metric(ex, pred) >= self.threshold:
                 candidates.append({**{k: ex[k] for k in input_names}, **pred})
-        best_demos, best_score = [], self.evaluate(module, dev)
+        best_demos, best_score = list(module.demos), self.evaluate(module, dev)   # keep what was scored
         for n in range(1, min(self.max_demos, len(candidates)) + 1):
             trial = Predict(module.signature, module.llm, demos=candidates[:n])
             score = self.evaluate(trial, dev)
@@ -814,6 +833,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
@@ -868,16 +888,17 @@ class AnswerService:
                   "If the evidence is insufficient, reply exactly: INSUFFICIENT\n\n"
                   f"Evidence:\n{evidence}\n\nQuestion: {question}\nAnswer:")
         text = self.llm.complete(prompt).strip()
-        if text == "INSUFFICIENT":
+        bracketed = {i.strip() for group in re.findall(r"\[([^\]]+)\]", text) for i in group.split(",")}
+        cited = [p.id for p in passages if p.id in bracketed]   # [hr-01] and [hr-01, hr-02] both count
+        if text.rstrip(".! ").upper() == "INSUFFICIENT" or not cited:   # an uncited answer is not an answer
             return Answer(text="The knowledge base does not cover this.", citations=[], abstained=True)
-        cited = [p.id for p in passages if f"[{p.id}]" in text]
         return Answer(text=text, citations=cited)
 
 
 # --- a stand-in for a framework object ------------------------------------
 class FrameworkRetrieverLike:
     """Pretend third-party class with its own vocabulary: `get_relevant_documents`
-    returns objects with `page_content` and `metadata`. API shape at the time of writing;
+    returns objects with `page_content` and `metadata`, modeled on an older retriever API;
     check current docs. We never let this type cross into the domain."""
 
     def __init__(self, docs: list[dict[str, Any]]) -> None:
@@ -913,10 +934,16 @@ class RecordingLLM:
     path: Path
     _cache: dict[str, str] = field(default_factory=dict)
 
+    def __post_init__(self) -> None:
+        if self.path.exists():   # add to earlier recordings instead of replacing them
+            self._cache.update(json.loads(self.path.read_text()))
+
     def complete(self, prompt: str) -> str:
         out = self.inner.complete(prompt)
         self._cache[_key(prompt)] = out
-        self.path.write_text(json.dumps(self._cache, indent=2, sort_keys=True))
+        tmp = self.path.with_suffix(self.path.suffix + ".tmp")
+        tmp.write_text(json.dumps(self._cache, indent=2, sort_keys=True))
+        tmp.replace(self.path)   # a crash mid-write never leaves a half-written fixture file
         return out
 
 
@@ -946,24 +973,27 @@ instead of nesting, which is the whole trick behind a readable trace: a flat lis
 each recorded once in `RunLog`. `coerce` is why a bare function or a dict literal can appear to the
 right of `|`. `stream` defaults to one chunk: in a real pipeline only the model step streams, and
 every later step must be stream-aware or force a join, which is why "streaming through a JSON
-parser" is a documented limitation in frameworks.
+parser" is a limitation many frameworks document.
 
-**Retries announce themselves.** `Retrying.invoke` logs the attempt number whenever it succeeded
-after a retry. The tests assert a `TimeoutError` is retried, a `ValueError` is not, and the final log
-entry carries `attempt == 3`. A framework retry visible only as duplicated model-call spans cannot
+**Retries announce themselves.** `Retrying.invoke` logs every failed attempt with its error, and the
+attempt that finally succeeds, so a persistent failure leaves three entries rather than none. The
+tests assert a `TimeoutError` is retried, a `ValueError` is not, and the final log entry carries
+`attempt == 3`. A framework retry visible only as duplicated model-call spans cannot
 answer "how much did retries cost this week".
 
 **A signature is stable; demonstrations are module state.** `Signature` is frozen; `Predict.demos`
 is mutable. The optimizer never touches the signature; it builds new `Predict` instances and keeps the
 one that scores best on `dev`. The fake model misclassifies a "laptop" ticket until a demonstration
 appears in the prompt, so dev accuracy moving from one half to one is the optimizer's effect made
-observable. A second test checks that when nothing improves, the compiled module keeps an empty demo
-list rather than adding tokens for no gain.
+observable. A second test checks that when nothing improves, the compiled module keeps the demos it
+started with (none, in that test) rather than adding tokens for no gain.
 
 **The adapter is the only place framework vocabulary appears.** `FrameworkRetrieverAdapter` reads
 `page_content` and `metadata` from a stand-in framework document and emits a domain `Passage`; the
 test asserts the prompt the model received contains `[hr-01]` and not `page_content`. The
-`runtime_checkable` Protocols make `isinstance` the cheapest contract test an adapter can have.
+`runtime_checkable` Protocols make `isinstance` the cheapest contract test an adapter can have, though
+it checks only that the method names exist, not their signatures or return types; the contract
+tests do the rest.
 
 **Recorded fixtures key on prompt text.** `RecordingLLM` wraps a live client once and writes prompt
 hash to completion; `ReplayLLM` raises `LookupError` on a missing prompt. The last test matters most:
@@ -993,7 +1023,7 @@ rather than guess.
 The weights are yours: a regulated workflow weights transparency and persistence heavily; an internal
 prototype weights ecosystem fit and little else. And "plain Python with your own primitives" is a
 legitimate row to score alongside the frameworks. For a small deterministic workflow it usually wins,
-which is the source's own conclusion: frameworks pay off when you need durable state, branching,
+and frameworks pay off when you need durable state, branching,
 checkpointing, tool ecosystems, or standardized instrumentation.
 
 ## Keeping domain logic framework-independent
@@ -1002,8 +1032,8 @@ Ports and adapters applied to an LLM application means four rules.
 
 **The domain defines the Protocols.** `Retriever`, `LLMClient`, `Tool`, `Workflow`, `Tracer`, each
 declared in `domain/` with the methods the domain calls and nothing more. A `Retriever` port says
-`retrieve(query, k) -> list[Passage]`; it does not say `invoke` and does not return a framework
-`Document`.
+`retrieve(query, k) -> list[Passage]`; it does not say `invoke` or `get_relevant_documents` and does
+not return a framework `Document`.
 
 **Framework objects are constructed in adapters and the composition root only.** An adapter wraps one
 framework object and implements one port. The composition root (FastAPI startup, CLI entry) is the
@@ -1023,7 +1053,7 @@ and the duplication is the point: the framework's abstractions change on its sch
 
 ## Prototype with the framework, ship the primitives
 
-The pattern that works for most teams has three phases. Prototype with a framework to learn the
+A pattern that works for many teams has three phases. Prototype with a framework to learn the
 problem: which retrieval strategy helps, whether the workflow needs branching, what the tools should
 be. Record traces throughout, because they tell you what the framework did for you. Then write the
 domain with your primitives, porting the decisions and not the code: the chunk size you validated, the
@@ -1072,11 +1102,11 @@ per-stage latency (Chapter 30) with the framework in place, not from its benchma
 **Cost.** Hidden retries and hidden prompt text are the two leaks. Account cost from your gateway or
 tracer, not the framework's counter, so every model call is attributed to a request regardless of
 which layer issued it. If the framework calls the provider directly, configure your `ModelGateway` as
-its client, usually a one-line constructor argument.
+its client where the framework accepts a custom client, often through a constructor argument.
 
 **Security.** Prebuilt agents execute tool calls directly; MCP tool descriptions arrive untrusted;
 framework retrievers may ignore ACL filters unless configured as pre-filters; tracing SDKs export
-prompts containing customer data. Each control has a chapter (16, 18, 15, 31); confirm the framework
+prompts containing customer data. Each control has a chapter (16, 26, 15, 31); confirm the framework
 path honors the same controls as your primitive path, with a test per control.
 
 **Operations.** Pin framework versions exactly. Read release notes before upgrading and run the
@@ -1092,12 +1122,12 @@ data flow. If you cannot name the primitive under each object, stop and learn it
 **Hidden prompt text in production.** Behavior depends on a template inside a dependency nobody has
 read. Detect by diffing the prompt that reached the model (from your trace) against your registry.
 
-**Silent retries.** Several layers retry; the bill shows calls the code does not. Detect by forcing a
-persistent provider failure in a test and counting model calls.
+**Silent retries.** Several layers retry; the bill shows calls the code does not. The detection test
+is under Failure modes (stacked-retry cost spike).
 
 **Version drift.** A dependency upgrade changes tool-result formatting, a default `k`, or a template,
-and quality shifts with no change in your repository. Detect with the recorded-fixture suite on every
-dependency update and with Chapter 25's eval gate.
+and quality shifts with no change in your repository. Failure modes (prompt drift after upgrade) gives
+the signature and test; Chapter 25's eval gate is the second net.
 
 **Letting the framework own the state type.** Domain state as the framework's dict, with reducers
 encoding business rules; when the framework changes, the rules go with it. Define state as your
@@ -1128,7 +1158,9 @@ on model-call spans changes while the registry version does not. Test: the repla
 
 **Retriever without scores.** Signature: Chapter 14's retrieval metrics cannot be computed; the
 retrieval span has IDs but no scores. Test: the adapter contract test asserts each `Passage` has a
-score, so an integration that returns none fails at integration time, not in production.
+score the framework actually returned (an adapter that defaults a missing score to 0.0, as the
+minimal one in `ports.py` does, would pass silently), so an integration that returns none fails when
+you integrate it, not in production.
 
 **Session history growth.** Signature: input tokens per turn grow linearly across a conversation and
 time-to-first-token with them. Test: run a twenty-turn fake conversation through the session; assert
@@ -1143,8 +1175,8 @@ against stage visibility: a query engine is one call, and one call is one span u
 exposes its stages. Durable execution for free against side-effect discipline: a checkpointer resumes
 state; only your idempotency layer makes resumption safe. Metric-driven prompt optimization against
 evaluation debt: compilation pays off exactly when you have the labeled data and the holdout to
-support it, and misleads when you do not. None of these are reasons to avoid frameworks. They are the
-terms of the deal.
+support it, and misleads when you do not. None of these is a reason to avoid frameworks; each is a cost
+to weigh in the scoring table.
 
 ## Evaluation and testing
 
@@ -1231,13 +1263,14 @@ the replay test detecting the change.
 ### Debugging exercises
 
 **D1.** After a dependency upgrade, Northwind's ticket-triage eval accuracy drops from 0.91 to 0.84
-with no change in the repository. The prompt registry version on model-call spans is unchanged, but
-the prompt hash attribute differs from last week's traces. No retries are visible. Diagnose, name the
-telemetry that confirms it, and say what should have caught it before deploy.
+(illustrative numbers) with no change in the repository. The prompt registry version on model-call
+spans is unchanged, but the prompt hash attribute differs from last week's traces. No retries are
+visible. Diagnose, name the telemetry that confirms it, and say what should have caught it before
+deploy.
 
 **D2.** During a provider incident, the cost dashboard shows nine model calls per failed request. The
 code configures a `ModelGateway` with `max_attempts=3`; the orchestration framework's node has its
-default retry policy; the framework's model wrapper has its default retry. Explain the nine, identify
+default retry policy of three attempts. Explain the nine, identify
 which layer should keep retries, and state the test that would have shown this.
 
 **D3.** An approval workflow built on a graph framework occasionally creates two tickets for one

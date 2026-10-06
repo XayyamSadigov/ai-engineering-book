@@ -47,24 +47,30 @@ class Signature:
         """Read `name: value` sections for every output field, typed."""
         out: dict[str, Any] = {}
         names = [f.name for f in self.outputs]
-        for i, f in enumerate(self.outputs):
-            pattern = rf"(?:^|\n){f.name}:\s*(.*?)(?=\n(?:{'|'.join(map(re.escape, names))}):|\Z)"
-            m = re.search(pattern, text, flags=re.S)
-            if m:
-                raw = m.group(1)
-            elif i == 0:   # first field may arrive unlabeled: take text up to the next label
-                raw = re.split(rf"\n(?:{'|'.join(map(re.escape, names))}):", text, maxsplit=1)[0]
-            else:
-                raw = ""
-            raw = raw.strip()
-            out[f.name] = _coerce(raw, f.kind, f.name)
+        # The prompt ends with "<first output>:", so the completion usually starts with its value.
+        # Restore the label so the first match of every label is the model's real answer, not a
+        # later demo-style block the model went on to write.
+        labels = "|".join(map(re.escape, names))
+        if not re.match(rf"\s*(?:{labels}):", text):
+            text = f"{names[0]}: {text}"
+        for f in self.outputs:
+            pattern = rf"(?:^|\n){f.name}:\s*(.*?)(?=\n(?:{labels}):|\Z)"
+            m = re.search(pattern, text.lstrip(), flags=re.S)
+            if m is None:
+                raise ValueError(f"field {f.name!r}: missing from the completion")
+            out[f.name] = _coerce(m.group(1).strip(), f.kind, f.name)
         return out
 
 
 def _coerce(raw: str, kind: type, name: str) -> Any:
     try:
-        if kind is bool:
-            return raw.lower() in {"true", "yes", "1"}
+        if kind is bool:   # strict: an unrecognized value is an error, never a silent False
+            token = raw.split()[0].strip(".,;:!*").lower() if raw.split() else ""
+            if token in {"true", "yes", "1"}:
+                return True
+            if token in {"false", "no", "0"}:
+                return False
+            raise ValueError(raw)
         return kind(raw)
     except ValueError as exc:
         raise ValueError(f"field {name!r}: cannot parse {raw!r} as {kind.__name__}") from exc
@@ -84,7 +90,6 @@ class Predict:
         self.calls += 1
         completion = self.llm(self.signature.render(inputs, self.demos))
         result = self.signature.parse(completion)
-        # First output field may come back without its label; keep that lenient path.
         return result
 
 
@@ -110,7 +115,7 @@ class BootstrapFewShot:
             pred = module(**{k: ex[k] for k in input_names})
             if self.metric(ex, pred) >= self.threshold:
                 candidates.append({**{k: ex[k] for k in input_names}, **pred})
-        best_demos, best_score = [], self.evaluate(module, dev)
+        best_demos, best_score = list(module.demos), self.evaluate(module, dev)   # keep what was scored
         for n in range(1, min(self.max_demos, len(candidates)) + 1):
             trial = Predict(module.signature, module.llm, demos=candidates[:n])
             score = self.evaluate(trial, dev)

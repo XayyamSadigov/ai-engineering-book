@@ -56,6 +56,7 @@ class FailureStage(str, Enum):
     TRUNCATED_IN_PACKING = "truncated-in-packing"
     GENERATION_IGNORED_EVIDENCE = "generation-ignored-evidence"
     CITATION_ERROR = "citation-error"
+    UNCHECKED = "unchecked"  # the system call failed, so nothing about this case was verified
 
 
 # pipeline order, used to pick the earliest loss across several required documents
@@ -79,6 +80,7 @@ OWNER = {
     FailureStage.TRUNCATED_IN_PACKING: "evidence budget, dedupe, ordering (Ch 13)",
     FailureStage.GENERATION_IGNORED_EVIDENCE: "generation prompt, model, conflict handling (Ch 13)",
     FailureStage.CITATION_ERROR: "citation mapping and validation (Ch 13)",
+    FailureStage.UNCHECKED: "the system call itself: timeouts, outages, crashes (Ch 29)",
 }
 
 StageKind = Literal["candidate", "fusion", "rerank"]
@@ -299,7 +301,7 @@ def diagnose_run(
             continue
         case: EvalCase = dataset.get(r.case_id)
         if r.error is not None or r.output is None:
-            out.append(StageDiagnosis(case_id=r.case_id, stage=FailureStage.OK, detail=f"target error: {r.error}",
+            out.append(StageDiagnosis(case_id=r.case_id, stage=FailureStage.UNCHECKED, detail=f"target error: {r.error}",
                                       tags=list(case.tags)))
             continue
         out.append(

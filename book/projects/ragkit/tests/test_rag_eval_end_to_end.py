@@ -139,6 +139,9 @@ def test_report_lists_target_errors_as_unchecked_not_as_no_leak():
     assert "could not be checked for leaks" in report and "| Q2 |" in report and "TimeoutError" in report
     assert "None across" not in report  # an unchecked case is never reported as "no leak"
     assert not evaluate_gate(DEFAULT_GATE, run).passed  # and the gate still blocks
+    from ragkit.eval.stage_isolation import diagnose_run
+    labels = {d.case_id: d.stage for d in diagnose_run(run, DATASET)}
+    assert labels["Q2"] == FailureStage.UNCHECKED  # a crashed case is never counted as ok
 
 
 def test_report_handles_target_errors_scored_as_none():

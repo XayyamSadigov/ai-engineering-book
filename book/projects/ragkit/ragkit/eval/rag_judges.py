@@ -19,6 +19,8 @@ Design rules, all inherited from Chapter 24 and made specific to RAG:
 """
 from __future__ import annotations
 
+import re
+
 from collections.abc import Sequence
 from typing import Any, Literal
 
@@ -40,9 +42,12 @@ DATA_RULE = (
 )
 
 
+_CLOSING_TAGS = re.compile(r"</(\s*)(evidence|answer|claims|rubric|question)", re.IGNORECASE)
+
+
 def _strip_tags(text: str) -> str:
     """Prevent evidence from closing our delimiters early (a cheap injection defense)."""
-    return text.replace("</evidence", "</ evidence").replace("</answer", "</ answer")
+    return _CLOSING_TAGS.sub(lambda m: "</ " + m.group(2), text)
 
 
 def render_evidence(chunks: Sequence[Chunk]) -> str:
@@ -233,7 +238,7 @@ class RubricCoverageJudge:
         for i in range(1, len(rubric) + 1):
             v = by_item.get(i, _ItemVerdict(item=i, covered=False))
             # Cross-check: a "covered" item whose quote is not in the answer is not covered.
-            if v.covered and v.quote and " ".join(v.quote.split()).lower() not in " ".join(answer.split()).lower():
+            if v.covered and (not v.quote or " ".join(v.quote.split()).lower() not in " ".join(answer.split()).lower()):
                 v = _ItemVerdict(item=i, covered=False, quote=v.quote)
             verdicts.append(v)
         return verdicts

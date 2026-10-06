@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import math
 import time
 from collections.abc import Awaitable, Iterator
 from contextlib import contextmanager
@@ -57,9 +58,11 @@ class Deadline:
         seconds = default_s
         if value:
             try:
-                seconds = max(0.0, float(value) / 1000.0)
+                parsed = float(value) / 1000.0
             except ValueError:
-                seconds = default_s
+                parsed = default_s
+            # "inf", "nan" or "1e400" from an untrusted header falls back to the default
+            seconds = max(0.0, parsed) if math.isfinite(parsed) else default_s
         if max_s is not None:
             seconds = min(seconds, max_s)
         return cls.after(seconds, name=name, clock=clock)

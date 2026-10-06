@@ -21,6 +21,7 @@ import time
 from collections.abc import Awaitable, Callable
 from typing import TypeVar
 
+from aie_core.llm.errors import TimeoutError as LLMTimeoutError
 from aie_core.llm.gateway import RetryPolicy
 
 from .clock import Clock, Sleep
@@ -54,7 +55,7 @@ class RetryBudget:
 
     def _refill_floor(self) -> None:
         now = self._clock()
-        self._floor_tokens = min(self.min_retries_per_s,
+        self._floor_tokens = min(max(1.0, self.min_retries_per_s),   # below 1/s the floor must still reach 1
                                  self._floor_tokens + (now - self._updated) * self.min_retries_per_s)
         self._updated = now
 
@@ -80,6 +81,8 @@ def _plan(policy: RetryPolicy, exc: BaseException, attempt: int, rng: random.Ran
           classify: Callable[[BaseException], bool]) -> float | None:
     if attempt >= policy.max_attempts or not classify(exc):
         return None
+    if isinstance(exc, (TimeoutError, LLMTimeoutError, asyncio.TimeoutError)) and not policy.retry_on_timeout:
+        return None   # a timed-out non-idempotent call may have taken effect: never repeat it
     return policy.delay_for(attempt, retry_after(exc), rng)
 
 

@@ -115,7 +115,9 @@ class TokenBucket:
         return (amount - self.tokens) / self.refill_per_s if self.refill_per_s > 0 else float("inf")
 
     def take(self, amount: float) -> None:
-        self.tokens -= min(amount, self.capacity)
+        # Charge the full amount: a request larger than the bucket may start (wait_for clamps), but
+        # it leaves the bucket in debt, so oversized estimates cannot each cost only one bucketful.
+        self.tokens -= amount
 
 
 class _TenantBuckets:

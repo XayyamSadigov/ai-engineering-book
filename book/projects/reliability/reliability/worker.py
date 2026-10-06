@@ -87,7 +87,9 @@ class JobContext:
         return self._stop.is_set()
 
     def heartbeat(self) -> None:
-        """Extend the lease for long jobs. Call well before `visibility_timeout_s` elapses."""
+        """Extend the lease for long jobs. Call well before `visibility_timeout_s` elapses.
+        This extends the lease only, not `deadline`: the job's own time cap is `job_timeout_s`,
+        which a worker for long jobs sets explicitly."""
         if not self.queue.extend(self.lease, self.visibility_timeout_s):
             raise LeaseLost(f"job {self.job.id}: lease could not be extended")
 

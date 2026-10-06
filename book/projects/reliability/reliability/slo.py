@@ -54,7 +54,7 @@ def burn_rate(good_ratio: float, objective: float) -> float:
     """How fast the error budget is being spent. 1.0 spends exactly the budget over the window.
 
     With a 99.5% objective the budget is 0.5% bad events; observing 2% bad means burn rate 4,
-    i.e., a 28-day budget gone in 7 days.
+    i.e., a 30-day budget gone in about 7.5 days.
     """
     budget = 1.0 - objective
     return (1.0 - good_ratio) / budget if budget > 0 else float("inf")

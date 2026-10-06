@@ -247,6 +247,11 @@ redis.call('HSET', jk, 'state', 'leased', 'lease_token', ARGV[3], 'lease_expires
 return id
 """
 
+_RELEASE_IDEM = """
+if redis.call('HGET', KEYS[1], ARGV[1]) == ARGV[2] then return redis.call('HDEL', KEYS[1], ARGV[1]) end
+return 0
+"""
+
 _ENQUEUE = """
 if ARGV[3] ~= '' then
   local existing = redis.call('HGET', KEYS[1], ARGV[3])
@@ -350,6 +355,7 @@ class RedisJobQueue:
         self.result_ttl_s = result_ttl_s
         self._lease = redis.register_script(_LEASE)
         self._enqueue = redis.register_script(_ENQUEUE)
+        self._release_idem = redis.register_script(_RELEASE_IDEM)
         self._ack = redis.register_script(_ACK)
         self._nack = redis.register_script(_NACK)
         self._release = redis.register_script(_RELEASE)
@@ -395,6 +401,12 @@ class RedisJobQueue:
         for k, v in fields.items():
             args += [k, v]
         returned = _s(self._enqueue(keys=[self.k_idem, self.k_ready], args=args))
+        if returned and returned != job_id and self._load(returned) is None:
+            # The key's job expired with its result TTL: the key is free again, not a duplicate.
+            # Compare-and-delete: free the key only if it still points at the expired job, so two
+            # enqueuers racing here cannot each free it and create two new jobs.
+            self._release_idem(keys=[self.k_idem], args=[idem, returned])
+            returned = _s(self._enqueue(keys=[self.k_idem, self.k_ready], args=args))
         job = self._load(returned or job_id)
         assert job is not None
         return job

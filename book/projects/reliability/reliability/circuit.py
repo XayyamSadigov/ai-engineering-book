@@ -14,6 +14,7 @@ provider that answers in 40 seconds is as broken as one that answers 503.
 """
 from __future__ import annotations
 
+import asyncio
 import threading
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
@@ -46,6 +47,10 @@ def default_is_failure(exc: BaseException) -> bool:
     model behavior, handled by repair and fallback, not by availability machinery.
     """
     if isinstance(exc, (InvalidRequestError, ContentFilterError, MalformedResponseError, DeadlineExceeded, Overloaded)):
+        return False
+    # Cancellation (a hedge loser, a deadline, a disconnected client) and interpreter exits say
+    # nothing about the dependency's health.
+    if isinstance(exc, (asyncio.CancelledError, GeneratorExit, KeyboardInterrupt, SystemExit)):
         return False
     return True
 
@@ -93,6 +98,7 @@ class CircuitBreaker:
         self._open_s = open_s
         self._probes_in_flight = 0
         self._probe_successes = 0
+        self._generation = 0   # bumped on every transition; outcomes from an older one are ignored
         self.rejected = 0
 
     # ------------------------------------------------------------------ window
@@ -122,6 +128,7 @@ class CircuitBreaker:
         if old is new:
             return
         self._state = new
+        self._generation += 1
         if new is CircuitState.OPEN:
             self._opened_at = self._clock()
         if new is CircuitState.HALF_OPEN:
@@ -152,37 +159,47 @@ class CircuitBreaker:
     # ------------------------------------------------------------------ protocol
     def allow(self) -> bool:
         """Ask permission for one call. A True in HALF_OPEN reserves a probe slot."""
+        return self.admit() is not None
+
+    def admit(self) -> int | None:
+        """Like `allow`, but return the generation the call was admitted in (None if rejected).
+        Pass it back to `record_*` so an outcome from before a state change is not misread as
+        a probe result."""
         with self._lock:
             self._maybe_half_open()
             if self._state is CircuitState.CLOSED:
-                return True
+                return self._generation
             if self._state is CircuitState.HALF_OPEN and self._probes_in_flight < self.half_open_max_calls:
                 self._probes_in_flight += 1
-                return True
+                return self._generation
             self.rejected += 1
-            return False
+            return None
 
-    def record_success(self, duration_s: float = 0.0) -> None:
+    def record_success(self, duration_s: float = 0.0, *, generation: int | None = None) -> None:
         if self.slow_call_s is not None and duration_s > self.slow_call_s:
-            self._record(failed=True)
+            self._record(failed=True, generation=generation)
         else:
-            self._record(failed=False)
+            self._record(failed=False, generation=generation)
 
-    def record_failure(self, exc: BaseException | None = None) -> None:
+    def record_failure(self, exc: BaseException | None = None, *, generation: int | None = None) -> None:
         if exc is not None and not self.is_failure(exc):
-            self.release()  # neutral outcome: free a probe slot, record nothing
+            self.release(generation=generation)  # neutral outcome: free a probe slot, record nothing
             return
-        self._record(failed=True)
+        self._record(failed=True, generation=generation)
 
-    def release(self) -> None:
+    def release(self, *, generation: int | None = None) -> None:
         """Give back a probe slot without recording an outcome (e.g., the caller's own error)."""
         with self._lock:
+            if generation is not None and generation != self._generation:
+                return
             if self._state is CircuitState.HALF_OPEN and self._probes_in_flight > 0:
                 self._probes_in_flight -= 1
 
-    def _record(self, *, failed: bool) -> None:
+    def _record(self, *, failed: bool, generation: int | None = None) -> None:
         with self._lock:
             now = self._clock()
+            if generation is not None and generation != self._generation:
+                return  # admitted before a state change: a straggler, not a probe or a fresh sample
             if self._state is CircuitState.HALF_OPEN:
                 self._probes_in_flight = max(0, self._probes_in_flight - 1)
                 if failed:
@@ -207,27 +224,29 @@ class CircuitBreaker:
         return CircuitOpenError(self.name, retry_after_s=self.retry_after() or self._open_s)
 
     def call(self, fn: Callable[..., T], *args: Any, **kwargs: Any) -> T:
-        if not self.allow():
+        gen = self.admit()
+        if gen is None:
             raise self._reject()
         started = self._clock()
         try:
             result = fn(*args, **kwargs)
         except BaseException as exc:
-            self.record_failure(exc)
+            self.record_failure(exc, generation=gen)
             raise
-        self.record_success(self._clock() - started)
+        self.record_success(self._clock() - started, generation=gen)
         return result
 
     async def acall(self, fn: Callable[..., Awaitable[T]], *args: Any, **kwargs: Any) -> T:
-        if not self.allow():
+        gen = self.admit()
+        if gen is None:
             raise self._reject()
         started = self._clock()
         try:
             result = await fn(*args, **kwargs)
         except BaseException as exc:
-            self.record_failure(exc)
+            self.record_failure(exc, generation=gen)
             raise
-        self.record_success(self._clock() - started)
+        self.record_success(self._clock() - started, generation=gen)
         return result
 
     def snapshot(self) -> dict[str, Any]:
@@ -303,33 +322,37 @@ class CircuitBreakerClient:
         return await self.breaker.acall(self.inner.acomplete, req)
 
     def stream(self, req: CompletionRequest) -> Iterator[StreamEvent]:
-        if not self.breaker.allow():
+        gen = self.breaker.admit()
+        if gen is None:
             raise self.breaker._reject()
         started = self.breaker._clock()
         try:
             yield from self.inner.stream(req)
         except LLMError as exc:
-            self.breaker.record_failure(exc)
+            self.breaker.record_failure(exc, generation=gen)
             raise
-        except GeneratorExit:
-            self.breaker.release()  # consumer stopped reading; says nothing about health
+        except BaseException as exc:
+            # Same rule as call(): cancellation and GeneratorExit are neutral, other errors count.
+            self.breaker.record_failure(exc, generation=gen)
             raise
-        self.breaker.record_success(self.breaker._clock() - started)
+        self.breaker.record_success(self.breaker._clock() - started, generation=gen)
 
     async def astream(self, req: CompletionRequest) -> AsyncIterator[StreamEvent]:
-        if not self.breaker.allow():
+        gen = self.breaker.admit()
+        if gen is None:
             raise self.breaker._reject()
         started = self.breaker._clock()
         try:
             async for ev in self.inner.astream(req):
                 yield ev
         except LLMError as exc:
-            self.breaker.record_failure(exc)
+            self.breaker.record_failure(exc, generation=gen)
             raise
-        except GeneratorExit:
-            self.breaker.release()
+        except BaseException as exc:
+            # Same rule as call(): cancellation and GeneratorExit are neutral, other errors count.
+            self.breaker.record_failure(exc, generation=gen)
             raise
-        self.breaker.record_success(self.breaker._clock() - started)
+        self.breaker.record_success(self.breaker._clock() - started, generation=gen)
 
 
 __all__ = [

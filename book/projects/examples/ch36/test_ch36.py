@@ -237,3 +237,38 @@ def test_sqlglot_renders_in_configured_dialect() -> None:
     r = SqlGuard(cfg, engine="sqlglot").check("SELECT order_id FROM fact_orders")
     assert r.ok
     assert r.sql == "SELECT order_id FROM fact_orders LIMIT 200"
+
+
+# --- bypasses found in review: every one must be refused by both engines -------------------
+BYPASSES = [
+    ("SELECT query_to_xml('select * from payroll', true, true, '') FROM orders", {}),
+    ("SELECT nextval('s') FROM orders", {}),
+    ('SELECT "pg_sleep"(10) FROM orders', {}),
+    ("SELECT id FROM hr.orders", {}),
+    ("SELECT c FROM customers c", {"blocked_columns": {"email"}}),
+    ("SELECT row_to_json(c) FROM customers c", {"blocked_columns": {"email"}}),
+    ("SELECT * FROM customers", {"blocked_columns": {"email"}}),
+    ("SELECT o.id FROM orders o JOIN customers c USING (email)", {"blocked_columns": {"email"}}),
+    ('SELECT "email" FROM customers', {"blocked_columns": {"email"}}),
+    ("SELECT '$$', id FROM orders; DELETE FROM orders; SELECT '$$'", {}),
+    ("SELECT 'abc", {}),
+    ("SELECT b FROM customers c(a, b)", {"blocked_columns": {"email"}}),
+    ("SELECT ts_stat('select to_tsvector(email) from hr.people') FROM orders", {}),
+    ("SELECT id FROM customers c WHERE c::text LIKE '%@%'", {"blocked_columns": {"email"}}),
+    ("SELECT x.c FROM (SELECT c FROM customers c) x", {"blocked_columns": {"email"}}),
+]
+
+
+@pytest.mark.parametrize("engine", ["sqlglot", "regex"])
+@pytest.mark.parametrize("sql,overrides", BYPASSES)
+def test_review_bypasses_are_refused(engine, sql, overrides):
+    assert not guard_sql(sql, {"orders", "customers"}, engine=engine, **overrides).ok
+
+
+@pytest.mark.parametrize("engine", ["sqlglot", "regex"])
+def test_qualified_names_aliases_still_work_when_allowed(engine):
+    allowed = {"orders", "customers", "sales.orders"}
+    assert guard_sql("SELECT o.id FROM sales.orders o", allowed, engine=engine).ok
+    assert guard_sql("SELECT c.id, c.name FROM customers c", allowed, engine=engine, blocked_columns={"email"}).ok
+    assert guard_sql("SELECT customer_id, count(*) FROM orders GROUP BY customer_id", allowed, engine=engine,
+                     blocked_columns={"email"}).ok   # COUNT(*) reads no column values

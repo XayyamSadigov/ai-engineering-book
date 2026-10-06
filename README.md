@@ -137,7 +137,7 @@ No machine-learning background is assumed, and none is taught beyond what explai
 
 | # | Chapter | What you will learn | Practice |
 |---|---|---|---|
-| 10 | [RAG Fundamentals](book/chapters/10-rag-fundamentals.md) | When RAG is the right architecture, the stage model of a pipeline, a minimal RAG in ~150 lines, and the seven ways naive RAG fails. | [Exercises](book/exercises/ch10-exercises.md) · [Solutions](book/solutions/ch10-solutions.md) |
+| 10 | [RAG Fundamentals](book/chapters/10-rag-fundamentals.md) | When RAG is the right architecture, the stage model of a pipeline, a minimal RAG in under 200 lines, and the seven ways naive RAG fails. | [Exercises](book/exercises/ch10-exercises.md) · [Solutions](book/solutions/ch10-solutions.md) |
 | 11 | [Ingestion and Chunking](book/chapters/11-ingestion-and-chunking.md) | Document model, parsing PDFs/HTML/Markdown, structure-aware chunking, metadata, ACLs, versioning, and deduplication with `ragkit`. | [Exercises](book/exercises/ch11-exercises.md) · [Solutions](book/solutions/ch11-solutions.md) |
 | 12 | [Retrieval Engineering](book/chapters/12-retrieval-engineering.md) | Dense and lexical retrieval, BM25 from scratch, hybrid fusion, query rewriting, reranking, and permission-aware retrieval. | [Exercises](book/exercises/ch12-exercises.md) · [Solutions](book/solutions/ch12-solutions.md) |
 | 13 | [Grounded Generation and Citations](book/chapters/13-grounded-generation-and-citations.md) | Evidence packing, the grounded answer contract, chunk-level citations, abstention, and verifying that answers are supported. | [Exercises](book/exercises/ch13-exercises.md) · [Solutions](book/solutions/ch13-solutions.md) |

@@ -114,7 +114,7 @@ HNSW/vectorless. Length: 8-9k.
 
 ### Ch 10 — RAG Fundamentals (`10-rag-fundamentals.md`)
 Scope: why RAG exists (fresh knowledge, citations, permissions, cost vs long context vs fine-tuning);
-the minimal pipeline (ingest -> chunk -> embed -> retrieve -> pack -> generate) built in ~150 lines over
+the minimal pipeline (ingest -> chunk -> embed -> retrieve -> pack -> generate) built in ~200 lines over
 `aie_core`; RAG as two systems; naive RAG failure modes catalogue (wrong chunk, missing evidence,
 distractors, stale index, no abstention, hallucinated citations, permission leak); the stage model used
 in Chapters 11-15; RAG vs long context; what "production" adds. Source: M0, M9 synthesis, Recipe 5/15.

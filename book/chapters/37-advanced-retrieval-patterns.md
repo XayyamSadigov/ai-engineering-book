@@ -1,20 +1,20 @@
 # Chapter 37 — Advanced Retrieval Patterns
 
-After this chapter you will be able to decide, from measured evidence, when a standard retrieve-then-generate pipeline is not enough and which advanced pattern fixes the specific gap: an agentic retrieval loop for multi-hop questions, a knowledge graph for relationship and corpus-wide questions, vectorless retrieval (SQL, metadata, full text, table-of-contents navigation) for structured or exact lookups, late interaction for fine-grained matching, describe-then-index or multimodal embeddings for images, scans, charts, and tables, long context or a hybrid for small corpora, recursive processing for inputs larger than any window, and symbol-first search for code. You will also be able to state what each pattern costs to build, run, and maintain, and how each one fails. The code lives in `book/projects/examples/ch37/`: a bounded agentic RAG loop with an evidence ledger, a miniature GraphRAG with entity resolution and community summaries, a table-of-contents navigator, a NumPy MaxSim demo, a budgeted map-reduce summarizer and recursive reader, an AST-based code index over `aie_core`, and a long-context cost calculator. All of it runs offline against the Northwind corpus.
+After this chapter you will be able to decide, from measured evidence, when a standard retrieve-then-generate pipeline is not enough and which advanced pattern fixes the specific gap: an agentic retrieval loop for multi-hop questions, a knowledge graph for relationship and corpus-wide questions, vectorless retrieval (SQL, metadata, full text, table-of-contents navigation) for structured or exact lookups, late interaction (scoring query and passage token by token) for fine-grained matching, describe-then-index or multimodal embeddings for images, scans, charts, and tables, long context or a hybrid for small corpora, recursive processing for inputs larger than any window, and symbol-first search for code. You will also be able to state what each pattern costs to build, run, and maintain, and how each one fails. The code lives in `book/projects/examples/ch37/`: a bounded agentic RAG loop with an evidence ledger, a miniature GraphRAG with entity resolution and community summaries, a table-of-contents navigator, a NumPy MaxSim demo, a budgeted map-reduce summarizer and recursive reader, an AST-based code index over `aie_core`, and a long-context cost calculator. All of it runs offline against the Northwind corpus.
 
 ## Why this matters
 
-By the end of Part IV, Northwind Assist has a production RAG pipeline: hybrid retrieval, reranking, grounded generation with citations, an evaluation suite, ACL filtering, and incremental indexing (Chapters 12 to 15). It answers most policy and runbook questions well. The remaining failures are not random. They cluster.
+By the end of Part IV, Northwind Assist has a production RAG pipeline: hybrid retrieval, reranking, grounded generation with citations, an evaluation suite, ACL filtering, and incremental indexing (Chapters 12 to 15). It answers most policy and runbook questions well. The remaining failures are not random; they cluster into a few recognizable classes.
 
 An on-call engineer asks why the November card-payment outage happened and how that certificate is renewed now. The incident report explains the cause and says the renewal process "is now documented in the Lumen POS Platform Overview", so the answer needs a second retrieval whose query only becomes known after reading the first result. A manager asks which teams own open action items across all incident reports; no single chunk contains the answer. A finance analyst asks how many invoices from one vendor exceeded the approval threshold; embeddings cannot count. A support engineer pastes an error code and dense retrieval ranks the one runbook containing that exact string tenth. A developer asks where retry delays are computed and receives a chunk that starts halfway through a function.
 
-Each failure has a pattern that fixes it, and each pattern has been oversold. Teams adopt GraphRAG because it sounds like the next level of RAG and discover months later that their questions were single-hop. Teams build agentic loops that triple latency for a problem that query decomposition (Chapter 12) solves deterministically. The skill this chapter teaches is diagnosis first: name the failure class from the evaluation set, pick the cheapest pattern that addresses it, and measure whether it did.
+Each failure has a pattern that fixes it, and each pattern has been oversold. Teams adopt GraphRAG (retrieval over a knowledge graph extracted from the corpus) because it sounds like the next level of RAG and discover months later that their questions were single-hop. Teams build agentic loops that multiply latency for a problem that query decomposition (Chapter 12) solves deterministically. The skill this chapter teaches is diagnosis first: name the failure class from the evaluation set, pick the cheapest pattern that addresses it, and measure whether it did.
 
 ## Mental model
 
 > **Mental model:** Every advanced retrieval pattern is a trade of build cost, query cost, and failure surface for coverage of a specific question class. Adopt one only when your evaluation set shows that class, and only as a route for those questions, not as a replacement for the baseline.
 
-The second image is a ladder. The bottom rung is the measured baseline from Chapters 12 to 15: hybrid retrieval, reranking, good chunks, metadata filters. Each rung above it adds a mechanism: iteration (agentic RAG), explicit structure (graphs, tables of contents, SQL), richer representations (late interaction, multimodal), or a different relationship between the corpus and the context window (long context, recursion). Climbing a rung costs latency, money, and new ways to be wrong. You climb only for the questions that need it, and a router keeps the rest on the bottom rung. The book-wide model "Agents add nondeterminism and cost; prefer deterministic workflows where the path is known" applies with full force here: most of these patterns are ways to make retrieval adaptive, and adaptivity is the expensive part.
+A second way to picture it is a ladder. The bottom rung is the measured baseline from Chapters 12 to 15: hybrid retrieval, reranking, good chunks, metadata filters. Each rung above it adds a mechanism: iteration (agentic RAG), explicit structure (graphs, tables of contents, SQL), richer representations (late interaction, multimodal), or a different relationship between the corpus and the context window (long context, recursion). Climbing a rung costs latency, money, and new ways to be wrong. You climb only for the questions that need it, and a router keeps the rest on the bottom rung. The book-wide model "Agents add nondeterminism and cost; prefer deterministic workflows where the path is known" applies with full force here: most of these patterns are ways to make retrieval adaptive, and adaptivity is the expensive part.
 
 ## Core concepts
 
@@ -31,27 +31,31 @@ Before reaching for any pattern below, sort the failing questions from your eval
 - **Whole-input tasks.** Summarize or audit a large input end to end. Candidate: long context if it fits, map-reduce or recursive processing if not.
 - **Code.** Questions about a repository. Candidate: symbol and lexical search, AST-aware chunks, dependency graphs.
 
-The proportion of each class determines what to build. If multi-hop questions are 3 percent of traffic, an agentic loop for every request is a large cost to fix a small slice; a router that sends only those questions to the loop is the design.
+The proportion of each class determines what to build. If multi-hop questions are an illustrative 3 percent of traffic, an agentic loop for every request is a large cost to fix a small slice; a router that sends only those questions to the loop is the design.
 
 ### Agentic RAG: iterative retrieval under a budget
 
 Agentic RAG hands control of retrieval to a model inside a loop. Each turn, the model reads the question and the evidence so far and chooses an action: search again with a new query, answer, or give up. It exists because some questions cannot be retrieved for in one shot: the second query in the outage example ("PayBridge certificate renewal inventory") is derivable from the incident report, not from the question, so single-shot retrieval, however good, does not have the information when it runs.
 
-The mechanism is Chapter 19's agent loop specialized to one tool, and this chapter does not re-teach the loop. It builds the pattern twice to show one design choice that matters for retrieval. `AgenticRAG` is a **state-in-prompt controller**: each turn's prompt is rebuilt from the evidence ledger, so the model sees every retrieved chunk once, in one place, and input grows with evidence rather than with a transcript of past searches. `RuntimeAgenticRAG` puts the same search tool, ledger, and gate on `AgentRuntime`, so the transcript grows as in any agent, and in exchange the harness supplies step and tool-call budgets, repeated-call and no-progress stops, the event log, resume, and replay without a line of loop code. Prefer the runtime version by default; reach for the controller only when a trace shows late steps dominated by stale search results, and then give it the same replayable record. Whichever loop runs it, what makes agentic retrieval production-worthy is everything around the model's choice:
+The mechanism is Chapter 19's agent loop specialized to one tool, and this chapter does not re-teach the loop. It builds the pattern twice to show one design choice that matters for retrieval. `AgenticRAG` is a **state-in-prompt controller**: each turn's prompt is rebuilt from the evidence ledger, so the model sees every retrieved chunk once, in one place, and input grows with evidence rather than with a transcript of past searches. `RuntimeAgenticRAG` puts the same search tool, ledger, and gate on `AgentRuntime`, so the transcript grows as in any agent, and in exchange the harness supplies step and tool-call budgets, repeated-call and no-progress stops, the event log, resume, and replay without a line of loop code.
 
-**Budgets.** Maximum controller turns, searches, and evidence tokens. Without them, a model that never feels confident loops until the request times out. Each turn's input grows with the evidence, so cost grows faster than linearly in steps. With an illustrative 300-token prompt and 600 tokens of new evidence per search, four turns send 300, 900, 1,500, and 2,100 input tokens: 4,800 in total, about five times a single-shot request of 940. Each turn also adds a model round trip, which by itself breaks Northwind's two-second time-to-first-token target unless the interface streams progress or only routed questions enter the loop.
+Prefer the runtime version by default; reach for the controller only when a trace shows late steps dominated by stale search results, and then give it the same replayable record. Whichever loop runs it, what makes agentic retrieval production-worthy is everything around the model's choice:
+
+**Budgets.** Maximum controller turns, searches, and evidence tokens. Without them, a model that never feels confident loops until the request times out. Each turn's input grows with the evidence, so cost grows faster than linearly in steps. With an illustrative 300-token prompt and 600 tokens of new evidence per search, four turns send 300, 900, 1,500, and 2,100 input tokens: 4,800 in total, about five times a single-shot request of 940. Each turn also adds a model round trip, and a few of them alone exceed Northwind's two-second time-to-first-token target unless the interface streams progress or only routed questions enter the loop.
 
 **An evidence ledger.** An append-only record of every retrieved chunk: a stable label the model cites (E1, E2), the query that found it, the step, the score, and the token count. It de-duplicates, enforces the token budget, and makes the run auditable: when an answer is wrong, the ledger shows whether evidence was never found, found and ignored, or found and misread, which is Chapter 10's diagnostic fork applied per step.
 
-**A sufficiency check.** Models are optimistic about when evidence suffices. Pair the model's judgment with a deterministic gate: every citation must name an existing ledger label, and the cited evidence must cover the question's key terms above a threshold. The gate in this chapter is crude (term overlap, no stemming), yet it rejects the most common failure, answering after a first plausible hit. Stronger gates run an entailment judge per cited claim (Chapter 13).
+**A sufficiency check.** Models are optimistic about when evidence suffices. Pair the model's judgment with a deterministic gate: every citation must name an existing ledger label, and the cited evidence must cover the question's key terms above a threshold. The gate in this chapter is crude (term overlap, no stemming), yet it rejects a common failure (answering after a first plausible hit) and abstains when the search budget runs out before coverage is met. Stronger gates run an entailment judge per cited claim (Chapter 13).
 
-**Stall detection.** A repeated query, or two searches in a row that add no evidence, ends the loop. Rephrasing the same query is a typical behavior under uncertainty, and detecting it is cheaper than paying for it.
+**Stall detection.** A repeated query, or two searches in a row that add no evidence, ends the loop. Models often rephrase the same query when uncertain, and detecting it is cheaper than paying for it.
 
-Do not use the loop when questions are single-hop (most of them), when the hop structure is known in advance (an incident question always needs the incident and its linked runbook, so fetch both in a workflow, Chapter 17), or when latency targets are tight. The source material's default is right: start deterministic and add agentic behavior only when the evaluation set contains questions that truly require iteration. Cheaper alternatives, in order, are query decomposition up front (Chapter 12), following the links a hit points to, and only then the full loop.
+Do not use the loop when questions are single-hop (most of them), when the hop structure is known in advance (an incident question always needs the incident and its linked runbook, so fetch both in a workflow, Chapter 17), or when latency targets are tight. The book-wide default applies: start deterministic and add agentic behavior only when the evaluation set contains questions that truly require iteration. Cheaper alternatives, in order, are query decomposition up front (Chapter 12), following the links a hit points to, and only then the full loop.
 
 ### GraphRAG: entities, relations, and communities
 
-GraphRAG builds a knowledge graph from the corpus and retrieves over it. An LLM reads each chunk and extracts entities (teams, systems, incidents, certificates) and relations (`PayBridge Adapter -authenticates_with-> PayBridge client certificate`), each with provenance. Entity resolution merges surface forms of the same thing. The graph is partitioned into communities of densely connected entities, and each community gets an LLM-written summary. A **local query** links the entities named in a question to nodes and retrieves their k-hop neighborhood ("what does the PayBridge Adapter depend on"). A **global query** maps the question over community summaries and reduces the relevant partial answers ("what themes recur across incidents"), a question no chunk-level retrieval can answer because no chunk contains the answer. It exists because flat retrieval treats documents as bags of passages, while for ownership, dependencies, and transactions the answer is a path.
+Flat retrieval treats documents as bags of passages, but for ownership, dependencies, and transactions the answer is a path. GraphRAG addresses this by building a knowledge graph from the corpus and retrieving over it. An LLM reads each chunk and extracts entities (teams, systems, incidents, certificates) and relations (`PayBridge Adapter -authenticates_with-> PayBridge client certificate`), each with provenance. Entity resolution merges different names for the same thing (surface forms). The graph is then partitioned into communities, clusters of densely connected entities, and each community gets an LLM-written summary.
+
+A **local query** links the entities named in a question to nodes and retrieves their k-hop neighborhood (every node within k edges), for example "what does the PayBridge Adapter depend on". A **global query** asks the question of every community summary and merges the relevant partial answers (a map-reduce, covered under recursive processing below), for example "what themes recur across incidents", a question no chunk-level retrieval can answer because no chunk contains the answer.
 
 The costs are why it should not be a default.
 
@@ -63,7 +67,7 @@ The costs are why it should not be a default.
 
 **Maintenance.** When a document changes, delete edges whose provenance is its old chunks (Chapter 11's chunk diff lists them), re-extract, re-resolve, and recompute affected communities and summaries. A local edit can shift community structure globally, so teams recompute summaries on a schedule and show the build date in answer metadata.
 
-**Permissions.** Edges inherit their chunk's ACL, so local queries filter edges per principal. Summaries mix facts from many chunks, so a reader must be allowed to see every source, or the summary leaks restricted facts in paraphrase. Enforcing that hides many summaries from ordinary users; the alternative, summaries per permission scope, multiplies build cost.
+**Permissions.** Edges inherit their chunk's ACL, so local queries walk only edges the principal can read (a hop through a restricted edge would reveal that the hidden link exists) and render each fact with the names its own chunk used. Summaries mix facts from many chunks, so a reader must be allowed to see every source, or the summary leaks restricted facts in paraphrase. Enforcing that hides many summaries from ordinary users; the alternative, summaries per permission scope, multiplies build cost.
 
 Do not build an extracted graph when relationships already live in a system of record (HR directory, configuration database, ticketing): query it directly. When documents carry explicit links (every Northwind document ends with a "Related documents" list), a parser-built link graph costs nothing and has no extraction errors. Extract a graph when relationships are implicit in prose, numerous, and central to real questions.
 
@@ -71,27 +75,29 @@ Do not build an extracted graph when relationships already live in a system of r
 
 RAG means augmenting generation with retrieved evidence; nothing requires embeddings. Vectorless retrieval uses the primitive that matches the data.
 
-**SQL over structured data.** Invoices, tickets, and incidents are rows, and "how many SEV1 incidents did logistics have in 2026" is an aggregate that embeddings cannot compute. The pattern is text-to-SQL against a semantic layer with a read-only role, a validator that parses and allow-lists the generated SQL, row limits, and the query shown with the answer (Chapter 36 builds the guard).
+**SQL over structured data.** Invoices, tickets, and incidents are rows, and "how many SEV1 incidents did logistics have in 2026" is an aggregate that embeddings cannot compute. The pattern is text-to-SQL against a semantic layer (curated metric and table definitions the model targets instead of raw tables) with a read-only role, a validator that parses and allow-lists the generated SQL, row limits, and the query shown with the answer (Chapter 36 builds the guard).
 
 **Metadata filters.** A filter on `updated_at > 2026-01-01` removes the stale HR FAQ that naive retrieval ranks above the current PTO policy, more reliably than hoping a reranker notices dates.
 
-**Full-text search.** Identifiers, error codes, ticket numbers, and exact phrases are where lexical search beats dense retrieval. FTS5, PostgreSQL full-text search, and dedicated engines support phrase, prefix, and boolean queries with BM25 ranking, and metadata and ACL filters in the same statement; `FullTextIndex` in `corpus.py` does this in about thirty lines. Chapter 12 owns BM25 itself and its PostgreSQL `tsvector` form; the point here is only that an exact-string route needs no embeddings at all.
+**Full-text search.** Identifiers, error codes, ticket numbers, and exact phrases are where lexical search beats dense retrieval. FTS5, PostgreSQL full-text search, and dedicated engines support phrase, prefix, and boolean queries with BM25 ranking, and metadata and ACL filters in the same statement; `FullTextIndex` in `corpus.py` does this in about forty lines. Chapter 12 owns BM25 itself and its PostgreSQL `tsvector` form; the point here is only that an exact-string route needs no embeddings at all.
 
-**Hierarchical navigation.** Long, well-structured documents (policies, manuals, contracts) come with a table of contents written by their authors. Show the model a catalog of documents, let it pick some, show their headings with sizes, let it open or read sections, and repeat until it has read enough. This is retrieval as reading: sections are read whole, and no index is needed beyond Chapter 11's parsed heading tree.
+**Hierarchical (table-of-contents) navigation.** Long, well-structured documents (policies, manuals, contracts) come with a table of contents written by their authors. Show the model a catalog of documents, let it pick some, show their headings with sizes, let it open or read sections, and repeat until it has read enough. This is retrieval as reading: sections are read whole, and no index is needed beyond Chapter 11's parsed heading tree.
 
-It fails when headings do not describe content. Asking "what is the PayBridge certificate renewal process?" leads this chapter's offline navigator to "Release process", because the answer sits under "Payments". A real model does better than a keyword picker, but navigation quality stays bounded by heading quality. Mitigations: a one-line summary per section added at ingestion (cached by content hash), navigation over a candidate set chosen lexically, and capped rounds. Navigation is sequential and its catalog grows with the corpus, so it suits tens of long documents, not tens of thousands of short ones. Every id the model returns must be validated against what was offered and what the principal may read; models invent plausible ids.
+It fails when headings do not describe content. Asking "what is the PayBridge certificate renewal process?" leads this chapter's offline navigator to "Release process", because the answer sits under "Payments". A real model does better than a keyword picker, but navigation quality stays bounded by heading quality.
+
+Mitigations: a one-line summary per section added at ingestion (cached by content hash), navigation over a candidate set chosen lexically, and capped rounds. Navigation is sequential and its catalog grows with the corpus, so it suits tens of long documents, not tens of thousands of short ones. Every id the model returns must be validated against what was offered and what the principal may read; models invent plausible ids.
 
 ### Late interaction
 
-A single-vector embedding compresses a passage into one point. When a passage covers several topics, its point lands between them, and a query about one detail can sit closer to a passage entirely about a neighboring topic. Late interaction, popularized by ColBERT, keeps one vector per token. At query time each query token finds its most similar document token, and the score is the sum of those maxima (MaxSim):
+A single-vector embedding compresses a passage into one point. When a passage covers several topics, its point lands between them, and a query about one detail can sit closer to a passage entirely about a neighboring topic. Late interaction, popularized by the ColBERT retrieval model, keeps one vector per token; query and passage are encoded separately and interact only late, at scoring time, which is where the name comes from. At query time each query token finds its most similar document token, and the score is the sum of those maxima (MaxSim):
 
 ```text
 score(q, d) = sum over query tokens i of  max over document tokens j of  q_i . d_j
 ```
 
-Document token vectors are computed at indexing time, so no encoder runs per query-document pair as in a cross-encoder reranker (Chapter 12). Late interaction sits between the two: richer matching than one vector, far cheaper than cross-encoding the corpus.
+Document token vectors are computed at indexing time, so no encoder runs per query-document pair as in a cross-encoder reranker (Chapter 12). Late interaction therefore sits between single-vector retrieval and a cross-encoder: richer matching than one vector, far cheaper per query than cross-encoding every candidate.
 
-`maxsim.py` reproduces the shared data's distractor. For "return window for my old laptop", mean-pooled vectors prefer a retail-returns passage over a laptop runbook passage that answers the question in its last sentence but spends most words on data migration (0.248 against 0.095 in the toy space). MaxSim reverses the order (3.75 against 2.40), and its alignment table shows why: "old" matched "previous", "window" matched "within". Token-level inspectability is a side benefit.
+`maxsim.py` reproduces a distractor pair from the shared Northwind data. For "return window for my old laptop", mean-pooled vectors prefer a retail-returns passage over a laptop runbook passage that answers the question in its last sentence but spends most words on data migration (0.248 against 0.095 in the toy space). MaxSim reverses the order (3.75 against 2.40), and its alignment table shows why: "old" matched "previous", "window" matched "within". Token-level inspectability is a side benefit.
 
 The cost is storage and serving complexity. With illustrative numbers, a million 200-token passages take about 3.1 GB as 768-dimension 32-bit single vectors and about 51 GB as 128-dimension 16-bit token vectors before compression. Production systems compress token vectors heavily and often apply late interaction as a second stage over cheaper candidates. Use it when evaluation shows fine-grained mismatches that a reranker does not fix within latency; try smaller chunks and a cross-encoder first.
 
@@ -101,51 +107,53 @@ Northwind's runbooks contain diagrams and screenshots, finance keeps scanned inv
 
 **Describe-then-index.** Convert each non-text element to text at ingestion and index it with everything else. Scans go through OCR (Chapter 11's parser flags pages that need it). Images and diagrams get a description from a vision-capable model, prompted for retrievable content (components, labels, arrows, numbers), not "an image of a diagram". Tables are extracted into rows. Charts are hardest: a description loses the values, so prefer the source data, or extract approximate series with a confidence flag. This reuses the whole text stack at low query cost; its costs are a model call per element at ingestion and errors invisible downstream, since a misread digit is faithfully repeated.
 
-**Multimodal embeddings.** Models trained contrastively on image-text pairs place images and text in one space, so a text query retrieves images directly; a newer variant embeds whole page images with late interaction over patches, retrieving scanned pages without OCR. The answer step sends the retrieved image to a vision-capable model. This avoids lossy conversion and handles complex layouts, at the cost of image tokens at answer time, domain-dependent embedding quality (invoices and diagrams are not photographs), and weak exact matching for identifiers.
+**Multimodal embeddings.** Models trained contrastively on image-text pairs place images and text in one space, so a text query retrieves images directly; another variant embeds whole page images with late interaction over image patches, retrieving scanned pages without OCR. The answer step sends the retrieved image to a vision-capable model. This avoids lossy conversion and handles complex layouts, at the cost of image tokens at answer time, domain-dependent embedding quality (invoices and diagrams are not photographs), and weak exact matching for identifiers.
 
 **Tables are data.** A row without its header is meaningless, which is why Chapter 11 repeats headers when splitting tables. For filtering or aggregation ("which laptop models have 32 GB of RAM"), extract rows and answer with SQL; models make arithmetic and alignment errors on large serialized tables. For small lookup tables, Markdown with headers is fine.
 
-The source material's product rules apply: do not send full-resolution media unless needed (resize, crop, or OCR first when that keeps the evidence); keep provenance a reviewer can check (page and bounding box, frame and timestamp); evaluate perception and reasoning separately, because failed OCR, failed visual grounding, and bad reasoning need different fixes; and treat images as untrusted, since hidden text and instructions in screenshots ride OCR straight into the context (Chapter 26).
+Four rules apply to any multimodal pipeline: do not send full-resolution media unless needed (resize, crop, or OCR first when that keeps the evidence); keep provenance a reviewer can check (page and bounding box, frame and timestamp); evaluate perception and reasoning separately, because failed OCR, failed visual grounding, and bad reasoning need different fixes; and treat images as untrusted, since hidden text and instructions in screenshots ride OCR straight into the context (Chapter 26).
 
 ### Long context versus RAG, and the hybrids between them
 
 Chapter 10 set out the basic comparison. Long context removes retrieval and its decisions; it costs every corpus token on every request, it raises time-to-first-token with prompt length, and models use long contexts unevenly. The `long_context_cost.py` calculator turns this into numbers for decisions. With illustrative prices and Northwind's shared corpus at about 22,600 tokens and 50,000 questions per month:
 
-| Strategy | Input tokens per question | Monthly cost (illustrative) | Uncached prefill (illustrative) |
+| Strategy | Input tokens per question | Monthly cost, USD (illustrative) | Uncached prefill (illustrative) |
 |---|---|---|---|
 | Whole corpus in context | 22,940 | 3,629 | 4.6 s |
 | Whole corpus, prompt-cached | 22,940 | 1,220 | 4.6 s cold |
 | Retrieve 2 documents, send whole | 2,240 | 524 | 0.45 s |
 | RAG, 4 chunks | 940 | 329 | 0.19 s |
 
-Prompt caching (a provider discount for a repeated prompt prefix) makes long context competitive for a small, stable corpus with one audience. Permissions break that. Each permission scope needs its own prefix, and a cached prefix expires after a time-to-live. With twelve scopes and 20,000 questions a month, each scope sees a question roughly every 26 minutes; with an illustrative five-minute lifetime, every request misses the cache and pays the cache-write premium, so caching costs more than not caching. The calculator shows it, and the lesson generalizes: compute cache economics per scope and per traffic level, not per corpus.
+Prompt caching (a provider discount for a repeated prompt prefix) makes long context competitive for a small, stable corpus with one audience. Permissions break that. Each permission scope needs its own prefix, and a cached prefix expires after a time-to-live. With twelve scopes and 20,000 questions a month, each scope sees a question roughly every 26 minutes; with an illustrative five-minute lifetime, every request misses the cache and pays the cache-write premium, so caching costs more than not caching. The calculator shows it (about 1,795 a month with caching against 1,451 without, illustrative), and the lesson generalizes: compute cache economics per scope and per traffic level, not per corpus.
 
-At an illustrative 45 million tokens, a real knowledge base fits in no window. Long context then becomes a technique for the last step, and the useful strategies are hybrids:
+A real knowledge base, at an illustrative 45 million tokens, fits in no current context window. Long context then becomes a technique for the last step, and the useful strategies are hybrids:
 
 - **Retrieve documents, read them whole.** Retrieve at document level, then send the top one to three documents in full. Chunk-boundary failures disappear and the cost stays bounded by document size, not corpus size. This is often the best default for corpora of medium-length, coherent documents such as policies.
 - **Parent expansion.** Retrieve small chunks for precision and expand them to their parent sections for context (Chapter 11's parent-child chunker).
 - **Escalation.** Answer with standard RAG; when the generator abstains or a sufficiency check fails, retry with the retrieved documents in full. Most questions pay the RAG price; hard ones pay more.
 - **Stable small corpus.** For a single-audience corpus that fits with headroom and changes rarely (a product manual, one contract under review), put it in context with caching and skip retrieval entirely.
 
-Evaluate the choice on your questions: long context is not immune to missing evidence, it just moves the failure from the retriever to the model's attention.
+Evaluate the choice on your questions: long context is not immune to missing evidence; it moves the failure from the retriever to the model's attention.
 
 ### Recursive and long-input processing
 
 Some tasks need the whole input: summarize a 300-page contract, audit a quarter of incident reports, find every mention of a vendor in a large log. If the input exceeds the window, or would cost too much per request, process it in pieces.
 
-**Map-reduce.** Split the input into pieces within a budget, apply one prompt to each (map), then merge the partial results (reduce), in groups and level by level when they do not fit one call. Three details matter more than the prompts. Budgets: estimate the calls before starting (map calls plus a reduce tree whose fan-in is how many partials fit one reduce) and refuse jobs that cannot finish, before spending anything. An output cap enforced in code as well as requested, because a reduce whose output is as long as its input never converges. Provenance: each partial carries the character spans it covers, so a claim in the final summary traces to its region. The known weakness is loss of minority facts, since each level keeps what seems important at that level; query-focused map prompts reduce it. A sequential refine strategy (a running summary carried through the pieces) preserves narrative better but cannot run in parallel and propagates early errors.
+**Map-reduce.** Split the input into pieces within a budget, apply one prompt to each (map), then merge the partial results (reduce), in groups and level by level when they do not fit one call. Three details matter more than the prompts. Budgets: estimate the calls before starting (map calls plus a reduce tree whose fan-in is how many partials fit one reduce) and refuse jobs that cannot finish, before spending anything. Output cap: enforce it in code as well as requesting it, because a reduce whose output is as long as its input never converges. Provenance: each partial carries the character spans it covers, so a claim in the final summary traces to its region.
 
-**The input as an environment.** Recursive Language Models, as the source material describes them, treat a long prompt as an external environment the model inspects through operations: view the outline, search for a pattern, read a bounded range, or delegate a sub-question over a slice to a fresh call with its own small context. The separation is between the available input and the active context; usually only small regions matter, and an environment lets the model find them instead of paying to read everything. This chapter's `RecursiveReader` answers "how long did INC-2025-1142 last" over the concatenated corpus in three calls (grep, read four lines, answer) without the model ever seeing the other twenty-one thousand tokens.
+The known weakness is loss of minority facts, since each level keeps what seems important at that level; query-focused map prompts reduce it. A sequential refine strategy (a running summary carried through the pieces) preserves narrative better but cannot run in parallel and propagates early errors.
 
-Recursion needs a global budget: a depth limit, a step limit per level, and one call counter shared by all levels, so sub-readers cannot spend the parent's budget recursively. Errors also travel upward, because a sub-answer is an unverified summary that the parent treats as evidence. Mark sub-answers as derived, carry their line ranges, and prefer final answers that quote text the top level read. As the source warns, the orchestration logic becomes part of what you must evaluate.
+**The input as an environment.** Recursive language models, a research approach that is still young at the time of writing, treat a long prompt as an external environment the model inspects through operations: view the outline, search for a pattern, read a bounded range, or delegate a sub-question over a slice to a fresh call with its own small context. The key separation is between the input that is available and the context the model is actively reading; usually only small regions matter, and an environment lets the model find them instead of paying to read everything. This chapter's `RecursiveReader` answers "how long did INC-2025-1142 last" over the concatenated corpus in three calls (grep, read four lines, answer) without the model ever seeing the other twenty-one thousand tokens.
+
+Recursion needs a global budget: a depth limit, a step limit per level, and one call counter shared by all levels, so sub-readers cannot spend the parent's budget recursively. Errors also travel upward, because a sub-answer is an unverified summary that the parent treats as evidence. Mark sub-answers as derived, carry their line ranges, and prefer final answers that quote text the top level read. The orchestration logic itself (when to search, read, or delegate) also becomes part of what you must evaluate.
 
 ### Retrieval over code
 
 Code is where naive RAG does worst and structure helps most: identifiers are exact strings, meaning lives in definitions and call relationships, and fixed-size chunks cut functions in half. Coding agents and IDE assistants (Chapter 38) use a different stack.
 
-**Symbols and lexical search first.** "Where is `complete_structured` defined", "who calls `_prepare`", "what imports `errors`" have exact answers from a symbol index and an import graph. Most coding agents start with plain text search and file reads, which are fast, always fresh, and effective because developers ask in identifiers. Identifier-aware tokenization (`RetryPolicy` becomes `retry`, `policy`) lets natural-language queries hit code names, and weighting name matches above docstring and body matches sharpens ranking.
+**Symbols and lexical search first.** "Where is `complete_structured` defined", "who calls `_prepare`", "what imports `errors`" have exact answers from a symbol index and an import graph. Many coding agents start with plain text search and file reads, which are fast, always fresh, and effective because developers ask in identifiers. Identifier-aware tokenization (`RetryPolicy` becomes `retry`, `policy`) lets natural-language queries hit code names, and weighting name matches above docstring and body matches sharpens ranking.
 
-**AST-aware chunks.** One function or method per chunk, with its file path and lines, the module's imports, and the enclosing class signature and docstring; a method without its class header loses the meaning of `self`.
+**AST-aware chunks.** Split along the abstract syntax tree (AST), the parsed structure of the code: one function or method per chunk, with its file path and lines, the module's imports, and the enclosing class signature and docstring; a method without its class header loses the meaning of `self`.
 
 **Dependency graphs.** The import graph answers blast-radius questions, and a call graph lists callers. Name-based resolution, as in this chapter's code, conflates functions that share a name: `_prepare` in `structured.py` and `_prepare` in `CachedEmbeddings` look identical, so the callers list contains a false positive. Type-aware indexes (language servers, compiler symbol databases) resolve the real target and pay off in large codebases.
 
@@ -184,7 +192,7 @@ flowchart TD
     PACK --> GEN[Grounded generation + citations]
 ```
 
-The second diagram is the agentic loop. The trust boundary matters: retrieved text is untrusted data that the controller reads but code, not the model, decides what counts as accepted evidence and when the loop stops.
+The second diagram is the agentic loop. The trust boundary matters: retrieved text is untrusted data, escaped inside its wrapper so it cannot close it. The controller reads it, but code, not the model, decides what counts as accepted evidence and when the loop stops.
 
 ```mermaid
 flowchart LR
@@ -412,8 +420,10 @@ class AgenticRAG:
                     feedback = "Your answer cited labels that are not in the ledger or cited nothing. Cite existing labels."
                     continue
                 score, missing = coverage(question, cited)
-                if score < b.min_coverage and searches < b.max_searches:
+                if score < b.min_coverage:
                     steps.append(StepRecord(step=step, action="answer", note=f"rejected: coverage {score:.2f}, missing {missing}"))
+                    if searches >= b.max_searches:   # no budget left to find the rest: abstain, do not wave it through
+                        return finish("abstained", "insufficient_coverage")
                     feedback = f"Cited evidence does not mention: {', '.join(missing)}. Search for it or abstain."
                     continue
                 steps.append(StepRecord(step=step, action="answer", note=f"accepted: coverage {score:.2f}"))
@@ -425,7 +435,7 @@ class AgenticRAG:
 
 ### The same loop on the agent harness
 
-`RuntimeAgenticRAG` keeps the ledger, the ACL filter, and the gate and deletes the loop. The search tool rebuilds the ledger from the run's event log on every call and returns only the new entries as structured `data`, so the log is the only state: a resumed or replayed run sees exactly the evidence the original run saw. The gate becomes a Definition-of-Done verifier, so a premature answer is rejected through the same `dod_rejected` path as any other agent's, and `INSUFFICIENT_EVIDENCE` is an accepted outcome. Budgets map directly: controller turns become `max_steps`, searches become `max_tool_calls`, a repeated query is caught by the identical-call limit (exact repeats) or the tool itself (the same terms reordered), and two searches without new evidence trip `NO_PROGRESS`.
+`RuntimeAgenticRAG` keeps the ledger, the ACL filter, and the gate and deletes the loop. The search tool rebuilds the ledger from the run's event log on every call and returns only the new entries as structured `data`, so the log is the only state: a resumed or replayed run sees exactly the evidence the original run saw. The gate becomes a Definition-of-Done verifier, alongside Chapter 19's `tool_was_called` check (which counts only successful searches), so a premature answer is rejected through the same `dod_rejected` path as any other agent's, and `INSUFFICIENT_EVIDENCE` is an accepted outcome. Budgets map directly: controller turns become `max_steps`, searches become `max_tool_calls`, a repeated query is caught by the identical-call limit (exact repeats) or the tool itself (the same terms reordered), and two searches without new evidence trip `NO_PROGRESS`.
 
 ```python
 # path: book/projects/examples/ch37/agentic_rag_runtime.py
@@ -452,7 +462,7 @@ from agentkit import (
 )
 from agentkit import Budget as RunBudget
 from aie_core import LLMClient
-from agentic_rag import Budget, EvidenceLedger, LedgerEntry, coverage, normalize_query
+from agentic_rag import Budget, EvidenceLedger, LedgerEntry, coverage, normalize_query, wrap_untrusted
 from corpus import LexicalIndex, Principal
 
 TOOL = "search_evidence"
@@ -484,8 +494,7 @@ def search_tool(index: LexicalIndex, principal: Principal, store: EventStore, bu
                               data={"query": query, "entries": []})
         hits = index.search(query, principal, k=budget.k, exclude=ledger.seen)   # ACL from the caller
         new = ledger.add(ctx.step, query, hits)
-        body = "\n\n".join(f'<untrusted_data source="{e.doc_id}" label="{e.label}" section="{e.section}">\n'
-                           f"{e.text}\n</untrusted_data>" for e in new) or "no new evidence for this query"
+        body = "\n\n".join(wrap_untrusted(e) for e in new) or "no new evidence for this query"
         return ToolOutput(content=body, data={"query": query, "entries": [e.model_dump() for e in new]})
 
     return FunctionTool(
@@ -627,28 +636,37 @@ class CommunitySummary(BaseModel):
 
 ```python
 # path: book/projects/examples/ch37/graphrag.py (excerpt; full file on disk)
-    def match_entities(self, question: str) -> list[str]:
-        """Entity linking for the query: an entity matches when all its name terms occur in it."""
+    def match_entities(self, question: str, principal: Principal | None = None) -> list[str]:
+        """Entity linking for the query: an entity matches when all its name terms occur in it.
+        With a principal, only entities mentioned in at least one chunk the principal can read."""
         q = set(terms(question))
         out = []
         for nid in self.store.nodes():
-            name_terms = set(terms(self.store.node(nid).get("name", nid)))
-            if name_terms and name_terms <= q:
-                out.append(nid)
+            attrs = self.store.node(nid)
+            name_terms = set(terms(attrs.get("name", nid)))
+            if not name_terms or not name_terms <= q:
+                continue
+            if principal is not None and not any(
+                    cid in self.chunks and principal.can_read_chunk(self.chunks[cid]) for cid in attrs.get("mentions", ())):
+                continue
+            out.append(nid)
         return out
 
     def local_query(self, question: str, principal: Principal, hops: int = 1, max_facts: int = 20) -> list[Fact]:
         """Facts in the k-hop neighborhood of entities named in the question, ACL-filtered."""
-        frontier = set(self.match_entities(question))
+        # Walk only edges the principal can read: a hop through a restricted edge would reveal that
+        # the restricted link exists, even if its own fact is filtered out at the end.
+        readable = [(u, v, d) for u, v, d in self.store.edges() if principal.can_read(d["tenant"], d["acl_groups"])]
+        adjacency: dict[str, set[str]] = {}
+        for u, v, _ in readable:
+            adjacency.setdefault(u, set()).add(v)
+            adjacency.setdefault(v, set()).add(u)
+        frontier = set(self.match_entities(question, principal))
         reached = set(frontier)
         for _ in range(hops):
-            frontier = {m for n in frontier for m in self.store.neighbors(n)} - reached
+            frontier = {m for n in frontier for m in adjacency.get(n, ())} - reached
             reached |= frontier
-        facts = [
-            self._fact(u, v, d)
-            for u, v, d in self.store.edges()
-            if u in reached and v in reached and principal.can_read(d["tenant"], d["acl_groups"])
-        ]
+        facts = [self._fact(u, v, d, surface=True) for u, v, d in readable if u in reached and v in reached]
         facts.sort(key=lambda f: (not f.verified, f.source, f.relation, f.target))
         return facts[:max_facts]
 ```
@@ -714,7 +732,8 @@ Navigation filters the catalog by ACL before the model sees it, validates every 
             listing = "\n".join(self._line(nid) for nid in frontier)
             pick = self._ask("toc", question, "Sections:\n" + listing, 2)
             calls += 1
-            picked = [i for i in pick.ids if i in frontier]
+            # unique, still on the frontier, and at most the two the prompt asked for
+            picked = list(dict.fromkeys(i for i in pick.ids if i in frontier))[:2]
             trace.append(NavStep(stage="toc", offered=list(frontier), picked=picked, rejected=[i for i in pick.ids if i not in frontier], reason=pick.reason))
             if not picked:
                 stop = "nothing_relevant"
@@ -1010,13 +1029,13 @@ def estimate(strategy: Strategy, w: Workload, p: Prices, cache: bool = False, ca
 
 **The harness version.** `test_agentic_runtime.py` scripts the same scenarios as tool calls. The multi-hop run answers after two searches and its event log replays identically; the premature answer appears as one `dod_rejected` note whose reason names the missing terms; an exact repeated query ends the run with `REPEATED_ACTION` after one search; a budget of two searches ends with `MAX_TOOL_CALLS`. None of those stops is code in this chapter.
 
-**GraphRAG.** Five fixture chunks produce 15 entities and 16 relations in five extraction calls, one relation flagged unverified (its span, "alerts every hour", is not in the text). Label propagation finds two communities. For an ordinary employee, a local query on the PayBridge Adapter returns only facts sourced from the POS overview, and both summaries are hidden because each mixes in a restricted source. Two hops reach the certificate inventory; one does not.
+**GraphRAG.** Five fixture chunks produce 15 entities and 16 relations in five extraction calls, one relation flagged unverified (its span, "alerts every hour", is not in the text). Label propagation, a simple community-detection algorithm, finds two communities. For an ordinary employee, a local query on the PayBridge Adapter returns only facts sourced from the POS overview, and both summaries are hidden because each mixes in a restricted source. Two hops reach the certificate inventory; one does not.
 
 **TOC navigation.** For the carryover question the catalog step picks only the PTO policy. The stale FAQ's catalog line says "Time off" and shares no terms with the question, so the offline picker never chooses it; a real model might, which is why the catalog shows version and update date and the prompt says to prefer the current document. The section step reads "3. Carryover" whole: two calls, 146 tokens, no index.
 
-**Map-reduce and recursion.** With the test budgets, the corpus splits into 29 pieces and reduces through levels of 5, 2, and 1 for 37 calls; the preflight estimate of 46 is conservative because it assumes every summary fills its output cap. A reader that always recurses is cut off at depth 2 and at its global budget.
+**Map-reduce and recursion.** With the test budgets, the corpus splits into 28 pieces and reduces through levels of 4, 2, and 1 for 35 calls; the preflight estimate of 45 is conservative because it assumes every summary fills its output cap. A reader that always recurses is cut off at depth 2 and at its global budget.
 
-**Code search.** The index covers 220 symbols in 17 modules of `aie_core`. "retry backoff jitter" ranks `RetryPolicy.delay_for` first, and the chunk for `FakeLLM.complete` carries its class header and the module's imports.
+**Code search.** The index covers 224 symbols in 17 modules of `aie_core`. "retry backoff jitter" ranks `RetryPolicy.delay_for` first, and the chunk for `FakeLLM.complete` carries its class header and the module's imports.
 
 ## Production considerations
 
@@ -1024,7 +1043,7 @@ def estimate(strategy: Strategy, w: Workload, p: Prices, cache: bool = False, ca
 
 **Cost.** Track cost per route. GraphRAG's dominant cost is extraction at build time and re-extraction on change; give each build a dry-run estimate (chunks times tokens times price) and a ceiling. Long context's cost depends on cache hit rate per permission scope, so monitor hit rate, not only spend. Agentic loops have heavy-tailed costs; alert on the 99th percentile of searches per question.
 
-**Security.** Every route applies the same ACL rule before evidence reaches a model: retrievers filter chunks, graphs filter edges, navigators filter catalogs, SQL runs under a tenant-scoped read-only role. Derived artifacts (graph summaries, section summaries, image descriptions, map-reduce partials) inherit the most restrictive ACL of their sources; forgetting this is the most common leak in advanced retrieval. Retrieved text, OCR output, and captions are untrusted, so loop tools stay read-only and model outputs are validated by code (Chapter 26).
+**Security.** Every route applies the same ACL rule before evidence reaches a model: retrievers filter chunks, graphs filter edges, navigators filter catalogs, SQL runs under a tenant-scoped read-only role. Derived artifacts (graph summaries, section summaries, image descriptions, map-reduce partials) inherit the most restrictive ACL of their sources, or, where the code carries no ACL (this chapter's map-reduce partials), their input is filtered to what the reader may see first (`corpus_as_one_text(principal)`); forgetting this is the most common leak in advanced retrieval. Retrieved text, OCR output, and captions are untrusted, so loop tools stay read-only and model outputs are validated by code (Chapter 26).
 
 **Operations.** Each pattern adds an index that must track its sources: a graph, summaries, token vectors, a symbol index. Reuse the Chapter 15 machinery: chunk diffs drive deletes and re-extraction, builds are versioned for rollback, and staleness appears in answer metadata. Log route decisions, budget exhaustion, gate rejections, unverified edges, and rejected model-invented ids as structured events; they are the early signals that a pattern is degrading.
 

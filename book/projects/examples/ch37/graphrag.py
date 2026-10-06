@@ -240,6 +240,9 @@ class GraphRAG:
             self.store.add_edge(
                 u, v, relation=rel.relation, chunk_id=chunk.id, doc_id=chunk.doc_id,
                 tenant=chunk.tenant, acl_groups=list(chunk.acl_groups), verified=verified,
+                # the names as this chunk wrote them: a node's display name may come from a chunk
+                # the reader cannot see, so facts render with their own surface names
+                source_name=rel.source.strip(), target_name=rel.target.strip(),
             )
 
     def build(self, chunks: Iterable[Chunk]) -> BuildStats:
@@ -297,28 +300,37 @@ class GraphRAG:
         return self.summaries
 
     # ----------------------------------------------------------------------- querying
-    def match_entities(self, question: str) -> list[str]:
-        """Entity linking for the query: an entity matches when all its name terms occur in it."""
+    def match_entities(self, question: str, principal: Principal | None = None) -> list[str]:
+        """Entity linking for the query: an entity matches when all its name terms occur in it.
+        With a principal, only entities mentioned in at least one chunk the principal can read."""
         q = set(terms(question))
         out = []
         for nid in self.store.nodes():
-            name_terms = set(terms(self.store.node(nid).get("name", nid)))
-            if name_terms and name_terms <= q:
-                out.append(nid)
+            attrs = self.store.node(nid)
+            name_terms = set(terms(attrs.get("name", nid)))
+            if not name_terms or not name_terms <= q:
+                continue
+            if principal is not None and not any(
+                    cid in self.chunks and principal.can_read_chunk(self.chunks[cid]) for cid in attrs.get("mentions", ())):
+                continue
+            out.append(nid)
         return out
 
     def local_query(self, question: str, principal: Principal, hops: int = 1, max_facts: int = 20) -> list[Fact]:
         """Facts in the k-hop neighborhood of entities named in the question, ACL-filtered."""
-        frontier = set(self.match_entities(question))
+        # Walk only edges the principal can read: a hop through a restricted edge would reveal that
+        # the restricted link exists, even if its own fact is filtered out at the end.
+        readable = [(u, v, d) for u, v, d in self.store.edges() if principal.can_read(d["tenant"], d["acl_groups"])]
+        adjacency: dict[str, set[str]] = {}
+        for u, v, _ in readable:
+            adjacency.setdefault(u, set()).add(v)
+            adjacency.setdefault(v, set()).add(u)
+        frontier = set(self.match_entities(question, principal))
         reached = set(frontier)
         for _ in range(hops):
-            frontier = {m for n in frontier for m in self.store.neighbors(n)} - reached
+            frontier = {m for n in frontier for m in adjacency.get(n, ())} - reached
             reached |= frontier
-        facts = [
-            self._fact(u, v, d)
-            for u, v, d in self.store.edges()
-            if u in reached and v in reached and principal.can_read(d["tenant"], d["acl_groups"])
-        ]
+        facts = [self._fact(u, v, d, surface=True) for u, v, d in readable if u in reached and v in reached]
         facts.sort(key=lambda f: (not f.verified, f.source, f.relation, f.target))
         return facts[:max_facts]
 
@@ -352,9 +364,15 @@ class GraphRAG:
         self.stats.llm_calls += 1
         return self.llm.complete(req).text, [cid for cid, _ in partials]
 
-    def _fact(self, u: str, v: str, d: dict[str, Any]) -> Fact:
+    def _fact(self, u: str, v: str, d: dict[str, Any], surface: bool = False) -> Fact:
+        """`surface=True` (local queries) renders the names the edge's own chunk used, since the
+        resolved display name may come from a chunk the reader cannot see. Summaries keep resolved
+        names: they are shown only to readers who can see every source."""
         name = lambda n: self.store.node(n).get("name", n)  # noqa: E731
-        return Fact(source=name(u), relation=d["relation"], target=name(v), chunk_id=d["chunk_id"], doc_id=d["doc_id"], verified=d["verified"])
+        src = d.get("source_name") if surface else None
+        tgt = d.get("target_name") if surface else None
+        return Fact(source=src or name(u), relation=d["relation"], target=tgt or name(v),
+                    chunk_id=d["chunk_id"], doc_id=d["doc_id"], verified=d["verified"])
 
 
 def _squash(text: str) -> str:

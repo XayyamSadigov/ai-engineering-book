@@ -53,6 +53,8 @@ def token_vectors(text: str) -> tuple[list[str], np.ndarray]:
 def pooled_vector(text: str) -> np.ndarray:
     """The single-vector baseline: mean-pool the token vectors, then normalize."""
     _, m = token_vectors(text)
+    if m.shape[0] == 0:          # only stopwords: no direction, score 0 rather than NaN
+        return np.zeros(DIM)
     return _unit(m.mean(axis=0))
 
 

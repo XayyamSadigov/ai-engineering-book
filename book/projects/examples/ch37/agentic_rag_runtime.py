@@ -22,7 +22,7 @@ from agentkit import (
 )
 from agentkit import Budget as RunBudget
 from aie_core import LLMClient
-from agentic_rag import Budget, EvidenceLedger, LedgerEntry, coverage, normalize_query
+from agentic_rag import Budget, EvidenceLedger, LedgerEntry, coverage, normalize_query, wrap_untrusted
 from corpus import LexicalIndex, Principal
 
 TOOL = "search_evidence"
@@ -54,8 +54,7 @@ def search_tool(index: LexicalIndex, principal: Principal, store: EventStore, bu
                               data={"query": query, "entries": []})
         hits = index.search(query, principal, k=budget.k, exclude=ledger.seen)   # ACL from the caller
         new = ledger.add(ctx.step, query, hits)
-        body = "\n\n".join(f'<untrusted_data source="{e.doc_id}" label="{e.label}" section="{e.section}">\n'
-                           f"{e.text}\n</untrusted_data>" for e in new) or "no new evidence for this query"
+        body = "\n\n".join(wrap_untrusted(e) for e in new) or "no new evidence for this query"
         return ToolOutput(content=body, data={"query": query, "entries": [e.model_dump() for e in new]})
 
     return FunctionTool(

@@ -23,7 +23,7 @@ from pydantic import BaseModel, Field
 from aie_core import CompletionRequest, LLMClient, Message, make_llm_client
 from aie_core.llm.structured import complete_structured
 from aie_core.llm.tokens import count_tokens
-from corpus import load_corpus
+from corpus import Principal, load_corpus
 from ragkit import Document, RecursiveChunker, SourceType
 
 
@@ -265,8 +265,12 @@ def extractive_summarizer() -> Callable[[CompletionRequest], str]:
     return handler
 
 
-def corpus_as_one_text() -> str:
-    return "\n\n".join(d.text for d in load_corpus())  # each document starts with its own H1
+def corpus_as_one_text(principal: Principal | None = None) -> str:
+    """The demo's long input. Pass the reader's principal: map-reduce partials carry no access
+    rules of their own, so only documents the reader may see may go in. `None` means the whole
+    corpus, for the offline demo only."""
+    docs = [d for d in load_corpus() if principal is None or principal.can_read_doc(d)]
+    return "\n\n".join(d.text for d in docs)  # each document starts with its own H1
 
 
 def main() -> None:

@@ -156,7 +156,8 @@ class TocNavigator:
             listing = "\n".join(self._line(nid) for nid in frontier)
             pick = self._ask("toc", question, "Sections:\n" + listing, 2)
             calls += 1
-            picked = [i for i in pick.ids if i in frontier]
+            # unique, still on the frontier, and at most the two the prompt asked for
+            picked = list(dict.fromkeys(i for i in pick.ids if i in frontier))[:2]
             trace.append(NavStep(stage="toc", offered=list(frontier), picked=picked, rejected=[i for i in pick.ids if i not in frontier], reason=pick.reason))
             if not picked:
                 stop = "nothing_relevant"

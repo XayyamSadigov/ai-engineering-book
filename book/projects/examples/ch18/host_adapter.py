@@ -222,7 +222,9 @@ class McpHost:
             span.set_attribute("is_error", is_error)
         # Tool output is data from another system. Mark it so downstream guardrails
         # (Chapter 27) and the system prompt can treat it as untrusted.
-        wrapped = f'<tool_result server="{server_id}" tool="{tool}" error="{str(is_error).lower()}">\n{text}\n</tool_result>'
+        # Escape the server's text so it cannot close the wrapper and pose as host instructions.
+        safe = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        wrapped = f'<tool_result server="{server_id}" tool="{tool}" error="{str(is_error).lower()}">\n{safe}\n</tool_result>'
         return Message.tool(call.id, wrapped)
 
     def run_turn(self, llm: LLMClient, principal: Principal, messages: list[Message], max_tool_rounds: int = 3) -> Completion:

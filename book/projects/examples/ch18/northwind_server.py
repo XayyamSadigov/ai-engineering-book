@@ -118,6 +118,8 @@ class McpStyleServer:
     # ------------------------------------------------------------ dispatch
     def handle(self, msg: dict[str, Any]) -> dict[str, Any] | None:
         """Handle one decoded message. Returns a response, or None for notifications."""
+        if rpc.is_response(msg):
+            return None  # a response sent to us (e.g. to a server request) is never answered
         method = msg.get("method")
         if not isinstance(method, str):
             return rpc.error(msg.get("id"), rpc.JsonRpcError(rpc.INVALID_REQUEST, "missing method"))

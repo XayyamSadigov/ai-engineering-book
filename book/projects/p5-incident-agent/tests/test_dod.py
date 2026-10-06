@@ -70,3 +70,27 @@ def test_round_score_orders_dod_failures_below_any_pass():
     assert round_score(1, None) < round_score(0, 0.0)
     assert round_score(4, None) < round_score(2, None)
     assert round_score(0, 0.75) < round_score(0, 1.0)
+
+
+def test_claims_cannot_hide_in_tables_duplicate_headings_or_lowercase_sentences():
+    table = GOOD.replace("- 05:15 UTC migration applied [deploy:CHG-2026-0907]",
+                         "| Time | Event |\n|---|---|\n| 05:15 | migration applied [deploy:CHG-2026-0907] |\n"
+                         "| 05:20 | vendor outage confirmed |")
+    assert codes(table) == ["uncited_claim"]
+    duplicate = GOOD.replace("## Summary\n", "## Summary\nEverything is the vendor's fault.\n## Summary\n", 1)
+    assert codes(duplicate) == ["uncited_claim"]
+    lowercase = GOOD.replace("[deploy:CHG-2026-0907].\n## Impact", "[deploy:CHG-2026-0907]. the vendor will refund us.\n## Impact")
+    assert codes(lowercase) == ["uncited_claim"]
+
+
+def test_two_runbooks_are_ambiguous():
+    evidence = EVIDENCE | {"it-database-failover-runbook"}
+    report = GOOD.replace("Follow [it-incident-response-runbook].",
+                          "Follow [it-incident-response-runbook] or [it-database-failover-runbook].")
+    assert codes(report, evidence) == ["runbook_ambiguous"]
+
+
+def test_abbreviations_and_trailing_citations_do_not_split_claims():
+    assert claims("Latency rose, e.g. p95 hit 2.4 s [metric:p95].") == ["Latency rose, e.g. p95 hit 2.4 s [metric:p95]."]
+    assert claims("Scans rose vs. baseline [metric:scans].") == ["Scans rose vs. baseline [metric:scans]."]
+    assert claims("The migration ran at 05:15. [deploy:42]") == ["The migration ran at 05:15. [deploy:42]"]

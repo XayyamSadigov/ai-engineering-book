@@ -65,18 +65,25 @@ def empty_evidence(outcome: StepOutcome, remaining: list[PlanStep]) -> str | Non
     return None
 
 
-def validate_plan(plan: Plan, allowed_tools: set[str]) -> list[str]:
+def validate_plan(plan: Plan, allowed_tools: set[str], completed: set[str] = frozenset()) -> list[str]:
+    """Steps run in list order, so a dependency must be a completed step or an earlier one.
+    That one rule also rules out cycles and self-dependencies."""
     errors: list[str] = []
     ids = [s.id for s in plan.steps]
     if len(set(ids)) != len(ids):
         errors.append("step ids must be unique")
+    before = set(completed)
     for s in plan.steps:
         unknown = sorted(set(s.tools) - allowed_tools)
         if unknown:
             errors.append(f"{s.id} uses unknown tools {unknown}; allowed: {sorted(allowed_tools)}")
-        missing = [d for d in s.depends_on if d not in ids]
+        missing = [d for d in s.depends_on if d not in ids and d not in before]
         if missing:
             errors.append(f"{s.id} depends on unknown steps {missing}")
+        later = [d for d in s.depends_on if d in ids and d not in before]
+        if later:
+            errors.append(f"{s.id} depends on {later}, which do not run before it")
+        before.add(s.id)
     return errors
 
 
@@ -113,11 +120,12 @@ class PlannerExecutor:
         if deviation:
             user += f"\n\nDeviation detected: {deviation}\nRevise the remaining plan."
         plan: Any = ask_structured(self.llm, "planner", system, user, Plan)
-        errors = validate_plan(plan, set(self._tools))
+        completed = {o.step.id for o in done}
+        errors = validate_plan(plan, set(self._tools), completed)
         if errors:   # one repair round with the concrete errors, then give up
             plan = ask_structured(self.llm, "planner", system, user + "\n\nYour plan was invalid: "
                                   + "; ".join(errors), Plan)
-            errors = validate_plan(plan, set(self._tools))
+            errors = validate_plan(plan, set(self._tools), completed)
             if errors:
                 raise MalformedResponseError("planner produced an invalid plan: " + "; ".join(errors))
         return plan

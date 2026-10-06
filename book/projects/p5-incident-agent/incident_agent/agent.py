@@ -32,7 +32,7 @@ from .domain.dod import check_report, feedback
 from .domain.models import Evidence, Investigation, Plan, PlanStep, RoundRecord, Status, StepRecord
 from .domain.report import REQUIRED_SECTIONS
 from .judge import ReportJudge
-from .tools import publish_tool, research_tools
+from .tools import publish_tool, research_tools, untrusted
 
 
 def role(name: str, text: str) -> str:
@@ -144,7 +144,7 @@ class IncidentResearchAgent:
     def validate(self, plan: Plan, inv: Investigation) -> list[str]:
         errors: list[str] = []
         done_ids = {s.step.id for s in inv.steps}
-        done_keys = {(s.step.tool, s.step.target) for s in inv.steps}
+        done_keys = {(s.step.tool, s.step.target) for s in inv.steps if s.ok}   # a failed step may be retried
         ids = [s.id for s in plan.steps]
         if len(set(ids)) != len(ids):
             errors.append("step ids must be unique")
@@ -185,7 +185,7 @@ class IncidentResearchAgent:
     # ------------------------------------------------------- evaluator-optimizer
     def write(self, inv: Investigation, previous: str | None, notes: list[str]) -> str:
         a = inv.alert
-        ledger = "\n".join(f"- [{e.id}] ({e.kind}) {e.title}: {e.text}" for e in inv.evidence.values())
+        ledger = "\n".join(f"- [{e.id}] ({e.kind}) {e.title}: {untrusted(e.id, e.text)}" for e in inv.evidence.values())
         findings = "\n".join(f"- {s.step.id} {s.step.tool}({s.step.target}): {s.finding}" for s in inv.steps)
         user = (f"Alert:\n- id: {a.id}\n- service: {a.service}\n- fired_at: {a.fired_at:%Y-%m-%d %H:%M} UTC\n"
                 f"- summary: {a.summary}\n\nEvidence ledger:\n{ledger}\n\nStep findings:\n{findings}")

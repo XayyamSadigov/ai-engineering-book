@@ -43,6 +43,9 @@ def check_report(report: str, evidence_ids: Iterable[str], runbook_catalog: Iter
                                                 f"retrieved runbooks"))
         if not runbooks:
             problems.append(Problem(code="runbook_missing", message="recommend exactly one runbook by its [id]"))
+        elif len(set(runbooks)) > 1:
+            problems.append(Problem(code="runbook_ambiguous",
+                                    message=f"recommend exactly one runbook, not {sorted(set(runbooks))}"))
         for n in runbooks:
             if n not in evidence:
                 problems.append(Problem(code="runbook_not_retrieved",

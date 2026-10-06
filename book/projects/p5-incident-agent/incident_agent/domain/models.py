@@ -54,7 +54,7 @@ class StepRecord(BaseModel):
 
 class Problem(BaseModel):
     code: Literal["missing_section", "uncited_claim", "unknown_citation", "runbook_missing",
-                  "runbook_not_in_catalog", "runbook_not_retrieved"]
+                  "runbook_not_in_catalog", "runbook_not_retrieved", "runbook_ambiguous"]
     message: str
 
 

@@ -93,3 +93,18 @@ def test_users_cannot_investigate_another_tenants_alerts(service):
         service.investigate(MAIN, "oncall-retail")
     with pytest.raises(NotAllowed):
         service.investigate(MAIN, "mallory")
+
+
+def test_a_failed_step_may_be_retried_but_a_successful_one_may_not(service, kb, telemetry):
+    from agentkit import InMemoryEventStore
+    from incident_agent.agent import IncidentResearchAgent
+    from incident_agent.domain.models import Plan, PlanStep
+
+    inv = service.investigate(MAIN, "oncall-logistics")
+    agent = IncidentResearchAgent(scripted_llm(), None, kb, telemetry, event_store=InMemoryEventStore())
+    done = inv.steps[0]
+    retry = Plan(steps=[PlanStep(id="s99", tool=done.step.tool, target=done.step.target, objective="Try that again"),
+                        PlanStep(id="s98", tool="search_runbooks", target="latency", objective="Find a runbook")])
+    assert any("repeat completed work" in e for e in agent.validate(retry, inv))
+    done.ok = False
+    assert not any("repeat completed work" in e for e in agent.validate(retry, inv))

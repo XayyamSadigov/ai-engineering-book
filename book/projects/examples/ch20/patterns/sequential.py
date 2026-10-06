@@ -82,6 +82,9 @@ def run_chain(steps: Sequence[Step], state: State, ctx: ChainContext | None = No
             return PatternResult("sequential", False, None, ctx.runs, detail=f"gate after {step.name}: {problem}",
                                  data={"path": path, "state": state})
     answer = state.get(answer_key)
+    if answer is None:
+        return PatternResult("sequential", False, None, ctx.runs, detail=f"chain produced no {answer_key!r}",
+                             data={"path": path, "state": state})
     return PatternResult("sequential", True, answer if isinstance(answer, str) else str(answer), ctx.runs,
                          detail=" -> ".join(path), data={"path": path, "state": state})
 

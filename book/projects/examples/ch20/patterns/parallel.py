@@ -34,7 +34,7 @@ Require = Literal["all", "quorum", "any"]
 
 
 def _enough(ok: int, total: int, require: Require) -> bool:
-    return {"all": ok == total, "quorum": ok * 2 > total, "any": ok >= 1}[require]
+    return total > 0 and {"all": ok == total, "quorum": ok * 2 > total, "any": ok >= 1}[require]
 
 
 def fan_out(llm: LLMClient, request: str, branches: Sequence[Branch], *, require: Require = "quorum",

@@ -27,6 +27,12 @@ def _obj(props: dict[str, Any], required: list[str]) -> dict[str, Any]:
     return {"type": "object", "properties": props, "required": required, "additionalProperties": False}
 
 
+def untrusted(source: str, text: str) -> str:
+    """Wrap retrieved text as data. Escaping keeps the text from closing the wrapper early."""
+    safe = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    return f'<untrusted_data source="{source}">{safe}</untrusted_data>'
+
+
 def _evidence_output(lines: list[str], items: list[Evidence], extra: dict[str, Any] | None = None) -> ToolOutput:
     return ToolOutput(content="\n".join(lines) or "no results",
                       data={"sources": [e.model_dump() for e in items], **(extra or {})})
@@ -40,8 +46,7 @@ def research_tools(kb: KnowledgeBase, telemetry: Telemetry, alert: Alert, *, k: 
             hits = kb.search(kind, query, ctx.principal, k)         # ACL from the trusted principal
             lines, items = [], []
             for h in hits:
-                lines.append(f"[{h.doc_id}] {h.title} > {h.section}\n<untrusted_data source=\"{h.doc_id}\">"
-                             f"{h.text[:600]}</untrusted_data>")
+                lines.append(f"[{h.doc_id}] {h.title} > {h.section}\n{untrusted(h.doc_id, h.text[:600])}")
                 items.append(Evidence(id=h.doc_id, kind=kind, title=h.title, text=h.text[:600]))  # type: ignore[arg-type]
             return _evidence_output(lines, items)
         return run

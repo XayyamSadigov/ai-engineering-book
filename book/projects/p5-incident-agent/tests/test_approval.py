@@ -41,9 +41,11 @@ def test_rejection_posts_nothing(service):
 
 def test_only_oncall_staff_of_the_same_tenant_can_approve(service):
     inv = service.investigate(MAIN, "oncall-logistics")
-    for user in ("oncall-retail", "analyst-logistics", "mallory"):
+    for user in ("analyst-logistics", "mallory"):
         with pytest.raises(NotAllowed):
             service.decide(inv.id, user, approve=True)
+    with pytest.raises(KeyError):   # another tenant cannot even learn that the investigation exists
+        service.decide(inv.id, "oncall-retail", approve=True)
     assert service.get(inv.id).status is Status.AWAITING_APPROVAL
 
 

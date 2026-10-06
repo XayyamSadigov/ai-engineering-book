@@ -106,9 +106,11 @@ class IncidentService:
     def decide(self, inv_id: str, user: str, *, approve: bool, reason: str = "") -> Investigation:
         reviewer = self.principal(user)
         inv = self.get(inv_id)
+        if reviewer["tenant"] != inv.alert.tenant:   # another tenant's investigation looks like an unknown id
+            raise KeyError(inv_id)
         if inv.status is not Status.AWAITING_APPROVAL or inv.publish_run_id is None:
             raise InvalidState(f"investigation {inv_id} is {inv.status.value}; only awaiting_approval can be decided")
-        if reviewer["tenant"] != inv.alert.tenant or "it-oncall" not in reviewer["groups"]:
+        if "it-oncall" not in reviewer["groups"]:
             raise NotAllowed(f"{user} may not approve reports for tenant {inv.alert.tenant}")
         run = self.publisher.decide(inv.publish_run_id, approve=approve, reviewer=user, reason=reason)
         inv.decided_by = user

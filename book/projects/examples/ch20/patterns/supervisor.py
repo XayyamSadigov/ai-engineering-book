@@ -50,6 +50,10 @@ class SpawnBudget:
             self.spawned += 1
             return None
 
+    def reset(self) -> None:
+        with self._lock:
+            self.spawned = 0
+
 
 @dataclass
 class LedgerEntry:
@@ -90,9 +94,13 @@ class Supervisor:
         self.max_delegations = max_delegations_per_member
         self.ledger: list[LedgerEntry] = []
         self.child_runs: list[RunResult] = []
-        for m in members:                 # one tree, one spawn budget, one event store
+        self._share(self.spawn, self.store)   # one tree, one spawn budget, one event store
+
+    def _share(self, spawn: SpawnBudget, store: EventStore) -> None:
+        for m in self.members.values():   # recursive, so grandchildren share them too
             if isinstance(m, Supervisor):
-                m.spawn, m.store = self.spawn, self.store
+                m.spawn, m.store = spawn, store
+                m._share(spawn, store)
 
     # -------------------------------------------------------------- delegation
     def _delegate_tool(self, member: Member) -> FunctionTool:
@@ -139,6 +147,8 @@ class Supervisor:
                           budget=self.budget, dod=self.dod, store=self.store, principal=principal)
 
     def run(self, request: str, *, run_id: str | None = None, principal: dict[str, Any] | None = None) -> PatternResult:
+        self.ledger, self.child_runs = [], []    # limits and ledger are per run, not per instance
+        self.spawn.reset()
         root = self.runtime(principal).run(request, run_id=run_id or self.name)
         return PatternResult("supervisor", root.ok, root.final_answer, [root, *self.child_runs],
                              detail=root.stop_reason.value if root.stop_reason else "",

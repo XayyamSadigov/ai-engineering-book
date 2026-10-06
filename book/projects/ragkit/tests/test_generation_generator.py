@@ -143,6 +143,7 @@ def test_compromised_model_echoing_the_injection_is_repaired():
     env = result.envelope
     assert "partners@" not in env.text and "Wednesdays" in env.text
     assert env.status == "partial"
+    assert env.action == "answer_with_caveat" and env.notices  # a repaired answer is never shown as complete
 
 
 def test_escalation_topics_route_to_humans():

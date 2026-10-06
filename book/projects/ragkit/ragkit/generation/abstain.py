@@ -114,6 +114,8 @@ def decide(packed: PackedEvidence, report: ValidationReport, policy: AbstentionP
         reasons.append("partial")
         if answer.missing_info:
             notices.append("Not covered by the available documents: " + "; ".join(answer.missing_info))
+        else:
+            notices.append("This answer is incomplete: parts could not be confirmed from the available documents.")
     if "stale_source_preferred" in report.codes():
         reasons.append("stale_source")
         notices.append("A newer document may change part of this answer.")

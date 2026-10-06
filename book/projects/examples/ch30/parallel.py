@@ -75,11 +75,23 @@ async def fan_out(steps: Mapping[str, Step], *, deadline_s: float, max_concurren
             return await call()
 
     tasks = {name: asyncio.create_task(run(name, step), name=name) for name, step in steps.items()}
-    done, pending = await asyncio.wait(tasks.values(), timeout=max(0.0, end - loop.time()))
-    for task in pending:
-        task.cancel()  # propagate cancellation: a stopped HTTP call stops costing
-    if pending:
-        await asyncio.gather(*pending, return_exceptions=True)
+    required = {tasks[n] for n, s in steps.items() if s.required}
+    pending: set[asyncio.Task[Any]] = set(tasks.values())
+    try:
+        while pending:
+            done, pending = await asyncio.wait(pending, timeout=max(0.0, end - loop.time()),
+                                               return_when=asyncio.FIRST_EXCEPTION)
+            if not done:
+                break                                          # the deadline passed
+            if any(t in required and not t.cancelled() and t.exception() is not None for t in done):
+                break                                          # a required step failed: stop the rest now
+    finally:
+        # Runs on deadline, on a required failure, and when the caller itself is cancelled (client
+        # disconnect): a stopped HTTP call stops costing, and nothing outlives the request.
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
     for name, task in tasks.items():
         if task in pending or task.cancelled():
             out.timed_out.append(name)
@@ -165,6 +177,7 @@ class MicroBatcher(Generic[T, R]):
         self._pending: list[tuple[T, asyncio.Future[R]]] = []
         self._timer: asyncio.TimerHandle | None = None
         self.batches: list[int] = []  # sizes of flushed batches, for tests and metrics
+        self._tasks: set[asyncio.Task[None]] = set()
 
     async def submit(self, item: T) -> R:
         loop = asyncio.get_running_loop()
@@ -184,7 +197,9 @@ class MicroBatcher(Generic[T, R]):
             return
         batch, self._pending = self._pending, []
         self.batches.append(len(batch))
-        asyncio.get_running_loop().create_task(self._run(batch))
+        task = asyncio.get_running_loop().create_task(self._run(batch))
+        self._tasks.add(task)                      # keep a reference: the loop holds tasks only weakly
+        task.add_done_callback(self._tasks.discard)
 
     async def _run(self, batch: list[tuple[T, asyncio.Future[R]]]) -> None:
         try:

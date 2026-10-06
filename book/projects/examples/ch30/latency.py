@@ -144,7 +144,7 @@ def percentile(values: list[float], q: float) -> float:
     if not values:
         return math.nan
     ordered = sorted(values)
-    rank = max(1, math.ceil(q / 100 * len(ordered)))
+    rank = max(1, math.ceil(round(q * len(ordered) / 100, 9)))   # round: 99.9% of 1000 must be 999, not 1000
     return ordered[min(rank, len(ordered)) - 1]
 
 
@@ -225,8 +225,10 @@ class LatencyTracker:
         if request_id is None or stage is None or end is None:
             return  # unattributed or unfinished spans are ignored, not guessed
         self._timings[str(request_id)].append(StageTiming(str(request_id), stage, start, float(end)))
-        if "first_token_s" in attrs:
-            self._first_token[str(request_id)] = float(attrs["first_token_s"])
+        if "first_token_s" in attrs:   # the earliest first token wins, so a retry cannot hide an earlier stream
+            first = float(attrs["first_token_s"])
+            prev = self._first_token.get(str(request_id))
+            self._first_token[str(request_id)] = first if prev is None else min(prev, first)
 
     def record_all(self, spans: Iterable[Span | Mapping[str, Any]]) -> None:
         for s in spans:
@@ -238,10 +240,23 @@ class LatencyTracker:
         violations: list[Violation] = []
         budgets = {s.name: s.budget_ms for s in self.budget.stages}
         for request_id, timings in self._timings.items():
-            # A stage may run several times (retries, multiple tool calls): sum its wall time.
-            stage_ms: dict[str, float] = defaultdict(float)
+            # A stage may run several times (retries, multiple tool calls): count its wall time once,
+            # merging overlapping runs, so two parallel 500 ms calls are 500 ms, not 1000.
+            stage_ms: dict[str, float] = {}
+            by_stage: dict[str, list[StageTiming]] = defaultdict(list)
             for t in timings:
-                stage_ms[t.stage] += t.duration_ms
+                by_stage[t.stage].append(t)
+            for stage, runs in by_stage.items():
+                total, cur_start, cur_end = 0.0, None, None
+                for t in sorted(runs, key=lambda r: r.start_s):
+                    if cur_end is None or t.start_s > cur_end:
+                        if cur_end is not None:
+                            total += cur_end - cur_start
+                        cur_start, cur_end = t.start_s, t.end_s
+                    else:
+                        cur_end = max(cur_end, t.end_s)
+                total += (cur_end - cur_start) if cur_end is not None else 0.0
+                stage_ms[stage] = total * 1000
             for stage, ms in stage_ms.items():
                 per_stage[stage].append(ms)
                 if stage in budgets and ms > budgets[stage]:

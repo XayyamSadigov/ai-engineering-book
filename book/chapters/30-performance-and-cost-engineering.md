@@ -1,12 +1,12 @@
 # Chapter 30 — Performance and Cost Engineering
 
-After this chapter you will be able to take apart where the time in an AI request goes and set a latency budget for each stage that adds up to the service-level objective. You will be able to say which tokens you are paying for and why, and design caches whose keys cannot leak data across tenants or serve stale answers. You will build a cost model whose unit is the successful task rather than the model call, and enforce per-tenant spend limits that degrade service gracefully before they block it. The code lives in `book/projects/examples/ch30/`: a latency budget and span-based tracker, five cache layers with a key linter, a `CostModel` with scenario comparison, monthly projection and chargeback from trace files, a spend guard that wraps the model gateway, and an asyncio fan-out helper with prefetching and micro-batching. Everything builds on `aie_core` (Chapter 3) and runs offline.
+After this chapter you will be able to take apart where the time in an AI request goes and set a latency budget for each stage that adds up to the service-level objective. You will be able to say which tokens you are paying for and why, and design caches whose keys cannot leak data across tenants or serve stale answers. You will build a cost model whose unit is the successful task rather than the model call, and enforce per-tenant spend limits that degrade service gracefully before they block it. The code lives in `book/projects/examples/ch30/`: a latency budget and span-based tracker, four scoped cache layers (embedding, retrieval, response, semantic) plus a generic TTL cache and a key linter; a `CostModel` with scenario comparison, monthly projection and chargeback from trace files, a spend guard that wraps the model gateway, and an asyncio fan-out helper with prefetching and micro-batching. Everything builds on `aie_core` (Chapter 3) and runs offline.
 
 ## Why this matters
 
-A Northwind Assist answer that takes eleven seconds has failed even when correct; the employee has already asked a colleague. An answer costing four cents is fine until it runs 6,000 times a day across two tenants and finance asks why logistics pays for retail's experiments. Performance and cost are requirements with numbers, met by construction or missed by accident.
+A Northwind Assist answer that takes eleven seconds has failed even when correct; the employee has already asked a colleague. An answer costing four cents is fine until it runs 6,000 times a day across two tenants and finance asks why logistics pays for retail's experiments. Performance and cost are requirements with numbers, and a system meets them only if it is designed to.
 
-AI systems make this harder than ordinary services in three ways. First, cost and latency scale with content rather than request count. A conventional endpoint costs roughly the same whether the request body says "hello" or quotes a contract; a model call costs in proportion to the tokens in and out, and its latency grows with both. A product manager's request to "include a bit more context" is a capacity change. Second, the expensive component is probabilistic. A request can fail validation and need a retry, an agent can take twelve steps instead of three, and a cheap model can be wrong often enough that its savings disappear into human review. So the honest unit is not "a call" but "a task that succeeded", and the gap between those two units is where most budget surprises live. Third, the obvious optimizations have correctness hazards that ordinary caching does not. A response cache keyed on the question alone will happily serve an HR-only answer to a warehouse clerk. A semantic cache with a loose threshold answers a question nobody asked.
+AI systems make this harder than ordinary services in three ways. First, cost and latency scale with content rather than request count. A conventional endpoint costs roughly the same whether the request body says "hello" or quotes a contract; a model call costs in proportion to the tokens in and out, and its latency grows with both. A product manager's request to "include a bit more context" is a capacity change. Second, the expensive component is probabilistic. A request can fail validation and need a retry, an agent can take twelve steps instead of three, and a cheap model can be wrong often enough that its savings disappear into human review. So the honest unit is not "a call" but "a task that succeeded", and the gap between those two units is where most budget surprises live. Third, the obvious optimizations have correctness hazards that ordinary caching does not. A response cache keyed on the question alone will happily serve an HR-only answer to a warehouse clerk. A semantic cache, which reuses an answer for any sufficiently similar question, will with a loose threshold answer a question nobody asked.
 
 This chapter gives you the anatomy, the budgets, the caches with their keys, the cost model, and the controls. It also gives you an order in which to apply them, because the most common waste in this area is engineers building a semantic cache for a workload whose real problem is an unbounded output length.
 
@@ -16,7 +16,7 @@ This chapter gives you the anatomy, the budgets, the caches with their keys, the
 
 Latency adds up. Each stage on the critical path (the chain of steps that must happen one after another before the user sees something) contributes its time, and the only ways to shorten the total are to make a stage faster, take it off the critical path by running it in parallel or after the response, or remove it. The user feels two sums: the time to first token, which covers every stage before the first streamed word, and the time to completion. A latency budget is a statement of how much of each sum each stage may use.
 
-Cost multiplies. Tokens per call times calls per attempt times one plus the retry rate, plus the fixed fees per attempt, divided by the fraction of attempts that succeed. Because the terms multiply, a modest change in any factor moves the total: halving context halves the largest term, a 20-step agent loop multiplies everything by 20, and a success rate falling from 0.9 to 0.6 raises the cost of every success by half without changing a single price.
+Cost multiplies. The cost of one successful task is roughly the token cost per call, times the calls per attempt, times one plus the retry rate, plus fixed fees per attempt, all divided by the fraction of attempts that succeed. Because the terms multiply, a modest change in any factor moves the total: halving context halves the largest term, a 20-step agent loop multiplies everything by 20, and a success rate falling from 0.9 to 0.6 raises the cost of every success by half without changing a single price.
 
 Underneath sit two book-wide models: context is a limited resource, so trimmed tokens are the cheapest saving in both cost and latency (Chapter 5); and production AI is a systems-engineering problem, solved here with budgets, deadlines, caches and attribution.
 
@@ -31,7 +31,7 @@ Before you can budget latency you need to know where it goes. A Northwind Assist
 - **Auth and policy.** Token validation and tenant resolution; small and constant.
 - **Retrieval.** Query embedding, lexical and vector search, ACL filtering, fusion. Sensitive to index size, filter selectivity and cold caches.
 - **Reranking.** A cross-encoder over the candidates, typically the most expensive retrieval step per request, proportional to the number of candidates scored.
-- **Prefill and time to first token (TTFT).** The model processes the whole prompt before emitting anything. Prefill cost grows with input length, so a 9,000-token prompt has a noticeably later first token than a 4,500-token one. Provider prompt caching shortens prefill for a repeated prefix.
+- **Prefill and time to first token (TTFT).** The model processes the whole prompt before emitting anything. Prefill cost grows with input length, so a 9,000-token prompt has a noticeably later first token than a 4,500-token one. Provider prompt caching, the provider's reuse of its prefill work for a prompt beginning it has recently processed, shortens prefill for a repeated prefix (see Caching layers below).
 - **Decode and time per output token (TPOT).** Generation is sequential: one token per step per sequence. Completion time after the first token is roughly the output length times TPOT. This is why output length is the single largest latency lever for long answers.
 - **Tools.** Each tool call is a network round trip to some other system, plus a further model call to read the result. In an agent loop the model, tool, model, tool rhythm puts every step on the critical path.
 - **Validation and persistence.** Schema and citation checks, guardrails, the database write; fast unless a guardrail is a model call.
@@ -45,17 +45,17 @@ TTFT_seen_by_user ≈ network + queue + pre-model stages + model TTFT
 
 Worked example, all numbers illustrative: with TPOT of 15 ms, a 300-token answer decodes in 4.5 seconds and a 600-token answer in 9 seconds. Against Northwind's 8-second p95 completion target, the 600-token answer has failed before retrieval has spent a millisecond. Prefill and decode mechanics, and why decode is memory-bandwidth bound, belong to Chapter 34; what matters here is that output tokens cost time linearly and you control their number with `max_tokens` and with the answer format you ask for.
 
-Users feel p95 and p99, and tails have specific causes: a cold cache, a reranker batch that waited, a slow provider minute, a retry. Measure each stage as a distribution, never a mean.
+Users feel the tail: p95 and p99, the latencies that the slowest 5 percent and 1 percent of requests exceed. Tails have specific causes: a cold cache, a reranker batch that waited, a slow provider minute, a retry. Measure each stage as a distribution, never a mean.
 
 ### Latency budgets
 
 A latency budget allocates an end-to-end objective across stages. No single stage sees the whole request: if retrieval takes six seconds at p95 against an eight-second target, no downstream model choice can compensate, and a budget surfaces that in design review rather than in an incident. It gives each stage owner a number and the code a timeout.
 
-Build a budget in four moves. Start from the objectives: Northwind's are p95 TTFT under 2 seconds and p95 completion under 8 seconds. Mark which stages sit before the first token, because they must fit inside the TTFT target as well as the total. Hold back a reserve, typically 5 to 10 percent, for network jitter and the one retry you are willing to pay for. Then split the rest by measured need, not by guesswork.
+Build a budget in four moves. Start from the objectives: Northwind's are p95 TTFT under 2 seconds and p95 completion under 8 seconds. Mark which stages sit before the first token, because they must fit inside the TTFT target as well as the total. Hold back a reserve, typically 5 to 10 percent, for network jitter and the one retry you are willing to pay for. Then split the rest by measured need. The chapter's demo gives Northwind auth 100 ms, retrieval 600, reranking 300, generation 6,200, persistence 300 and validation 100, plus a 400 ms (5 percent) reserve: 8,000 ms in total, with the three stages before the first token using 1,000 ms of the 2,000 ms TTFT target. Chapter 28's starting plan gave retrieval 1.5 s and reranking 0.8 s; measurements are what should move numbers like these.
 
 Deriving budgets from measurements has a subtlety. Summing per-stage p95s overstates the end-to-end p95, since stages rarely all hit their tails on the same request. That makes the sum a safe, conservative check: if the stage p95s fit, the end to end will. If they do not fit, the answer is never to hand out budgets the stages cannot meet. Make a stage faster, move it off the critical path, or renegotiate the target. `LatencyBudget.from_measurements` refuses an infeasible split for exactly this reason.
 
-Enforce the budget twice. At run time, each stage gets `min(its budget, time remaining)` as its timeout, and the remaining time propagates downstream so a slow stage fails into retry or a degraded mode instead of hanging (Chapter 3). Offline, audit it from traces: group spans by request, compute per-stage percentiles, count violations, and look first at the stage with the most. Measure end to end as wall clock, since parallel stages overlap.
+Enforce the budget twice. At run time, each stage gets `min(its budget, time remaining)` as its timeout, and the remaining time propagates downstream so a slow stage fails into retry or a degraded mode instead of hanging (Chapter 3 for the gateway's deadline, Chapter 29 for carrying it across services). Offline, audit it from traces: group spans by request, compute per-stage percentiles, count violations, and look first at the stage with the most. Measure end to end as wall clock, since parallel stages overlap.
 
 ### Token budgets
 
@@ -63,13 +63,13 @@ Tokens are the unit both latency and cost are made of, so budgeting them is the 
 
 There are three levels of token budget. Per section within one prompt: system instructions, tool definitions, history, evidence, and an output reserve each get a cap, and the context builder of Chapter 5 enforces it so a long document cannot silently crowd out the instructions. Per request: `max_tokens` caps output, and the prompt asks for an answer format sized to the need (three sentences and citations, not an essay). Per task: an agent or chain making several calls gets a cumulative cap, because per-request limits do not stop a loop of forty modest calls. `TaskTokenBudget` in this chapter's code charges each step's usage and refuses a step the remaining budget cannot cover, so the loop stops with a partial result rather than an overrun.
 
-The fleet arithmetic is what makes token discipline a business concern. Northwind Assist answers about 6,000 questions a day (Chapter 35, Case 1). One thousand extra input tokens per answer is 6 million tokens a day, 180 million a month, or about 360 USD a month at the illustrative input price, for a change that might look like "add two more chunks". On the source book's example workload of 259,200 requests a day, the same thousand tokens is 259 million tokens a day. Every per-request choice is multiplied by volume; make the multiplication explicit before the change ships.
+The fleet arithmetic is what makes token discipline a business concern. Northwind Assist answers about 6,000 questions a day (Chapter 35, Case 1). One thousand extra input tokens per answer is 6 million tokens a day, 180 million a month, or about 360 USD a month at the illustrative input price, for a change that might look like "add two more chunks". At a busier 3 requests per second around the clock (259,200 requests a day), the same thousand tokens is 259 million tokens a day, about 520 USD a day at the same illustrative price. Every per-request choice is multiplied by volume; make the multiplication explicit before the change ships.
 
 More context is also not free in quality. Additional retrieved chunks add distractors, push high-value evidence away from where the model attends best, and leave less room for the answer. Trimming context frequently improves the success rate, which lowers cost per successful task twice.
 
 ### Caching layers and their correctness keys
 
-A cache returns a value computed for one input as the value for another input it considers equal, so its correctness lives entirely in the key. The rule: the key includes every factor that changes the correct value, and nothing that does not. Missing a factor leaks or serves stale data. Including a per-request factor (a timestamp, a request id) makes every lookup a miss.
+A cache returns a value computed for one input as the value for another input it considers equal, so its correctness lives entirely in the key. The rule: the key includes every factor that changes the correct value, and nothing that does not. Missing a factor leaks or serves stale data. Including a per-request factor (a timestamp, a request id) makes every lookup a miss and drives the hit rate, the fraction of lookups answered from the cache, to zero.
 
 An AI request path has six cacheable layers, and they differ sharply in value and risk:
 
@@ -82,7 +82,9 @@ An AI request path has six cacheable layers, and they differ sharply in value an
 | Response | full request to completion | request hash, model, tenant, ACL scope, prompt version, index version | personalization and permissions not in the prompt |
 | Semantic | similar question to answer | embedding, tenant, ACL scope, versions, TTL | answering a different question; poisoning |
 
-**Prompt prefix caching** is the provider's or engine's reuse of prefill for a prefix it has recently seen. Your code does not manage it; your prompt layout earns it. Stable content goes first and byte-identical: system prompt, tool definitions, shared reference material; then tenant context; then the volatile question and fresh evidence (Chapters 5 and 34). Measure it with `Usage.cached_input_tokens`, which the gateway records on every span. The economics depend on the provider's terms. Some charge a premium to write a prefix into the cache and a steep discount to read it; with an illustrative write price of 1.25 times the input price and a read price of 0.1 times, caching pays off from the second request that reuses the prefix within the cache's lifetime. A prefix that is reused rarely, or that expires between requests on a low-traffic tenant, costs more with caching than without. Do not distort the instruction hierarchy to chase hits: if a constraint must sit near the end of the prompt to be followed, keep it there.
+**Prompt prefix caching** is the provider's or engine's reuse of prefill for a prefix it has recently seen. Your code does not manage it; your prompt layout earns it. Stable content goes first and byte-identical: system prompt, tool definitions, shared reference material; then tenant context; then the volatile question and fresh evidence (Chapters 5 and 34). Measure it with `Usage.cached_input_tokens`, which the gateway records on every span.
+
+The economics depend on the provider's terms. Some charge a premium to write a prefix into the cache and a steep discount to read it; with an illustrative write price of 1.25 times the input price and a read price of 0.1 times, caching pays off from the second request that reuses the prefix within the cache's lifetime: two requests pay 1.25 + 0.1 = 1.35 times the prefix's input price instead of 2. A prefix that is reused rarely, or that expires between requests on a low-traffic tenant, costs more with caching than without. Do not distort the instruction hierarchy to chase hits: if a constraint must sit near the end of the prompt to be followed, keep it there.
 
 **Embedding caching** is the safest layer and saves the most during ingestion. A vector depends on more than model name and text: the model version, output dimensions, any instruction prefix (some models expect "query:" before queries) and the text preparation all change it. `aie_core.CachedEmbeddings` already keys on a fingerprint of the embedding space (provider, model, dimensions, instruction, text-preparation version) plus the raw text (Chapter 3). Following Chapter 8's `NamespacedStore`, this chapter's `EmbeddingCache` adds text normalization on top of the same space fingerprint, so "Refund  policy" and "refund policy" share an entry and a space change simply stops old entries matching.
 
@@ -92,7 +94,9 @@ An AI request path has six cacheable layers, and they differ sharply in value an
 
 **Response caching** stores the whole completion. Chapter 3's gateway cache keys on everything in the request (model, messages, tools, schema, sampling) and caches only at temperature zero by default. Its only view of what makes an answer specific from outside the request is the optional `metadata["cache_scope"]` string, with `require_cache_scope=True` to refuse unscoped requests; that is enough to partition by tenant, but it does not structure the ACL scope or carry the prompt and index versions, and nothing checks that each component is present. `ScopedResponseCache` adds those as named key components the linter can verify and refuses to cache truncated or filtered completions. Hit rates are low on free-form chat and high on classification, routing and extraction of repeated inputs.
 
-**Semantic caching** reuses an answer for a question that is similar rather than identical, judged by embedding similarity above a threshold. It can cut cost and latency sharply for FAQ-style traffic, and it has the worst failure mode of any layer: a confident, well-formatted answer to a question the user did not ask. "Can I carry over vacation days" and "can I cash out vacation days" are close in embedding space and have opposite answers. Four rules make it usable. Check eligibility before similarity: an entry from another tenant, another ACL scope, another prompt or index version, or past its TTL is never a candidate, however similar. Refuse to store personalized answers ("your laptop return ships Friday") and ungrounded answers, which would be wrong or unsupported for the next asker. Record the source documents each answer cites, so a document change invalidates exactly the answers built on it. And tune the threshold on labeled pairs of questions, measuring the false-hit rate (pairs above threshold whose correct answers differ), not on intuition. Log near misses, lookups whose best similarity fell just under the threshold, because they are the data you tune with.
+**Semantic caching** reuses an answer for a question that is similar rather than identical, judged by embedding similarity above a threshold. It can cut cost and latency sharply for FAQ-style traffic, and it has the worst failure mode of any layer: a confident, well-formatted answer to a question the user did not ask. "Can I carry over vacation days" and "can I cash out vacation days" are close in embedding space and have opposite answers.
+
+Four rules make it usable. Check eligibility before similarity: an entry from another tenant, another ACL scope, another prompt or index version, or past its TTL is never a candidate, however similar. Refuse to store personalized answers ("your laptop return ships Friday") and ungrounded answers, which would be wrong or unsupported for the next asker. Record the source documents each answer cites, so a document change invalidates exactly the answers built on it. And tune the threshold on labeled pairs of questions, measuring the false-hit rate (pairs above threshold whose correct answers differ), not on intuition. Log near misses, lookups whose best similarity fell just under the threshold, because they are the data you tune with.
 
 Caches are also an attack surface: an answer produced by a planted, injected document is replayed by a response or semantic cache to everyone in scope until it expires (Chapter 26). Store only validated answers and keep tenant and source purges fast.
 
@@ -114,7 +118,7 @@ Independent steps should not wait for each other. In a RAG request, lexical sear
 
 Fan-out needs three disciplines. Give the group a deadline and each step `min(its own timeout, time remaining)`, cancelling stragglers so they neither hold the answer nor keep billing. Separate required steps (no vector results is fatal) from optional ones (no rerank means answering in fused order). And bound concurrency: ten branches per request at 50 requests per second is 500 concurrent calls against shared rate limits.
 
-Parallelism amplifies tails. If each of N independent branches finishes within its p95 95 percent of the time, all of them do so only 0.95^N of the time: with three branches, about 86 percent of requests wait on at least one branch's tail. More branches mean a slower p95 for the group. Keep fan-out wide only where each branch earns its place, and set per-branch timeouts that cut the tail.
+Parallelism amplifies tails. If each of N independent branches finishes within its p95 95 percent of the time, all of them do so only 0.95^N of the time: with three branches, that is about 86 percent, so about 14 percent of requests wait on at least one branch's tail, nearly three times the 5 percent a single branch causes. More branches mean a slower p95 for the group. Keep fan-out wide only where each branch earns its place, and set per-branch timeouts that cut the tail.
 
 Speculative prefetch goes one step further: start a call before you know you need it. While the model plans an incident answer, prefetch `get_service_status` for the service named in the question; if the model asks for it with the same arguments, the result is already there. Speculation trades money for latency. Wasted prefetches are real calls, so count them, and restrict prefetch to read-only, idempotent tools by construction. A speculative `send_reply` is a bug, not an optimization. Hedged requests (sending a duplicate to a second replica after a delay and taking the first answer) are a related tail-cutting technique with the same cost trade-off; Chapter 29 covers them with the other reliability patterns.
 
@@ -126,7 +130,7 @@ The decision rule is about who is waiting. If a person is waiting, do not batch 
 
 ### The cost model per successful task
 
-Cost per model call is the number providers bill and the number that misleads. The unit that compares architectures honestly is cost per successful task, because it charges each design for its retries, its failures and its human review.
+Cost per model call is the number providers bill, and on its own it misleads. The unit that compares architectures honestly is cost per successful task, because it charges each design for its retries, its failures and its human review.
 
 A request's cost decomposes as:
 
@@ -137,11 +141,11 @@ cost_per_attempt = model_calls × (1 + retry_rate) × cost_per_call(input, cache
 cost_per_successful_task = cost_per_attempt / success_rate
 ```
 
-`model_calls` counts every call an attempt makes, including chain stages, agent steps, judges and guardrails. `retry_rate` counts extra calls from transient errors and schema repairs, each re-paying the whole input. Infrastructure is the amortized share of what you run yourself: GPUs at real utilization (Chapter 34), the vector database, storage and egress. Human review is often the largest term when it exists: a 2 percent review rate at a few dollars of loaded staff time per review can exceed the entire model bill. The division by the success rate is what makes failures visible. If one attempt in five fails, every success carries 1.25 attempts of cost.
+`model_calls` counts every call an attempt makes, including chain stages, agent steps, judges and guardrails. `retry_rate` counts extra calls from transient errors and schema repairs, each re-paying the whole input. Infrastructure is the amortized share of what you run yourself: GPUs at real utilization (Chapter 34), the vector database, storage and egress. Human review is often the largest term when it exists: a 2 percent review rate at an illustrative 3 USD of loaded staff time per review adds 0.06 USD per attempt, more than twelve times the optimized model cost in the ladder below. The division by the success rate is what makes failures visible. If one attempt in five fails, every success carries 1.25 attempts of cost.
 
-The model makes otherwise counterintuitive comparisons obvious. An agent using a model priced at one tenth of the capable model, but taking 20 steps with 9,000 input tokens each and succeeding 75 percent of the time, costs more per successful task than one call to the capable model that succeeds 90 percent of the time. The test suite asserts exactly this case.
+The model makes otherwise counterintuitive comparisons obvious. An agent using a model priced at one tenth of the capable model, but taking 20 steps with 9,000 input tokens each and succeeding 75 percent of the time, costs more per successful task than one call to the capable model that succeeds 90 percent of the time. At the illustrative prices, with 6,000 input and 600 output tokens for the single call, and 300 output tokens and a 10 percent retry rate per agent step, the single call costs about 0.019 USD per success and the agent about 0.060 USD. The test suite asserts exactly this case.
 
-The chapter's worked example applies the model to a Northwind Assist answer, starting from a naive first version and applying optimizations in the order this chapter recommends. All prices and rates are illustrative, and the success rates are what an evaluation run would measure for each variant, not assumptions about the techniques:
+The chapter's worked example applies the model to a Northwind Assist answer, starting from a naive first version and applying one optimization at a time so each step's saving is visible. All prices and rates are illustrative, and the success rates are what an evaluation run would measure for each variant, not assumptions about the techniques:
 
 ```text
 step                                USD/attempt  USD/success   vs v0  USD/month
@@ -152,7 +156,7 @@ v0 naive                                0.02462      0.02863      0%       5154
 4 + route 60% to small model            0.00484      0.00560    -80%       1008
 ```
 
-The naive version sends 9,000 input tokens (twenty chunks and the full history) and lets answers run to 600 tokens. Trimming to the Chapter 35 budget of 4,500 input and 300 output tokens, and adding a reranker so eight good chunks replace twenty mediocre ones, halves the cost even though the reranker adds a fee. The success rate also rises slightly because there are fewer distractors. Caching the 800-token stable prefix saves another 12 percent. A semantic cache with an 8 percent hit rate saves less than the prefix cache did, with far more correctness risk. Routing easy questions to a small model then halves what remains, because its success rate on those questions holds up in evaluation. The order matters: had the team started with the semantic cache, it would have taken months to find the 51 percent sitting in the prompt.
+The monthly column is cost per success times 6,000 questions a day for 30 days. The naive version sends 9,000 input tokens (twenty chunks and the full history) and lets answers run to 600 tokens. Trimming to the Chapter 35 budget of 4,500 input and 300 output tokens, and adding a reranker so eight good chunks replace twenty mediocre ones, halves the cost even though the reranker adds a fee. The success rate also rises slightly because there are fewer distractors. Caching the 800-token stable prefix saves another 12 percent of what remained (6 points against v0). A semantic cache with an 8 percent hit rate saves less than the prefix cache did, with far more correctness risk. Routing easy questions to a small model then halves what remains, because its success rate on those questions holds up in evaluation. The order matters: had the team started with the semantic cache, it would have taken on the riskiest layer for an 8 percent saving while the 51 percent from trimming the prompt and capping the output went unclaimed.
 
 ### Retrieval, embedding, and index costs
 
@@ -162,11 +166,11 @@ After the model bill has been trimmed, the retrieval side is often the next larg
 
 **Reranking.** A cross-encoder scores every candidate, so its cost is candidates times tokens per candidate: 50 candidates of 300 tokens is 15,000 tokens of reranker input per request, paid as a per-search fee to a hosted reranker or as GPU time for a self-hosted one. That makes the candidate count a cost lever with a quality price. Measure recall at each depth (Chapter 14) and cut the candidate set to the smallest depth that keeps the gold evidence, and put the retrieval cache in front of the reranker, where a hit saves the most.
 
-**The index.** A vector index that must answer in milliseconds lives in memory, so its cost is the instance or managed tier sized for vectors plus graph (Chapter 9 gives the sizing arithmetic). This is a fixed monthly cost, and the cost model carries it as `infra_usd`, amortized per attempt: monthly cost divided by monthly attempts. At an illustrative 600 USD a month and 180,000 answers, that is about 0.0033 USD per answer. Set against the optimized ladder above, where an attempt costs about 0.0048 USD, the index is now almost as expensive as the model. Two conclusions follow. Amortized infrastructure grows in relative weight as model optimizations succeed, so re-run the cost model after each step instead of assuming the model still dominates. And fixed costs shrink per task only with volume, so a low-traffic tenant on a dedicated index can cost more per answer than a busy one on a shared index with filters (Chapter 15).
+**The index.** A vector index that must answer in milliseconds lives in memory, so its cost is the instance or managed tier sized for vectors plus graph (Chapter 9 gives the sizing arithmetic). This is a fixed monthly cost, and the cost model carries it as `infra_usd`, amortized per attempt: monthly cost divided by monthly attempts. At an illustrative 600 USD a month and 180,000 answers, that is about 0.0033 USD per answer. Set against the optimized ladder above, where an attempt costs about 0.0048 USD, the index alone adds about 70 percent on top of everything the ladder counts. Two conclusions follow. Amortized infrastructure grows in relative weight as model optimizations succeed, so re-run the cost model after each step instead of assuming the model still dominates. And fixed costs shrink per task only with volume, so a low-traffic tenant on a dedicated index can cost more per answer than a busy one on a shared index with filters (Chapter 15).
 
 ### Routing for cost
 
-Model routing sends each request to the cheapest model that handles it well enough. Chapter 7 owns routers and cascades; here is what the cost model adds. A traffic mix is priced as total spend over total successes, not as an average of each route's cost per success, so a cheap route with a low success rate drags the whole mix. `CostModel.mix` computes it that way. A cascade, which tries the small model first and escalates on low confidence, pays twice for every escalated request, so its savings depend on the escalation rate as much as on prices. Misroutes have a cost that is not in the token bill: a hard question answered badly by the small model is a silent error that a user acts on. Chapter 7's key result is to tune routing and cascade thresholds on end-to-end utility that includes the cost of silent errors, not on router accuracy. Keep the division of labor straight: same-model retries live in the gateway, and capability-changing fallbacks live in the router.
+Model routing sends each request to the cheapest model that handles it well enough. Chapter 7 owns routers and cascades; here is what the cost model adds. A traffic mix is priced as total spend over total successes, not as an average of each route's cost per success, so a cheap route with a low success rate drags the whole mix. `CostModel.mix` computes it that way. A cascade, which tries the small model first and escalates on low confidence, pays twice for every escalated request, so its savings depend on the escalation rate as much as on prices. Misroutes have a cost that is not in the token bill: a hard question answered badly by the small model is a silent error that a user acts on. Chapter 7's main recommendation applies here: tune routing and cascade thresholds on end-to-end utility that includes the cost of silent errors, not on router accuracy. Keep the division of labor straight: same-model retries live in the gateway, and capability-changing fallbacks live in the router.
 
 ### Cost monitoring, budgets, alerts and chargeback
 
@@ -176,19 +180,25 @@ With attribution in place, four controls follow.
 
 **Dashboards and anomaly alerts.** Hourly spend per tenant, feature, route and model against a trailing baseline, with the usual regression causes visible: route-mix shift, rising escalation rate, falling prompt-cache ratio, growing agent steps per task, retry storms.
 
-**Spend limits.** A per-tenant daily limit with three enforcement modes. `observe` only alerts, which is right while you learn real usage. `degrade` switches to a cheaper model with a smaller output cap past a soft limit and blocks at the hard limit, which keeps the assistant useful for the rest of the day. `enforce` blocks at the hard limit, for tenants with contractual caps. Enforcement must survive concurrency: if fifty requests each check "is there budget left" before any of them commits, all fifty pass. The guard therefore reserves each request's worst-case cost (all input uncached, the full `max_tokens` used) before the call and replaces the reservation with the actual cost afterwards. Releasing a reservation when a call fails assumes the failure was not billed; a timeout after generation started may well have been, so reconcile against the provider's usage report periodically.
+**Spend limits.** A per-tenant daily limit with three enforcement modes. `observe` only alerts, which is right while you learn real usage. `degrade` switches to a cheaper model with a smaller output cap past a soft limit and blocks at the hard limit, which keeps the assistant useful for the rest of the day. `enforce` blocks at the hard limit, for tenants with contractual caps.
+
+Enforcement must survive concurrency: if fifty requests each check "is there budget left" before any of them commits, all fifty pass. The guard therefore reserves each request's worst-case cost (all input uncached, the full `max_tokens` used) before the call and replaces the reservation with the actual cost afterwards. A model missing from the price table is refused rather than priced at zero, which would let it slip past every limit. Releasing a reservation when a call fails assumes the failure was not billed; a timeout after generation started may well have been, so reconcile against the provider's usage report periodically.
 
 **Alerts.** Fire at fixed fractions of the limit (50, 80 and 100 percent), once per threshold per tenant per day, and outside any lock so a slow pager does not stall requests. An alert that fires on every request after the limit is crossed gets muted, and then it is useless.
 
-**Chargeback.** Aggregate spend per tenant from traces: model spend from `llm.complete` spans, other spend (embeddings, reranking, tool fees) from spans that carry `cost_usd`, and successes from task spans, so each tenant sees its cost per successful task. Cache hits need one rule. A hit was not billed, but the price of the call it replaced is the cache's value. The current `aie_core` gateway records a hit with `cost_usd = 0` and the replaced price as `avoided_cost_usd`; older versions put the original price in `cost_usd`, which would bill every hit twice if summed naively. `chargeback` reads both shapes into avoided spend, never into spend, and reports it next to actual spend. Shared fixed costs such as the platform, idle failover capacity and the vector database are allocated by each tenant's share of direct spend, or by another rule finance agrees to; write the rule down, because the argument about it will happen.
+**Chargeback.** Aggregate spend per tenant from traces: model spend from `llm.complete` spans, other spend (embeddings, reranking, tool fees) from spans that carry `cost_usd`, and successes from task spans, so each tenant sees its cost per successful task. Cache hits need one rule. A hit was not billed, but the price of the call it replaced is the cache's value. The current `aie_core` gateway records a hit with `cost_usd = 0` and the replaced price as `avoided_cost_usd`; older versions put the original price in `cost_usd`, which would bill every hit twice if summed naively. `chargeback` reads both shapes into avoided spend, never into spend, and reports it next to actual spend. Shared fixed costs such as the platform, idle failover capacity and the vector database are allocated by each tenant's share of direct spend, or by another rule finance agrees to; write the rule down, so that when a tenant disputes its share, the allocation can be checked against it.
 
 ### Back-of-envelope estimates
 
 Chapter 35 owns the capacity formulas and the sizing module (`book/projects/examples/ch35/back_of_envelope.py`): peak requests per second, tokens per second, Little's Law for in-flight requests, daily tokens, and cost per day. Chapter 34 owns replica and KV-cache sizing. This chapter adds three estimates you will make weekly.
 
-The cost of a change: tokens added per request times requests per day times price. Six thousand answers a day, plus 1,000 input tokens each, at an illustrative 2 USD per million, is 12 USD a day. `CostModel.what_if` does this for any field. The latency of an output cap: output tokens saved times TPOT. Cutting 300 tokens at 15 ms each saves 4.5 seconds at p50, and somewhat more at p95, because TPOT degrades under load. The value of a cache: hit rate times cost per miss times volume, minus the cost of the cache and of its false hits. A semantic cache with an 8 percent hit rate on 6,000 daily answers saves about 480 model calls a day; if 1 percent of its hits are wrong and each wrong answer costs a support ticket, price that in before calling the cache a win.
+The cost of a change: tokens added per request times requests per day times price. Six thousand answers a day, plus 1,000 input tokens each, at an illustrative 2 USD per million, is 12 USD a day. `CostModel.what_if` does this for any field.
 
-One serving sanity check is worth memorizing: 20 requests per second at 4 seconds each is 80 in flight by Little's Law, and at 1.5 GiB of KV cache each that is 120 GiB of accelerator memory before weights. Capacity planning starts from traffic traces, not single-request benchmarks.
+The latency of an output cap: output tokens saved times TPOT. Cutting 300 tokens at 15 ms each saves 4.5 seconds at p50, and somewhat more at p95, because TPOT degrades under load.
+
+The value of a cache: hit rate times cost per miss times volume, minus the cost of the cache and of its false hits. A semantic cache with an 8 percent hit rate on 6,000 daily answers saves about 480 model calls a day; if 1 percent of its hits are wrong and each wrong answer costs a support ticket, price that in before calling the cache a win.
+
+One serving sanity check is worth memorizing: 20 requests per second at 4 seconds each is 80 in flight by Little's Law, and at 1.5 GiB of KV cache each that is 120 GiB of accelerator memory before weights. Chapter 34 works through this calculation and its load-test follow-up; capacity planning starts from traffic traces, not single-request benchmarks.
 
 ### An optimization order
 
@@ -310,6 +320,7 @@ book/projects/examples/ch30/
   parallel.py        fan_out, Step, Prefetcher, MicroBatcher
   demo.py            prints the optimization ladder from this chapter
   test_ch30.py       offline tests
+  test_hardening.py  edge cases: unpriced models, failed streams, cancellation, percentiles
 ```
 
 Run it from the book root:
@@ -478,10 +489,23 @@ The tracker groups spans by request id, sums repeated runs of a stage (retries, 
         violations: list[Violation] = []
         budgets = {s.name: s.budget_ms for s in self.budget.stages}
         for request_id, timings in self._timings.items():
-            # A stage may run several times (retries, multiple tool calls): sum its wall time.
-            stage_ms: dict[str, float] = defaultdict(float)
+            # A stage may run several times (retries, multiple tool calls): count its wall time once,
+            # merging overlapping runs, so two parallel 500 ms calls are 500 ms, not 1000.
+            stage_ms: dict[str, float] = {}
+            by_stage: dict[str, list[StageTiming]] = defaultdict(list)
             for t in timings:
-                stage_ms[t.stage] += t.duration_ms
+                by_stage[t.stage].append(t)
+            for stage, runs in by_stage.items():
+                total, cur_start, cur_end = 0.0, None, None
+                for t in sorted(runs, key=lambda r: r.start_s):
+                    if cur_end is None or t.start_s > cur_end:
+                        if cur_end is not None:
+                            total += cur_end - cur_start
+                        cur_start, cur_end = t.start_s, t.end_s
+                    else:
+                        cur_end = max(cur_end, t.end_s)
+                total += (cur_end - cur_start) if cur_end is not None else 0.0
+                stage_ms[stage] = total * 1000
             for stage, ms in stage_ms.items():
                 per_stage[stage].append(ms)
                 if stage in budgets and ms > budgets[stage]:
@@ -892,10 +916,16 @@ The client wrapper estimates, admits, degrades and commits:
 
 ```python
 # path: book/projects/examples/ch30/budgets.py  (excerpt; full file on disk)
+    def _priced(self, model: str) -> str:
+        # An unknown model prices at $0 and would slip past every limit: refuse instead (fail closed).
+        if self.pricing.lookup(model) is None:
+            raise InvalidRequestError(f"no price for model {model!r}; refusing unmetered spend")
+        return model
+
     def estimate_usd(self, req: CompletionRequest) -> float:
         """Worst case: every prompt token uncached, the full output budget used."""
         usage = Usage(input_tokens=count_message_tokens(req.messages, req.model), output_tokens=req.max_tokens)
-        return self.pricing.cost_usd(req.model or self.default_model, usage)
+        return self.pricing.cost_usd(self._priced(req.model or self.default_model), usage)
 
     def _admit(self, req: CompletionRequest) -> tuple[CompletionRequest, Reservation]:
         tenant = req.metadata.get("tenant")
@@ -921,13 +951,16 @@ The client wrapper estimates, admits, degrades and commits:
             return degraded, redo.reservation
         return req, reservation
 
-    def _actual_usd(self, completion: Completion) -> float:
+    def _actual_usd(self, completion: Completion, admitted_model: str) -> float:
         raw = completion.raw or {}
         if raw.get("cache_hit"):
             return 0.0
         if "cost_usd" in raw:
             return float(raw["cost_usd"])
-        return self.pricing.cost_usd(completion.model, completion.usage)
+        # A router may return a model id the table does not price; the call already happened, so
+        # charge it at the admitted model's price rather than failing and leaking the reservation.
+        model = completion.model if self.pricing.lookup(completion.model) else admitted_model
+        return self.pricing.cost_usd(model, completion.usage)
 
     def complete(self, req: CompletionRequest) -> Completion:
         admitted, res = self._admit(req)
@@ -936,7 +969,7 @@ The client wrapper estimates, admits, degrades and commits:
         except BaseException:
             self.guard.release(res)  # assumes a failed call was not billed; see the chapter for when it is
             raise
-        self.guard.commit(res, self._actual_usd(completion))
+        self.guard.commit(res, self._actual_usd(completion, admitted.model or self.default_model))
         return completion
 ```
 
@@ -972,11 +1005,23 @@ async def fan_out(steps: Mapping[str, Step], *, deadline_s: float, max_concurren
             return await call()
 
     tasks = {name: asyncio.create_task(run(name, step), name=name) for name, step in steps.items()}
-    done, pending = await asyncio.wait(tasks.values(), timeout=max(0.0, end - loop.time()))
-    for task in pending:
-        task.cancel()  # propagate cancellation: a stopped HTTP call stops costing
-    if pending:
-        await asyncio.gather(*pending, return_exceptions=True)
+    required = {tasks[n] for n, s in steps.items() if s.required}
+    pending: set[asyncio.Task[Any]] = set(tasks.values())
+    try:
+        while pending:
+            done, pending = await asyncio.wait(pending, timeout=max(0.0, end - loop.time()),
+                                               return_when=asyncio.FIRST_EXCEPTION)
+            if not done:
+                break                                          # the deadline passed
+            if any(t in required and not t.cancelled() and t.exception() is not None for t in done):
+                break                                          # a required step failed: stop the rest now
+    finally:
+        # Runs on deadline, on a required failure, and when the caller itself is cancelled (client
+        # disconnect): a stopped HTTP call stops costing, and nothing outlives the request.
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
     for name, task in tasks.items():
         if task in pending or task.cancelled():
             out.timed_out.append(name)
@@ -1053,7 +1098,7 @@ class Prefetcher:
 
 **Cost and chargeback.** `mix` sums weighted spend and weighted successes separately before dividing. `what_if` makes "what do 1,000 more tokens cost" a one-liner. `chargeback` counts `cache_hit` spans as avoided cost, from `avoided_cost_usd` or, for legacy spans, from `cost_usd`, and puts tenantless spans in `_unattributed`; a test runs it without a pricing table to prove the hit's value comes from the span itself.
 
-**Guard and fan-out.** `reserve` computes exposure as committed plus open reservations, so five concurrent 0.3 USD requests against a 1 USD limit yield three allows and two blocks. `commit` charges the reservation's day, so a request straddling midnight lands where it started. A cancelled stream commits the usage seen or, failing that, the reserved estimate: an unknown cost is overcounted rather than lost. `fan_out` cancels and awaits pending tasks before raising `RequiredStepFailed`, so nothing keeps running after the request ends.
+**Guard and fan-out.** `reserve` computes exposure as committed plus open reservations, so five concurrent 0.3 USD requests against a 1 USD limit yield three allows and two blocks. `commit` charges the reservation's day, so a request straddling midnight lands where it started. A stream stopped after output started commits the usage seen or, failing that, the reserved estimate: an unknown cost is overcounted rather than lost. A stream that fails before any output (a 429, say) releases its reservation, so an outage does not leave phantom spend that blocks the tenant for the rest of the day. `fan_out` stops waiting as soon as a required step fails, cancels and awaits the rest before raising `RequiredStepFailed`, and does the same when the caller itself is cancelled (a client disconnect), so nothing keeps running, or billing, after the request ends.
 
 ## Production considerations
 
@@ -1072,7 +1117,6 @@ class Prefetcher:
 - **Volatile prefixes.** A timestamp, a request id or the user's name at the top of the system prompt, which defeats provider prefix caching for every request.
 - **Cost per call as the metric.** Choosing a model because its calls are cheaper while its success rate, retries or review rate make each success more expensive.
 - **Unbounded output.** No `max_tokens` and no answer-format instruction, so output length, the dominant latency term, is whatever the model feels like.
-- **Check-then-act budgets.** Checking remaining budget without reserving, so concurrent requests overshoot together.
 - **Counting cache hits as spend.** Summing `cost_usd` over all gateway spans, including hits that were never billed.
 - **Fan-out without cancellation.** Letting optional branches run after the deadline, so they keep consuming rate limit and money for answers nobody will read.
 - **Batching interactive paths.** A 200 ms micro-batch window added to every user's TTFT.
@@ -1085,7 +1129,7 @@ class Prefetcher:
 
 **Semantic false hit.** Users get a fluent answer to a neighboring question. In telemetry: thumbs-down and follow-up rephrasings concentrated on semantic-cache hits; hits with similarity just above threshold. Root cause: a threshold tuned for hit rate rather than false-hit rate. Test: false-hit rate on labeled question pairs as a release gate.
 
-**Prefix cache collapse.** Cost rises 20 percent overnight with no traffic change. In telemetry: `cached_input_tokens / input_tokens` drops after a prompt deploy. Root cause: a volatile value moved into the prefix, or tool definitions reordered. Test: Chapter 5's prefix-stability check in CI.
+**Prefix cache collapse.** Cost per answer rises about 14 percent overnight with no traffic change. In telemetry: `cached_input_tokens / input_tokens` drops after a prompt deploy. Root cause: a volatile value moved into the prefix, or tool definitions reordered. Test: Chapter 5's prefix-stability check in CI.
 
 **Retry storm.** A provider slowdown triggers timeouts, timeouts trigger retries, and retries add load and cost. In telemetry: `attempt` greater than one on a rising share of spans, cost per request rising while successes fall. Root cause: retries without a budget, or timeouts shorter than normal p99. Test: fault injection against the retry budget (Chapter 29).
 
@@ -1113,9 +1157,9 @@ class Prefetcher:
 
 ## Evaluation and testing
 
-Unit tests cover arithmetic and invariants. The chapter's suite checks that budgets reject infeasible splits, the tracker measures wall clock over overlapping spans, every cache layer misses when any scope or version component changes, the semantic cache refuses ineligible candidates and personalized writes, the linter flags a naive key, the cost model matches hand-computed numbers including the cheap-agent case, chargeback separates tenants and avoided cost, reservations prevent concurrent overshoot, alerts fire once per threshold, and fan-out costs the maximum, not the sum. Timing tests use fake clocks or generous bounds so they do not flake.
+Unit tests cover arithmetic and invariants. The chapter's suite checks that budgets reject infeasible splits, the tracker measures wall clock over overlapping spans, every cache layer misses when any scope or version component changes, the semantic cache refuses ineligible candidates and personalized writes, the linter flags a naive key, the cost model matches hand-computed numbers including the cheap-agent case, chargeback separates tenants and avoided cost, reservations prevent concurrent overshoot, alerts fire once per threshold, and fan-out costs the maximum, not the sum. `test_hardening.py` adds the edge cases: an unpriced model is refused, a stream that fails before output costs nothing, a failed required step and a cancelled caller stop every sibling, parallel calls to one stage count their wall time once, and the nearest-rank percentile is exact at p99.9. Timing tests use fake clocks or generous bounds so they do not flake.
 
-Every optimization also needs a quality check, because most can reduce quality. Trimming context, switching models, adding a semantic cache or capping output each go through the offline evaluation set (Chapters 24 and 25), and the measured success rate is what enters the cost model. A change that saves 30 percent per call and loses 10 points of success raises cost per successful task.
+Every optimization also needs a quality check, because most can reduce quality. Trimming context, switching models, adding a semantic cache or capping output each go through the offline evaluation set (Chapters 24 and 25), and the measured success rate is what enters the cost model. A change that saves 10 percent per call but drops success from 0.90 to 0.75 raises cost per successful task by about 8 percent (0.9 × 0.90 / 0.75 = 1.08), and the extra failures land on users.
 
 Performance needs realistic load: queueing, rate limits, cache hit rates and tails only appear under concurrency with a realistic prompt-length mix. Use Chapter 34's load-test protocol against staging with production-like caches, report per-stage p95 from traces, and compare the canary's cost per successful task and stage latencies against control before widening a rollout (Chapter 32).
 
@@ -1157,7 +1201,7 @@ P4. Add an hourly spend anomaly detector to `cost.py`: from trace JSONL, compute
 
 ### Debugging exercises
 
-D1. After a prompt release, cost per answer rose 22 percent while traffic, model and average input tokens were unchanged. Traces show `cached_input_tokens` per call fell from about 800 to near zero. The diff of the release shows the system prompt now starts with "You are Northwind Assist. Today is {date} {time}." and tool definitions are emitted from a Python `set`. Diagnose the cause and the fix, and name the telemetry that confirms the fix.
+D1. After a prompt release, cost per answer rose about 14 percent while traffic, model and average input tokens were unchanged. Traces show `cached_input_tokens` per call fell from about 800 to near zero. The diff of the release shows the system prompt now starts with "You are Northwind Assist. Today is {date} {time}." and tool definitions are emitted from a Python `set`. Diagnose the cause and the fix, and name the telemetry that confirms the fix.
 
 D2. A warehouse supervisor in the logistics tenant reports seeing an answer that quotes salary bands, which only HR should see. The retrieval cache hit rate is 35 percent. The retrieval cache key is built from `normalize_text(query)`, `tenant` and `index_version`. ACL filtering happens in the SQL query on a miss. Explain how the leak happened, which spans show it, and what change and test prevent recurrence.
 

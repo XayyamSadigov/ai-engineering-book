@@ -171,6 +171,8 @@ class EmbeddingCache:
             firsts = [idx[0] for idx in missing.values()]
             self.calls += 1
             vectors = self.inner.embed([self.instruction_prefix + normalize_text(texts[i]) for i in firsts])
+            if len(vectors) != len(firsts):   # zip would silently pair vectors with the wrong texts
+                raise ValueError(f"embedder returned {len(vectors)} vectors for {len(firsts)} texts")
             for (k, idxs), vec in zip(missing.items(), vectors):
                 self.store.set(k, vec)  # embeddings do not go stale; the version in the key handles change
                 for i in idxs:

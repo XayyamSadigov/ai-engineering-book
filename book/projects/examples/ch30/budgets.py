@@ -195,10 +195,16 @@ class BudgetedClient:
         self.degrade_model = degrade_model
         self.degrade_max_tokens = degrade_max_tokens
 
+    def _priced(self, model: str) -> str:
+        # An unknown model prices at $0 and would slip past every limit: refuse instead (fail closed).
+        if self.pricing.lookup(model) is None:
+            raise InvalidRequestError(f"no price for model {model!r}; refusing unmetered spend")
+        return model
+
     def estimate_usd(self, req: CompletionRequest) -> float:
         """Worst case: every prompt token uncached, the full output budget used."""
         usage = Usage(input_tokens=count_message_tokens(req.messages, req.model), output_tokens=req.max_tokens)
-        return self.pricing.cost_usd(req.model or self.default_model, usage)
+        return self.pricing.cost_usd(self._priced(req.model or self.default_model), usage)
 
     def _admit(self, req: CompletionRequest) -> tuple[CompletionRequest, Reservation]:
         tenant = req.metadata.get("tenant")
@@ -224,13 +230,16 @@ class BudgetedClient:
             return degraded, redo.reservation
         return req, reservation
 
-    def _actual_usd(self, completion: Completion) -> float:
+    def _actual_usd(self, completion: Completion, admitted_model: str) -> float:
         raw = completion.raw or {}
         if raw.get("cache_hit"):
             return 0.0
         if "cost_usd" in raw:
             return float(raw["cost_usd"])
-        return self.pricing.cost_usd(completion.model, completion.usage)
+        # A router may return a model id the table does not price; the call already happened, so
+        # charge it at the admitted model's price rather than failing and leaking the reservation.
+        model = completion.model if self.pricing.lookup(completion.model) else admitted_model
+        return self.pricing.cost_usd(model, completion.usage)
 
     def complete(self, req: CompletionRequest) -> Completion:
         admitted, res = self._admit(req)
@@ -239,7 +248,7 @@ class BudgetedClient:
         except BaseException:
             self.guard.release(res)  # assumes a failed call was not billed; see the chapter for when it is
             raise
-        self.guard.commit(res, self._actual_usd(completion))
+        self.guard.commit(res, self._actual_usd(completion, admitted.model or self.default_model))
         return completion
 
     async def acomplete(self, req: CompletionRequest) -> Completion:
@@ -249,36 +258,44 @@ class BudgetedClient:
         except BaseException:
             self.guard.release(res)
             raise
-        self.guard.commit(res, self._actual_usd(completion))
+        self.guard.commit(res, self._actual_usd(completion, admitted.model or self.default_model))
         return completion
 
     def stream(self, req: CompletionRequest) -> Iterator[StreamEvent]:
         admitted, res = self._admit(req)
         model = admitted.model or self.default_model
         usage: Usage | None = None
+        started = False
         try:
             for ev in self.inner.stream(admitted):
+                started = True
                 if ev.type == "usage" and ev.usage is not None:
                     usage = ev.usage
                 yield ev
         finally:
-            # A cancelled stream still billed whatever was generated; without usage, keep the estimate.
-            if usage is not None:
-                self.guard.commit(res, self.pricing.cost_usd(model, usage))
-            else:
-                self.guard.commit(res, res.amount_usd)
+            self._settle_stream(res, model, usage, started)
 
     async def astream(self, req: CompletionRequest) -> AsyncIterator[StreamEvent]:
         admitted, res = self._admit(req)
         model = admitted.model or self.default_model
         usage: Usage | None = None
+        started = False
         try:
             async for ev in self.inner.astream(admitted):
+                started = True
                 if ev.type == "usage" and ev.usage is not None:
                     usage = ev.usage
                 yield ev
         finally:
-            self.guard.commit(res, self.pricing.cost_usd(model, usage) if usage is not None else res.amount_usd)
+            self._settle_stream(res, model, usage, started)
+
+    def _settle_stream(self, res: Reservation, model: str, usage: Usage | None, started: bool) -> None:
+        if usage is not None:
+            self.guard.commit(res, self.pricing.cost_usd(model, usage))
+        elif started:
+            self.guard.commit(res, res.amount_usd)  # stopped mid-stream: output was billed, amount unknown
+        else:
+            self.guard.release(res)                 # failed before any output (e.g. a 429): nothing billed
 
 
 # ----------------------------------------------------------------------------- task tokens

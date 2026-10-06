@@ -274,6 +274,10 @@ class PgVectorStore:
         with self._conn.transaction(), self._conn.cursor() as cur:
             self._apply_timeout(cur)
             cur.execute("SELECT set_config('hnsw.ef_search', %s, true)", (str(max(self.ef_search, candidates)),))
+            if self._has_iterative and self.iterative_scan != "off":
+                # Without this the dense branch post-filters and starves selective filters;
+                # row_number() re-sorts it, so relaxed order is safe here.
+                cur.execute("SELECT set_config('hnsw.iterative_scan', %s, true)", (self.iterative_scan,))
             cur.execute(sql, params)
             return [self._hit(row) for row in cur.fetchall()]
 

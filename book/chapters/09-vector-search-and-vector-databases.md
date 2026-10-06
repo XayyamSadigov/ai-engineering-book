@@ -1,6 +1,8 @@
 # Chapter 9 — Vector Search and Vector Databases
 
-After this chapter you will be able to decide whether a workload needs a vector database at all, choose between exact search, HNSW, IVF, and quantized indexes from measured recall, latency, and memory, design metadata filtering that stays correct under selective filters, lay out namespaces and tenants so that one customer's vectors can never answer another customer's query, and operate an index through re-embedding, rebuilds, deletions, and replication. You will build **Project 2, a semantic search system** (`book/projects/p2-semantic-search/`): a `VectorStore` protocol with an exact NumPy adapter and a PostgreSQL + pgvector adapter, an incremental ingestion CLI over the Northwind documents, a FastAPI `/search` endpoint whose authorization filters come from identity, and an evaluator that reports recall@k, MRR, and ACL leakage. Chapter 8 covered what embeddings are; this chapter is about storing and searching them.
+After this chapter you will be able to decide whether a workload needs a vector database at all, choose between exact search, HNSW, IVF, and quantized indexes from measured recall, latency, and memory, design metadata filtering that stays correct under selective filters, lay out namespaces and tenants so that one customer's vectors can never answer another customer's query, and operate an index through re-embedding, rebuilds, deletions, and replication.
+
+You will build **Project 2, a semantic search system** (`book/projects/p2-semantic-search/`): a `VectorStore` protocol with an exact NumPy adapter and a PostgreSQL + pgvector adapter, an incremental ingestion CLI over the Northwind documents, a FastAPI `/search` endpoint whose authorization filters come from identity, and an evaluator that reports recall@k (the fraction of relevant documents found in the top k), MRR (mean reciprocal rank of the first relevant hit), and ACL leakage; Chapter 14 develops these metrics fully. Chapter 8 covered what embeddings are; this chapter is about storing and searching them.
 
 ## Why this matters
 
@@ -8,7 +10,7 @@ Once text is embedded, retrieval becomes a geometry problem: find the stored vec
 
 The first problem is scale. Comparing a query with every stored vector is linear in the corpus size, and the constant is not small: a million 768-dimensional float32 vectors occupy about 3 GB, and on a laptop a single brute-force query over them took about 60 ms in our measurements (illustrative). That is fine for an internal tool and unacceptable for a service doing hundreds of queries per second. Approximate nearest neighbor (ANN) indexes fix the speed by giving up exactness, and the price of that bargain is a recall loss that nobody sees unless they measure it.
 
-The second problem is that a vector is never the whole query. Northwind Assist must answer a logistics employee using logistics documents and shared policies, never retail incident reports, and never the on-call runbooks unless the user is in the `it-oncall` group. Those constraints are metadata filters, and they interact badly with ANN indexes: a filter that matches 1% of the corpus can make an approximate index return two results instead of ten, or zero. The bug looks like "the assistant does not know about our product", not like an error.
+The second problem is that a vector is never the whole query. Northwind Assist must answer a logistics employee using logistics documents and shared policies, never retail incident reports, and never the on-call runbooks unless the user is in the `it-oncall` group. Those constraints are metadata filters, and they interact badly with ANN indexes: a filter that matches 1% of the corpus can leave an approximate index returning one result or none instead of ten. The bug looks like "the assistant does not know about our product", not like an error.
 
 The third problem is lifecycle. Documents change, get deleted, get reclassified. Embedding models get upgraded, and vectors from two models are not comparable, so a model change means re-embedding everything and swapping indexes without downtime. Deleted documents must stop being retrievable promptly, because "the vector store still returns the revoked policy" is both a correctness bug and a compliance incident.
 
@@ -20,7 +22,7 @@ The industry answer to these problems was a wave of dedicated vector databases. 
 
 Three corollaries guide the rest of the chapter.
 
-**Recall is a property of the whole stack, and each layer can lose it.** End-to-end retrieval recall can drop because the embedding model does not represent a term, because chunking split the answer, because a filter excluded the right document, or because the ANN index skipped it. Each of these needs its own measurement. An ANN index that is fast but misses the answer is not an optimization; it is a regression you have not measured yet.
+**Recall is a property of the whole stack, and each layer can lose it.** End-to-end retrieval recall can drop because the embedding model does not represent a term, because chunking split the answer, because a filter excluded the right document, or because the ANN index skipped it. Each of these needs its own measurement. An ANN index that misses the answer looks fast and costs recall you cannot see without an exact baseline.
 
 **Filters are part of the query, not decoration on top of it.** A search for "top 10 neighbors that this user may see" is a different query from "top 10 neighbors, then remove the ones this user may not see". The first is correct by construction. The second silently returns fewer results, and the shortfall grows as filters get more selective, which is exactly the case for small tenants and restricted groups.
 
@@ -66,9 +68,9 @@ Its cost is linear in the number of vectors scored. Measured on a laptop with Nu
 
 That table carries the main conclusion: **for corpora up to roughly a million vectors with modest query rates, exact search on one machine is a legitimate production design.** Northwind's knowledge base, a few thousand documents chunked into tens of thousands of chunks, is two orders of magnitude below the point where exact search becomes slow. Most internal assistants are in the same position.
 
-Exact search stops being enough in three situations. The corpus no longer fits in memory on one machine. The query rate times the per-query cost exceeds your CPU budget: 63 ms per query is about 16 queries per second per core. Or the latency budget for retrieval is tighter than the scan allows, which happens when retrieval is one of several stages inside a 2-second time-to-first-token budget (Chapter 30). Batching queries into a matrix-matrix product and using a GPU push all three limits out considerably, which is worth remembering before adopting an ANN index for a workload that is merely bursty.
+Exact search stops being enough in three situations. The corpus no longer fits in memory on one machine. The query rate times the per-query cost exceeds your CPU budget: 63 ms per query is about 16 queries per second per scanning process, and because the scan is bound by memory bandwidth, extra cores help less than batching does. Or the latency budget for retrieval is tighter than the scan allows, which happens when retrieval is one of several stages inside a 2-second time-to-first-token budget (Chapter 30). Batching queries into a matrix-matrix product and using a GPU push all three limits out considerably, which is worth remembering before adopting an ANN index for a workload that is merely bursty.
 
-### Approximate nearest neighbor search: the trade-off triangle
+### Approximate nearest neighbor search: the trade-off space
 
 An ANN index avoids scoring most vectors. It organizes them so that a query can be routed toward its neighborhood and only score candidates there. Every ANN method trades among four quantities:
 
@@ -81,7 +83,7 @@ You cannot have all four. The three families below sit at different points, and 
 
 ### HNSW: a navigable graph
 
-Hierarchical Navigable Small World (HNSW) graphs are the default ANN index in most vector stores, including pgvector. The structure is a stack of proximity graphs. The bottom layer contains every vector, each connected to up to `2 * M` near neighbors. Each higher layer contains a random, exponentially smaller subset of the layer below, so the top layers are sparse "highways" across the space and the bottom layer is a dense local street map.
+Hierarchical Navigable Small World (HNSW) graphs are the most widely used ANN index; pgvector offers them alongside IVFFlat. "Small world" refers to graphs in which most nodes are reachable from any other in a few hops. The structure is a stack of proximity graphs. The bottom layer contains every vector, each connected to up to `2 * M` near neighbors. Each higher layer contains a random, exponentially smaller subset of the layer below, so the top layers are sparse "highways" across the space and the bottom layer is a dense local street map.
 
 Search starts at an entry point in the top layer, walks greedily to the neighbor closest to the query, and descends a layer when no neighbor is closer. At the bottom layer it switches from greedy walking to a best-first search that keeps a candidate list of size `ef_search` and expands the closest unexplored candidates until no improvement is possible. The top k of that list is the answer.
 
@@ -94,7 +96,7 @@ candidates = best_first(query, entry, layer=0, size=ef_search)
 return closest k of candidates
 ```
 
-The parameters map onto the trade-off triangle directly:
+The parameters map onto the trade-off space directly:
 
 | Parameter | When set | Raises | Costs |
 |---|---|---|---|
@@ -102,13 +104,15 @@ The parameters map onto the trade-off triangle directly:
 | `ef_construction` | build | graph quality, hence recall at a given `ef_search` | build time only |
 | `ef_search` | per query | recall | latency, roughly linearly |
 
-In pgvector the defaults are `m = 16`, `ef_construction = 64`, and `hnsw.ef_search = 40`. Treat these as a starting point, not a recommendation for your data. A common tuning path is to fix `M` and `ef_construction` at moderate values, build once, and then sweep `ef_search` at query time while measuring ANN recall against exact search on a sample of real queries. Raise `ef_construction` only if no reasonable `ef_search` reaches your recall target. Note that `ef_search` must be at least k; asking for 50 results with `ef_search = 40` cannot return 50.
+In pgvector the defaults are `m = 16`, `ef_construction = 64`, and `hnsw.ef_search = 40`. Treat these as a starting point, not a recommendation for your data. A common tuning path is to fix `M` and `ef_construction` at moderate values, build once, and then sweep `ef_search` at query time while measuring ANN recall against exact search on a sample of real queries. Raise `ef_construction` only if no reasonable `ef_search` reaches your recall target. In pgvector without iterative scans, `ef_search` caps the result count: asking for 50 results with `ef_search = 40` cannot return 50.
 
-HNSW's strengths are high recall at low latency without a training step, and good behavior under incremental inserts. Its weaknesses are memory and deletes. Every vector carries its full-precision copy plus its edge lists, so the index usually lives in RAM at a size somewhat above the raw vectors. Deletes are handled by marking nodes as deleted; the graph routes around them until a vacuum or rebuild repairs it, and heavy delete churn degrades both recall and latency over time. Builds are also expensive: inserting each vector runs a search to find its neighbors, so building over millions of vectors takes minutes to hours and benefits from a large memory budget for the build process.
+HNSW's strengths are high recall at low latency without a training step, and good behavior under incremental inserts. Its weaknesses are memory and deletes. Every vector carries its full-precision copy plus its edge lists, so the index usually lives in RAM at a size somewhat above the raw vectors. Deletes are handled by marking nodes as deleted; the search still traverses them but excludes them from results until a vacuum or rebuild repairs the graph, and heavy delete churn degrades both recall and latency over time.
+
+Builds are also expensive: inserting each vector runs a search to find its neighbors, so building over millions of vectors takes minutes to hours and benefits from a large memory budget for the build process.
 
 ### IVF: partition, then probe
 
-Inverted file (IVF) indexes partition the vector space into `n_lists` clusters with k-means. Each vector is stored in the list of its nearest centroid. At query time the index compares the query with all centroids, picks the `nprobe` closest lists, and scans only those exhaustively. With 128 lists and `nprobe = 8`, a query scores the centroids plus roughly 8/128 of the vectors.
+Think of bucketing a phone book by city and searching only the few nearest cities. Inverted file (IVF) indexes partition the vector space into `n_lists` clusters with k-means, an algorithm that picks `n_lists` center points so that each vector is close to one of them. Each vector is stored in the list of its nearest centroid. At query time the index compares the query with all centroids, picks the `nprobe` closest lists, and scans only those exhaustively. With 128 lists and `nprobe = 8`, a query scores the centroids plus roughly 8/128 of the vectors.
 
 Project 2 includes a teaching-size IVF index (`semsearch/domain/ivf.py`) and a sweep that measures its recall against exact search on synthetic clustered vectors (20,000 vectors, 64 dimensions, 128 lists, 200 queries). The output, from `semsearch bench-ann` on a laptop (illustrative):
 
@@ -127,7 +131,7 @@ IVF needs training data. The centroids are learned from a sample, and if the dat
 
 ### Product quantization: compress the vectors
 
-Both HNSW and IVF still store full-precision vectors, and at large scale memory, not compute, is the binding constraint. Product quantization (PQ) compresses vectors by splitting each one into `m` sub-vectors and replacing each sub-vector with the index of its nearest centroid in a small learned codebook (typically 256 entries, so one byte). A 768-dimensional float32 vector is 3,072 bytes; with 96 sub-vectors of 8 dimensions each it becomes 96 bytes, a 32x reduction (illustrative arithmetic). Distances are approximated from precomputed tables of query-to-centroid distances, so scoring a compressed vector costs a handful of table lookups.
+Both HNSW and IVF still store full-precision vectors, and at large scale memory, not compute, is the binding constraint. Product quantization (PQ) works like a color palette: instead of storing each slice of a vector exactly, it stores which of a small set of prototype slices it is closest to. Concretely, PQ compresses vectors by splitting each one into `m` sub-vectors and replacing each sub-vector with the index of its nearest centroid in a small learned codebook (typically 256 entries, so one byte). A 768-dimensional float32 vector is 3,072 bytes; with 96 sub-vectors of 8 dimensions each it becomes 96 bytes, a 32x reduction (illustrative arithmetic). Distances are approximated from precomputed tables of query-to-centroid distances, so scoring a compressed vector costs a handful of table lookups.
 
 The price is precision: PQ distances are approximate, so the ranking among close candidates gets noisy. The standard remedy is **rescoring**: use the compressed index to fetch a larger candidate set (say 100), then re-rank those candidates with full-precision vectors kept on disk or in a cheaper tier, and return the top 10. Simpler relatives are scalar quantization (float32 to int8 or float16, 2x to 4x smaller, small recall loss) and binary quantization (one bit per dimension, 32x smaller, usable only with rescoring and only for some embedding models). pgvector offers half-precision (`halfvec`) and binary (`bit`) types for the same purpose.
 
@@ -151,7 +155,7 @@ Every Northwind query carries at least two filters: tenant (the user's tenant pl
 
 **Pre-filtering** restricts the candidate set to rows that pass the filter, then searches among them. With exact search this is simple and always correct: build a mask, score only the allowed rows. `NumpyVectorStore` does this. With an ANN index it is harder, because the index structure was built over all vectors; restricting to a subset means either scanning the subset exhaustively (fine when the subset is small) or traversing the graph while skipping disallowed nodes (which can disconnect the graph for very selective filters).
 
-**Post-filtering** asks the index for the top N candidates, then removes the ones that fail the filter. It is easy to implement and it is what you get by default from many engines and from a naive SQL query against an HNSW index: pgvector's HNSW scan produces `ef_search` candidates, and the `WHERE` clause is applied to those. The failure is arithmetic. If the filter passes a fraction s of rows and the index returns N candidates, you expect about `N * s` survivors. `semsearch bench-filter` measures it with N = 40 (playing the role of `ef_search`) and k = 10 (illustrative):
+**Post-filtering** asks the index for the top N candidates, then removes the ones that fail the filter. It is easy to implement and it is what you get by default from many engines and from a naive SQL query against an HNSW index: pgvector's HNSW scan produces `ef_search` candidates, and the `WHERE` clause is applied to those. The failure is arithmetic. Call the fraction of rows a filter passes its selectivity s; a smaller s means a more selective filter. If the index returns N candidates, you expect about `N * s` survivors, capped at k (small deviations in the table are sampling noise). `semsearch bench-filter` measures it with N = 40 (playing the role of `ef_search`) and k = 10 (illustrative):
 
 | Filter selectivity | Post-filter results (of 10) | Pre-filter results (of 10) |
 |---|---|---|
@@ -160,14 +164,14 @@ Every Northwind query carries at least two filters: tenant (the user's tenant pl
 | 2% | 0.82 | 10.00 |
 | 0.5% | 0.17 | 10.00 |
 
-At 2% selectivity, typical for "logistics tenant and `it-oncall` group" in a large multi-tenant corpus, post-filtering returns less than one result on average where ten exist. Nothing errors. The assistant just abstains or answers from the wrong evidence. This is one of the most common silent failures in production retrieval.
+At 2% selectivity, typical for "logistics tenant and `it-oncall` group" in a large multi-tenant corpus, post-filtering returns less than one result on average where ten exist. Nothing errors. The assistant just abstains or answers from the wrong evidence. This is a common silent failure in production retrieval.
 
-**In-index (filter-aware) search** makes the index itself respect the filter. Approaches include traversing the HNSW graph while only counting allowed nodes toward the result, continuing the scan until k allowed results are found, maintaining per-value sub-indexes, or switching automatically to exact scanning when the filter is selective enough that the allowed set is small. pgvector 0.8 and later implement the "keep scanning" approach as iterative index scans (`hnsw.iterative_scan`, with a `relaxed_order` mode that may return results slightly out of order, so the adapter re-sorts them). Dedicated vector databases implement various combinations and differ substantially in how well they handle low-selectivity filters; test this specifically when you evaluate one.
+**In-index (filter-aware) search** makes the index itself respect the filter. Approaches include traversing the HNSW graph while only counting allowed nodes toward the result, continuing the scan until k allowed results are found, maintaining per-value sub-indexes, or switching automatically to exact scanning when the filter is selective enough that the allowed set is small. pgvector 0.8 and later implement the "keep scanning" approach as iterative index scans (`hnsw.iterative_scan`, with a `relaxed_order` mode that may return results slightly out of order, so the adapter re-sorts them). Dedicated vector databases implement various combinations and differ substantially in how well they handle highly selective filters (small s); test this specifically when you evaluate one.
 
 Practical rules for filtering:
 
 - **Know your selectivity distribution.** Log, per query, how many rows the filter allows (or estimate it from tenant sizes and group membership). The smallest tenants and the most restricted groups are where filtered ANN breaks first.
-- **Route by selectivity.** When the filter allows a few thousand rows, an exact scan of those rows using a B-tree or GIN index on the filter columns is both faster and correct. PostgreSQL's planner makes this choice itself when statistics are good; dedicated systems often have a threshold setting.
+- **Route by selectivity.** When the filter allows a few thousand rows, an exact scan of those rows using a B-tree or GIN index (PostgreSQL's inverted index for arrays and JSONB) on the filter columns is both faster and correct. PostgreSQL's planner makes this choice itself when statistics are good; dedicated systems often have a threshold setting.
 - **Partition on the dominant filter.** If every query filters by tenant, give large tenants their own partition or index (see the next section) so that the tenant filter disappears from the ANN problem.
 - **Alert on underfilled results.** Project 2's search span records `underfilled` whenever fewer than k results come back. A rising underfill rate for one tenant is the signature of a filtering problem.
 
@@ -183,11 +187,13 @@ Vector stores provide some way to group vectors: collections, indexes, namespace
 
 Hybrids are common: a shared index for the long tail of small tenants, dedicated namespaces for the largest ones, and dedicated stores for tenants whose contracts demand it. Whatever you choose, enforce tenancy in one code path that every query goes through, derive the tenant from the authenticated identity rather than from the request body, and test it with a tenant-leak test that runs in CI.
 
-Project 2 uses namespaces for a different axis: **index identity**. The namespace `knowledge:<embedding model>:<index version>` separates indexes built with different embedding models or chunking configurations, which is what makes blue-green re-indexing possible. Tenancy is a filtered column (`tenant`), plus ACL groups, because Northwind has two tenants and a shared corpus, and the shared documents must be visible to both. The schema indexes `(namespace, tenant)` so that PostgreSQL can serve small-tenant queries with a filtered scan instead of the ANN index.
+Project 2 uses namespaces for a different axis: **index identity**. The namespace `knowledge:<embedding model>:<index version>` separates indexes built with different embedding models or chunking configurations, which is what makes blue-green re-indexing possible: build the new index beside the live one, then switch traffic to it (see Indexing strategies and rebuilds). Tenancy is a filtered column (`tenant`), plus ACL groups, because Northwind has two tenants and a shared corpus, and the shared documents must be visible to both. The schema indexes `(namespace, tenant)` so that PostgreSQL can serve small-tenant queries with a filtered scan instead of the ANN index.
 
 Northwind's `shared` tenant illustrates a subtlety. A logistics user sees `tenant IN ('logistics', 'shared')`. Shared documents appear in every tenant's results, so their ACL groups do all the work of restricting them; the database failover runbook is `tenant: shared` but readable only by `it-oncall`. A tenant filter alone would leak it to every employee. Tenancy and authorization are two separate filters, and both are mandatory.
 
 ## How it works
+
+With the pieces defined, here is how a query and a write move through Project 2.
 
 ### The life of a search
 
@@ -206,14 +212,16 @@ Writes are where most vector-store bugs live, because the index is a derived cac
 1. The loader reads the document, parses the front matter, and computes a content hash. The document's **index version** is the declared version plus the first eight hex digits of the hash, so an edit that forgets to bump the version still produces a new index version.
 2. The pipeline asks the store what it currently holds for each document (`doc_versions`). If the index version matches, the document is skipped and costs nothing. This is what makes re-running ingestion every few minutes cheap.
 3. For a new or changed document, the pipeline chunks it, embeds the chunks in batches, and calls `replace_document(namespace, doc_id, index_version, records)`.
-4. `replace_document` makes the new chunks the only chunks of that document, atomically. In PostgreSQL it runs in one transaction that takes an advisory lock on the document, upserts the new rows, and deletes the document's rows whose ids are not in the new set. A concurrent reader sees either the old version or the new one. The naive alternative, "delete old chunks, then insert new ones" in two transactions, opens a window where the document does not exist; the inverse order opens a window where both versions are retrievable and a stale fact can be cited next to the current one.
+4. `replace_document` makes the new chunks the only chunks of that document, atomically. In PostgreSQL it runs in one transaction that takes an advisory lock on the document (an application-level lock keyed on the document id, so two ingestions of the same document serialize), upserts the new rows, and deletes the document's rows whose ids are not in the new set. A concurrent reader sees either the old version or the new one. The naive alternative, "delete old chunks, then insert new ones" in two transactions, opens a window where the document does not exist; the inverse order opens a window where both versions are retrievable and a stale fact can be cited next to the current one.
 5. With `--prune`, documents that exist in the store but no longer exist in the source are deleted. Without pruning, a revoked policy stays searchable forever. The test `test_without_prune_deleted_sources_stay_searchable` pins this behavior down so that nobody mistakes it for a feature.
 
 ### Consistency: what a reader can observe
 
-Most vector stores are eventually consistent in at least one place. Dedicated databases often acknowledge a write before it is visible to search, because index updates are applied asynchronously or in segments that are merged in the background. Replicas lag the primary. Caches in front of the store lag both. PostgreSQL with pgvector gives you read-after-write consistency on the primary for free, because the HNSW index is updated inside the inserting transaction, which is one of the quiet advantages of keeping vectors in your transactional database.
+Most vector stores are eventually consistent in at least one place. Dedicated databases often acknowledge a write before it is visible to search, because index updates are applied asynchronously or in segments that are merged in the background. Replicas lag the primary. Caches in front of the store lag both. PostgreSQL with pgvector gives you read-after-write consistency on the primary for free, because the HNSW index is updated inside the inserting transaction, an advantage of keeping vectors in your transactional database that is easy to overlook.
 
-The consistency you need depends on the use case. A knowledge base that is re-indexed every 15 minutes tolerates seconds of lag. A user who uploads a file and immediately asks about it does not; that flow needs read-your-writes, which you can provide by routing that user's queries to the primary for a short window, by waiting on the write's visibility token where the store offers one, or by searching the freshly uploaded document directly before it reaches the shared index. Deletion is the case that must not lag silently: if a document is deleted for legal or permission reasons, measure the time until it stops appearing in search results and alert when it exceeds the agreed bound.
+The consistency you need depends on the use case. A knowledge base that is re-indexed every 15 minutes tolerates seconds of lag. A user who uploads a file and immediately asks about it does not; that flow needs read-your-writes, which you can provide by routing that user's queries to the primary for a short window, by waiting on the write's visibility token where the store offers one, or by searching the freshly uploaded document directly before it reaches the shared index.
+
+Deletion is the case that must not lag silently: if a document is deleted for legal or permission reasons, measure the time until it stops appearing in search results and alert when it exceeds the agreed bound.
 
 ## Architecture
 
@@ -255,8 +263,8 @@ The second diagram shows the lifecycle of an index version. Re-embedding with a 
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Building: new model, chunker, or index params
-    Building --> Verifying: backfill complete, dual-write on
+    [*] --> Building: new model, chunker, or index params, dual-write on
+    Building --> Verifying: backfill complete
     Verifying --> Building: recall or leak gate fails
     Verifying --> Active: gates pass, alias switched
     Active --> Draining: next version activated
@@ -267,9 +275,15 @@ stateDiagram-v2
 
 ### Indexing strategies and rebuilds
 
-Four situations force a rebuild, and they differ in cost.
+The lifecycle diagram shows when a new namespace is built; this section covers what forces one. Four situations force a rebuild, and they differ in cost.
 
-**The embedding model changes.** Every vector must be recomputed, because old and new vectors are incomparable. This is the expensive one: the embedding cost of the whole corpus, plus build time. Plan it as a migration. Build the new namespace in the background while the old one serves traffic. Dual-write: from the moment the backfill starts, ingestion writes every changed document to both namespaces, so the new namespace does not fall behind during a backfill that may take hours. Verify with the retrieval gold set and the leak gate against the new namespace. Switch the active namespace with one configuration change (in Project 2, `INDEX_VERSION` or the embedding model setting; in a larger system, an alias table the service reads). Keep the old namespace until the rollback window closes.
+**The embedding model changes.** Every vector must be recomputed, because old and new vectors are incomparable. This is the expensive one: the embedding cost of the whole corpus, plus build time. Plan it as a migration:
+
+1. Build the new namespace in the background while the old one serves traffic. The backfill re-embeds the existing corpus into it.
+2. Dual-write: from the moment the backfill starts, ingestion writes every changed document to both namespaces, so the new namespace does not fall behind during a backfill that may take hours.
+3. Verify with the retrieval gold set and the leak gate against the new namespace.
+4. Switch the active namespace with one configuration change (in Project 2, `INDEX_VERSION` or the embedding model setting; in a larger system, an alias table the service reads).
+5. Keep the old namespace, and keep dual-writing to it, until the rollback window closes.
 
 **The chunker or enrichment changes.** Chunk boundaries change, so chunk ids change, so this is also a full rebuild, but often cheaper if embeddings are cached by text hash (`CachedEmbeddings` in `aie_core` does exactly that): unchanged chunk texts reuse their vectors.
 
@@ -766,7 +780,7 @@ The write path for one document is a single transaction; the read path sets inde
 
 `_apply_timeout` sets `statement_timeout` with `set_config(..., true)` when `PG_STATEMENT_TIMEOUT_MS` is configured, for the same reason `ef_search` is set that way: the setting dies with the transaction, so a pooled connection never carries one request's limit into the next. A search that exceeds it raises instead of holding the caller's thread, and the caller degrades (Chapter 12 skips a retriever that fails or misses its deadline). Note also that the adapter holds a single connection, which serializes concurrent searches; a service with real concurrency should give each worker its own store or put a connection pool behind the adapter, sized from the query rate times the p95 store latency.
 
-The adapter also has `hybrid_search`, which fuses the dense candidates with PostgreSQL full-text candidates (`text_tsv`, a generated `tsvector` column) using Reciprocal Rank Fusion in one SQL statement. Chapter 12 owns lexical and hybrid retrieval and explains when fusion helps; the method is here because "pgvector plus `tsvector` in one database" is a large part of the case for PostgreSQL.
+The adapter also has `hybrid_search`, which fuses the dense candidates with PostgreSQL full-text candidates (`text_tsv`, a generated `tsvector` column) using Reciprocal Rank Fusion in one SQL statement. It enables iterative scanning for its dense branch too; without that, the dense branch would post-filter and starve selective filters. Chapter 12 owns lexical and hybrid retrieval and explains when fusion helps; the method is here because "pgvector plus `tsvector` in one database" is a large part of the case for PostgreSQL.
 
 ### Ingestion
 
@@ -1006,9 +1020,11 @@ Follow one query and one document through the code.
 
 **The store writes.** `NumpyVectorStore.replace_document` validates dimensions and ownership (every record must belong to the declared document and version), then, under the store lock, removes all chunks of the document and inserts the new ones. The matrix is marked dirty rather than rebuilt; the next search materializes it once. `PgVectorStore.replace_document` does the same in SQL: advisory lock, upsert, delete the leftovers, all in one transaction.
 
-**A query arrives.** The API's `get_principal` produces a principal or a 401. `SearchService.search` caps k, builds the authorization filter, embeds the query, calls the store, and records a span. In the NumPy store, `search` materializes the matrix if needed, computes the row mask with `matches` for every record (a Python loop, fine for tens of thousands of rows; vectorize it with per-field arrays if you go much larger), multiplies the allowed rows by the normalized query, and selects the top k with `argpartition` followed by a stable sort of just those k. In the pgvector store, `build_where` produces the clause, the transaction sets `hnsw.ef_search` and iterative scanning, and the query orders by `embedding <=> query`, which the planner serves from the HNSW index when the filter is not too selective and from a filtered scan when it is.
+**A query arrives.** The API's `get_principal` produces a principal or a 401. `SearchService.search` caps k, builds the authorization filter, embeds the query, calls the store, and records a span. In the NumPy store, `search` materializes the matrix if needed, computes the row mask with `matches` for every record (a Python loop, fine for tens of thousands of rows; vectorize it with per-field arrays if you go much larger), multiplies the allowed rows by the normalized query, and selects the top k with `argpartition` followed by a stable sort of just those k.
 
-**The evaluator scores it.** `evaluate` builds a principal per gold row, asks for four times as many chunks as the largest k so that enough distinct documents survive the chunk-to-document collapse, and computes recall@k, hit rate, and reciprocal rank on document ids. It checks forbidden rows for leaks and returns a non-zero exit code from the CLI if any leak occurs, which is what makes it usable as a CI gate.
+In the pgvector store, `build_where` produces the clause, the transaction sets `hnsw.ef_search` and iterative scanning, and the query orders by `embedding <=> query`, which the planner serves from the HNSW index when the filter is not too selective and from a filtered scan when it is.
+
+**The evaluator scores it.** `evaluate` builds a principal per gold row, asks for four times as many chunks as the largest k so that enough distinct documents survive the chunk-to-document collapse (several chunks of one document count as one hit), and computes recall@k, hit rate, and reciprocal rank on document ids. It checks forbidden rows for leaks and returns a non-zero exit code from the CLI if any leak occurs, which is what makes it usable as a CI gate.
 
 ## Production considerations
 
@@ -1020,7 +1036,7 @@ Follow one query and one document through the code.
 
 **Replication and availability.** For pgvector, standard PostgreSQL streaming replication covers vectors and indexes; replicas serve read traffic and lag the primary by the replication delay. HNSW indexes are large, so a new replica or a restore from backup takes longer than the row count suggests, and index rebuilds on the primary generate a lot of write-ahead log traffic that replicas must replay. Dedicated vector databases replicate shards across nodes, often with eventual consistency between replicas; read the consistency settings rather than assuming. In both cases the index is derived data, so the ultimate recovery path is rebuilding from the source documents. Know how long that takes, because that number is your worst-case recovery time.
 
-**Deletion.** Deleting a row is not the same as making it unretrievable. In PostgreSQL a deleted row's index entries remain until vacuum removes them (they are filtered out of results, but they cost scan time); in many dedicated stores deletes are tombstones applied at the next segment merge. For compliance deletions, verify with a query that the document no longer appears, purge it from every derived store (caches, evaluation snapshots, logs that contain retrieved text), and record the deletion. For high-churn corpora, schedule vacuum or compaction and watch index size per live row.
+**Deletion.** Deleting a row is not the same as making it unretrievable. In PostgreSQL a deleted row's index entries remain until vacuum removes them (they are filtered out of results, but they cost scan time, and in an HNSW scan they also consume candidate slots, so heavy churn underfills results); in many dedicated stores deletes are tombstones (delete markers) applied at the next segment merge. For compliance deletions, verify with a query that the document no longer appears, purge it from every derived store (caches, evaluation snapshots, logs that contain retrieved text), and record the deletion. For high-churn corpora, schedule vacuum or compaction and watch index size per live row.
 
 **Operations.** The metrics worth dashboards: chunks per namespace (an empty or shrinking active namespace is an outage), ingestion lag (time from source change to searchable), ingestion re-embed count per run, store p50 and p95 latency, underfilled-result rate by tenant, ANN recall from a nightly `ann-check`, retrieval recall from the gold set on every index change, and leak count, which must be zero. The `/healthz` endpoint returns 503 when the active namespace is empty, because an empty index answers every query successfully with nothing.
 
@@ -1033,8 +1049,8 @@ Follow one query and one document through the code.
 - **Treating similarity scores as probabilities.** A fixed threshold of 0.8 that worked for one model drops every result after the model changes.
 - **Chunk ids that are not deterministic.** Random UUIDs per ingestion run turn every re-ingest into duplicates, and the duplicates crowd out other documents in the top k.
 - **Deleting sources without pruning the index.** Revoked documents stay retrievable indefinitely.
-- **Building the HNSW index before the bulk load, or IVF centroids on an empty table.** The first is slow; the second produces centroids trained on nothing, with terrible recall.
-- **Leaving `ef_search` below k.** The query asks for 50 results and the index can return at most 40.
+- **Building the HNSW index before the bulk load, or IVF centroids on an empty table** (see Indexing strategies and rebuilds).
+- **Leaving `ef_search` below k** without iterative scans (see HNSW).
 
 ## Failure modes
 
@@ -1060,8 +1076,8 @@ The choice is rarely about raw query speed on a benchmark. It is about operation
 |---|---|---|
 | Operational surface | One database you probably already run, back up, and monitor | A new stateful system: deployment, upgrades, backups, access control, on-call |
 | Consistency with source data | Vectors, metadata, ACLs, and documents in one transaction; read-after-write on the primary | Separate system kept in sync by a pipeline; usually eventual consistency on writes |
-| Filtering | Full SQL: joins, arrays, JSONB, row-level security; planner picks index or scan; iterative scans in recent versions | Purpose-built filtered ANN in many engines, often stronger at very low selectivity; filter language is engine-specific |
-| Hybrid retrieval | `tsvector` full-text in the same query; RRF in SQL | Varies: built-in sparse or BM25 in some engines, external in others |
+| Filtering | Full SQL: joins, arrays, JSONB, row-level security; planner picks index or scan; iterative scans in recent versions | Purpose-built filtered ANN in many engines, often stronger with highly selective filters (small s); filter language is engine-specific |
+| Hybrid retrieval | `tsvector` full-text in the same query; reciprocal rank fusion (RRF, Chapter 12) in SQL | Varies: built-in sparse or BM25 in some engines, external in others |
 | Scale ceiling | Single-node memory and CPU for the index; replicas for read scale; sharding requires extra tooling | Horizontal sharding and replication as core features; designed for billions of vectors |
 | Index options | HNSW, IVFFlat; half-precision and binary types | Often more: PQ, disk-resident indexes, GPU indexes, tiered storage |
 | Multi-tenancy | Columns, partitions, schemas, or databases; row-level security | Collections, namespaces, or partitions; per-tenant limits vary |
@@ -1077,7 +1093,7 @@ Pick the first row whose conditions hold.
 | Under about a million vectors, modest QPS, data can live in memory or a file | NumPy or an in-process exact index | Perfect recall, trivial filters, nothing to operate |
 | You already run PostgreSQL; vectors up to tens of millions; filters and joins matter; transactional consistency with documents and ACLs matters | PostgreSQL + pgvector | One system, SQL filters, consistency, hybrid with `tsvector` |
 | Hundreds of millions of vectors or more, or index memory beyond one large node, or very high QPS with tight p99 | Dedicated vector database | Sharding, quantization, and filtered ANN as core features |
-| Many tenants with strict physical isolation requirements | Per-tenant databases or stores, whichever engine | Isolation is a contractual property, not a query filter |
+| Many tenants with strict physical isolation requirements | Per-tenant databases or stores, whichever engine | The contract requires physical separation, which no query filter provides |
 | Retrieval is mostly exact lookups by id, code, or field | No vector index; SQL, full-text, or key-value | Structured queries are more accurate and cheaper |
 | You need lexical and dense search with heavy text analytics | A search engine with vector support | One engine for BM25, aggregations, and vectors |
 
@@ -1089,13 +1105,13 @@ RAG means retrieval plus generation; the retrieval mechanism does not have to be
 
 The corpus is small. A few hundred documents fit in a NumPy matrix or, often, in the model's context window directly (Chapter 10 compares RAG with long context). Adding a vector database to a corpus that small adds failure modes without adding capability.
 
-The queries are exact lookups. "Status of ticket TCK-1042", "error code RET-002", "invoice INV-2026-0117": these are key lookups or keyword queries. Embedding models are notoriously weak at rare identifiers, and SQL or full-text search answers them exactly. The Northwind gold set tags such questions `exact-id` precisely so you can measure dense retrieval on them separately.
+The queries are exact lookups. "Status of ticket TCK-1042", "error code RET-002", "invoice INV-2026-0117": these are key lookups or keyword queries. Embedding models are weak at rare identifiers, and SQL or full-text search answers them exactly. The Northwind gold set tags such questions `exact-id` precisely so you can measure dense retrieval on them separately.
 
-The data is structured. Metrics, orders, employee records, and inventory belong in a database queried with SQL, possibly generated by a model over a semantic layer (the `query_metrics` tool; Chapter 36 designs the analytics assistant built on it). Embedding rows of a table and searching them by similarity is a worse database.
+The data is structured. Metrics, orders, employee records, and inventory belong in a database queried with SQL, possibly generated by a model over a semantic layer (the `query_metrics` tool; Chapter 36 designs the analytics assistant built on it). Similarity search over table rows loses exact filtering, aggregation, and joins.
 
 The content has a navigable structure. Manuals with a table of contents, legal codes with section numbers, and API references with endpoint names can be retrieved by navigating the hierarchy, by metadata filters, or by a model choosing sections from an outline. These "vectorless" approaches avoid embedding maintenance entirely and can be more precise for well-structured corpora; Chapter 37 implements structured and hierarchical retrieval.
 
-The honest default for a new project is: start with full-text search and an exact vector scan in the database you already have, measure on real questions, and add an ANN index or a dedicated store when a measurement, not a trend, says you need it.
+The sensible default for a new project is: start with full-text search and an exact vector scan in the database you already have, measure on real questions, and add an ANN index or a dedicated store when measurements on your workload show you need it.
 
 ## Evaluation and testing
 
@@ -1105,7 +1121,7 @@ Project 2 tests the system at three levels, all offline.
 
 **Component tests** cover the loader (front matter subset, fail-closed ACL, heading-aware chunks, content-hash versioning), ingestion (incremental skip with zero embedding calls, update on content change, pruning, and the deliberately pinned stale-index behavior without pruning), the API (401 without identity, tenant and ACL from headers, tags narrowing, k capping, the underfill span attribute, health check), the metrics (including the worked example: two relevant documents, one found at rank 2, gives recall@5 of 0.5, precision@5 of 0.2, and reciprocal rank 0.5), and the ANN experiments (IVF with full probing equals exact; recall grows with `nprobe`; post-filtering underfills selective filters while pre-filtering does not).
 
-**The retrieval evaluation** runs the shared Northwind gold set (`shared-data/eval/retrieval_gold.jsonl`, 40 questions) through the real service. With the offline hashing embedder, which behaves like a bag-of-words model, the run produced (illustrative):
+**The retrieval evaluation** runs the shared Northwind gold set (`shared-data/eval/retrieval_gold.jsonl`, 40 questions) through the real service. With the offline hashing embedder, which behaves like a bag-of-words model, the run produced (illustrative, abridged):
 
 ```text
 scored rows: 37  forbidden rows: 3
@@ -1157,7 +1173,7 @@ For ANN specifically, the test is the overlap check: run the gold questions agai
 
 ### Debugging exercises
 
-**D1.** After a rollout, retail users report that Northwind Assist "does not know anything about Lumen POS anymore", while logistics users see no change. The search spans for retail queries show `returned` values of 0 to 3 with k = 8 and `underfilled = true` on most requests; logistics spans look normal. The rollout moved the knowledge index from the NumPy store to pgvector with default settings. The retail tenant holds about 2% of all chunks. Diagnose the cause and propose two fixes.
+**D1.** After a rollout, retail users report that Northwind Assist "does not know anything about Lumen POS anymore", while logistics users see no change. The search spans for retail queries show `returned` values of 0 to 3 with k = 8 and `underfilled = true` on most requests; logistics spans look normal. The rollout moved the knowledge index from the NumPy store to pgvector 0.7 with `hnsw.ef_search` left at its default of 40. The retail tenant holds about 2% of all chunks. Diagnose the cause and propose two fixes.
 
 **D2.** Retrieval quality collapses on Monday morning. Top scores in search spans, previously spread between 0.3 and 0.8, now sit between 0.02 and 0.11 for every query. Ingestion logs show nothing unusual and chunk counts are unchanged. The deploy log shows that on Friday the embedding service's configuration was updated to "the latest model" for a different team's feature. What happened, which span field confirms it, and what structural change prevents it?
 

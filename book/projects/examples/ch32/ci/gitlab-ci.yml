@@ -54,6 +54,8 @@ unit:
     reports:
       junit: $WORKDIR/reports/unit.xml
 
+# Real-provider runs compare against eval/baseline-openai.json; until a reviewed change creates it
+# with --write-baseline, they exit 2 (fail closed) instead of judging a real model by the fake baseline.
 offline-eval:
   stage: eval
   needs: [unit]
@@ -82,7 +84,9 @@ build:
     - cd "$WORKDIR"
     - echo "$CI_REGISTRY_PASSWORD" | docker login "$CI_REGISTRY" -u "$CI_REGISTRY_USER" --password-stdin
   script:
-    - docker build -f Dockerfile --build-arg TRIAGE_GIT_SHA="$CI_COMMIT_SHORT_SHA" -t "$IMAGE" ../..
+    - docker build -f Dockerfile --build-arg TRIAGE_GIT_SHA="$CI_COMMIT_SHORT_SHA"
+        --build-arg TRIAGE_APP_VERSION="$(sed -n 's/^__version__ = "\(.*\)"/\1/p' northwind_triage/__init__.py)"
+        -t "$IMAGE" ../..
     - docker push "$IMAGE"
 
 canary:

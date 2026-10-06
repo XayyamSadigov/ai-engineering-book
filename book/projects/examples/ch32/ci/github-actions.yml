@@ -70,7 +70,9 @@ jobs:
 
   offline-eval:
     # Pull requests from forks never see secrets, so they run the gate on the simulated model;
-    # main and nightly runs use the real provider. Both compare against eval/baseline.json.
+    # main and nightly runs use the real provider. Each compares against its provider's baseline (eval/baseline.json for fake,
+    # eval/baseline-openai.json for openai); until a reviewed change creates the openai one with
+    # --write-baseline, real-provider runs exit 2 (fail closed).
     needs: unit
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -151,7 +153,7 @@ jobs:
       - run: helm upgrade --install triage deploy/chart --set image=${{ needs.build.outputs.image }} --set canary.weight=0
 
   nightly-drift:
-    # Same gate, same baseline, no code change: a failure here means the provider moved.
+    # Same gate, the provider's own baseline, no code change: a failure here means the provider moved.
     if: github.event_name == 'schedule'
     runs-on: ubuntu-latest
     env:

@@ -59,8 +59,11 @@ def load_dataset(path: Path) -> tuple[list[GoldenCase], str]:
 
 def evaluate(cases: list[GoldenCase], prompt_version: str, llm_client: LLMClient | None = None,
              dataset_version: str = "unknown") -> tuple[dict[str, float], VersionManifest]:
+    # Isolated from the environment: a flag file or treatment version in the shell must not split
+    # the golden set across prompt variants.
     settings = load_settings(environment="test", prompt_control_version=prompt_version,
-                             dataset_version=dataset_version,
+                             flags_path=None, prompt_treatment_version=None, model_candidate=None,
+                             _env_file=None, dataset_version=dataset_version,
                              evaluator_version=versioned(EVALUATOR_VERSION, Path(__file__).read_bytes()))
     service = build_service(settings, llm_client=llm_client, tracer=InMemoryTracer())
     correct_cat = correct_pri = errors = 0
@@ -69,6 +72,8 @@ def evaluate(cases: list[GoldenCase], prompt_version: str, llm_client: LLMClient
     manifest: VersionManifest | None = None
     for case in cases:
         result = service.triage(case.ticket, unit_id=f"eval:{case.ticket.id}")
+        if manifest is not None and result.manifest.fingerprint() != manifest.fingerprint():
+            raise RuntimeError("eval cases ran under different version manifests; results are not attributable")
         manifest = manifest or result.manifest
         got = result.triage
         if result.outcome != "ok":
@@ -125,7 +130,8 @@ def run(argv: list[str] | None = None, llm_client: LLMClient | None = None) -> i
     parser = argparse.ArgumentParser(prog="northwind_triage.eval_gate")
     parser.add_argument("--prompt-version", default="1.0.0")
     parser.add_argument("--dataset", type=Path, default=DEFAULT_DATASET)
-    parser.add_argument("--baseline", type=Path, default=DEFAULT_BASELINE)
+    parser.add_argument("--baseline", type=Path, default=None,
+                        help="default: eval/baseline.json for the fake provider, eval/baseline-<provider>.json otherwise")
     parser.add_argument("--report", type=Path)
     parser.add_argument("--write-baseline", action="store_true")
     parser.add_argument("--strict-attribution", action="store_true",
@@ -134,6 +140,9 @@ def run(argv: list[str] | None = None, llm_client: LLMClient | None = None) -> i
 
     cases, dataset_version = load_dataset(args.dataset)
     metrics, manifest = evaluate(cases, args.prompt_version, llm_client, dataset_version)
+    provider = manifest.models.get("provider", "fake")
+    if args.baseline is None:   # one baseline per provider: a real model is never judged against the fake one
+        args.baseline = DEFAULT_BASELINE if provider == "fake" else DEFAULT_BASELINE.with_name(f"baseline-{provider}.json")
     baseline_doc: dict[str, Any] | None = (json.loads(args.baseline.read_text())
                                            if args.baseline.exists() else None)
     report: dict[str, Any] = {"metrics": metrics, "manifest": manifest.model_dump(mode="json"),
@@ -147,7 +156,16 @@ def run(argv: list[str] | None = None, llm_client: LLMClient | None = None) -> i
         return 0
 
     exit_code = 0
-    if baseline_doc and baseline_doc["dataset"] != dataset_version:
+    base_provider = (baseline_doc or {}).get("manifest", {}).get("models", {}).get("provider")
+    if baseline_doc is None:
+        # Fail closed: without a baseline the regression and critical-slice checks would be skipped.
+        report["failures"].append(f"no baseline at {args.baseline}; create one with --write-baseline in a reviewed change")
+        exit_code = 2
+    elif base_provider is not None and base_provider != provider:
+        report["failures"].append(f"baseline made with provider {base_provider!r}, current is {provider!r}; "
+                                  f"keep one baseline per provider")
+        exit_code = 2
+    elif baseline_doc["dataset"] != dataset_version:
         report["failures"].append(f"baseline dataset {baseline_doc['dataset']} != {dataset_version}; "
                                   f"re-baseline on the new dataset before comparing")
         exit_code = 2

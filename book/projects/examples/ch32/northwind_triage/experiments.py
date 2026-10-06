@@ -16,7 +16,7 @@ from pathlib import Path
 from statistics import NormalDist
 from typing import Callable, Generic, Literal, Sequence, TypeVar
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 _Z = NormalDist()
 
@@ -78,6 +78,12 @@ class ArmStats(BaseModel):
     safety_violations: int = Field(ge=0)    # guardrail blocks that reached the user, leaks
     p95_latency_ms: float = Field(ge=0)
     cost_per_request: float = Field(ge=0)
+
+    @model_validator(mode="after")
+    def _counts_fit(self) -> "ArmStats":
+        if self.task_successes > self.requests or self.errors > self.requests:
+            raise ValueError("successes and errors cannot exceed requests")
+        return self
 
     @property
     def success_rate(self) -> float:

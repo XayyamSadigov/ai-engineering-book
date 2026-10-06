@@ -72,6 +72,13 @@ def check_consistency(settings: AppSettings, store: FilePromptStore, flags: Flag
             if alloc.percent > 0 and alloc.variant not in known:
                 problems.append(f"flag {flag_name} sends {alloc.percent}% to variant "
                                 f"{alloc.variant!r}, which has no configured value")
+        # Overrides and the safe variant receive traffic too; an unconfigured one would silently
+        # serve control while the manifest records the other variant.
+        for unit, variant in cfg.overrides.items():
+            if variant not in known:
+                problems.append(f"flag {flag_name} overrides {unit!r} to {variant!r}, which has no configured value")
+        if cfg.safe_variant not in known:
+            problems.append(f"flag {flag_name} safe variant {cfg.safe_variant!r} has no configured value")
     return problems
 
 

@@ -84,8 +84,9 @@ class VersionManifest(BaseModel):
         if len(self.prompts) == 1:
             ((prompt_id, label),) = self.prompts.items()
             attrs["prompt.id"], attrs["prompt.version"] = prompt_id, label
-        if len(self.models) == 1:
-            attrs["llm.model"] = next(iter(self.models.values()))
+        model = self.models.get("classifier") or (next(iter(self.models.values())) if len(self.models) == 1 else None)
+        if model:
+            attrs["llm.model"] = model
         if self.index_version:
             attrs["index.version"] = self.index_version
         return attrs

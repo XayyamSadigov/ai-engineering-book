@@ -20,7 +20,10 @@ def create_app(service: TriageService) -> FastAPI:
 
     @app.post("/v1/triage")
     def triage(body: TriageRequest, x_user_id: str = Header(...)) -> dict[str, Any]:
-        result = service.triage(body.ticket, unit_id=x_user_id)
+        # X-User-Id stands in for the verified identity an auth layer provides (Chapter 28's
+        # RequestContext); never take it from an unauthenticated client in production, or callers
+        # can pick their own flag bucket or a QA override. Units are scoped by tenant.
+        result = service.triage(body.ticket, unit_id=f"{body.ticket.tenant}:{x_user_id}")
         return {
             "triage": result.triage.model_dump(mode="json"),
             "outcome": result.outcome,

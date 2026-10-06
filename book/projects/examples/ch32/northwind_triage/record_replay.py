@@ -61,6 +61,7 @@ class RecordReplayTransport(httpx.BaseTransport):
         self._lock = threading.Lock()
         self._cursor: dict[str, int] = {}
         self._entries: dict[str, list[dict[str, Any]]] = self._load()
+        self._rerecorded: set[str] = set()   # keys replaced in this session (record mode)
 
     # ------------------------------------------------------------------ storage
     def _load(self) -> dict[str, list[dict[str, Any]]]:
@@ -124,6 +125,10 @@ class RecordReplayTransport(httpx.BaseTransport):
             },
         }
         with self._lock:
+            if self.mode == "record" and key not in self._rerecorded:
+                # Re-recording replaces the old exchange; appending would let replay keep serving it.
+                self._entries[key] = []
+                self._rerecorded.add(key)
             self._entries.setdefault(key, []).append(entry)
             self._save()
         # read() already decoded gzip/br, so the encoding headers no longer describe the body.

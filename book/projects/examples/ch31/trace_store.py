@@ -192,7 +192,9 @@ class TraceTree:
     @property
     def complete(self) -> bool:
         """True when the trace can answer the lineage questions: a root, no orphans, required keys."""
-        return self.root is not None and not self.orphans and all(self.get(k) is not None for k in REQUIRED_ROOT_KEYS)
+        # Root keys must be on the root: a key that survives only on a child span still means the
+        # root lost it, which is exactly the gap this check exists to catch.
+        return self.root is not None and not self.orphans and all(self.root.get(k) is not None for k in REQUIRED_ROOT_KEYS)
 
     # ---------------------------------------------------------------- display
     def render(self, keys: Iterable[str] = ()) -> str:
@@ -307,11 +309,12 @@ class TraceStore:
         until: float | None = None,
         labeled: bool | None = None,
         predicate: Callable[[TraceTree], bool] | None = None,
+        require_root: bool = True,
     ) -> "TraceStore":
         wanted_error = ErrorClass(error_class).value if error_class is not None else None
 
         def keep(t: TraceTree) -> bool:
-            if t.root is None or t.root.name != SpanName.REQUEST:
+            if require_root and (t.root is None or t.root.name != SpanName.REQUEST):
                 return False
             if tenant is not None and t.tenant != tenant:
                 return False
@@ -337,7 +340,7 @@ class TraceStore:
         """Fraction of request traces missing each required key, plus orphan rate."""
         traces = [t for t in self.traces() if t.root is not None and t.root.name == SpanName.REQUEST]
         n = max(1, len(traces))
-        out = {k: sum(1 for t in traces if t.get(k) is None) / n for k in required}
+        out = {k: sum(1 for t in traces if t.root.get(k) is None) / n for k in required}
         out["orphaned"] = sum(1 for t in self.traces() if t.orphans) / max(1, len(self))
         return out
 

@@ -76,7 +76,7 @@ The question for every attribute is: which debugging question does it answer, an
 
 ### Errors as a taxonomy, not a boolean
 
-`status=error` says that something failed. It does not say what to fix. The source material makes the point that a good error taxonomy turns evaluation findings into engineering work, and the same holds for telemetry. Every span that fails, whether through an exception or a semantic check, carries an `error.class` from a closed vocabulary: retrieval miss, retrieval contamination, permission denied, context truncation, unsupported claim, citation mismatch, format error, bad refusal, tool selection, tool argument, tool failure, loop, premature stop, budget exceeded, timeout, rate limited, provider error, content filter, unsafe content. Exceptions are mapped automatically by class name, so `aie_core`'s `RateLimitError` becomes `rate_limited`. Semantic failures are marked explicitly with `mark_error(span, ErrorClass.LOOP, ...)`.
+`status=error` says that something failed. It does not say what to fix. Chapter 24 starts every evaluation from a failure taxonomy because named classes turn findings into engineering work, and the same holds for telemetry. Every span that fails, whether through an exception or a semantic check, carries an `error.class` from a closed vocabulary: retrieval miss, retrieval contamination, permission denied, context truncation, unsupported claim, citation mismatch, format error, bad refusal, tool selection, tool argument, tool failure, loop, premature stop, budget exceeded, timeout, rate limited, provider error, content filter, unsafe content. Exceptions are mapped automatically by class name, so `aie_core`'s `RateLimitError` becomes `rate_limited`. Semantic failures are marked explicitly with `mark_error(span, ErrorClass.LOOP, ...)`.
 
 One distinction matters a great deal in practice. A provider attempt that failed with a rate limit and was retried successfully is a reliability event, not a quality failure. The trace store separates the two: `error_classes` lists failures that affected the outcome, and `recovered_errors` lists those absorbed by retries or fallbacks. Without the separation, every retry inflates the error rate, and on-call engineers learn to ignore it.
 
@@ -93,7 +93,7 @@ Observability data is a copy of your users' data with weaker access controls, lo
 
 Four controls compose. A default mode applies to all traffic. A sample rate upgrades a deterministic fraction of traces, chosen by hashing the trace id so every service makes the same choice and a trace is never half-captured. An on-error mode upgrades spans that failed, because those are the ones you will debug. A per-tenant ceiling is applied last and caps everything. A tenant whose contract forbids content leaving the request path stays at `hashed` even on errors. The ceiling is last by design: contractual and residency constraints override debugging convenience.
 
-The hash is keyed. A plain SHA-256 of an email address can be reversed by hashing a list of likely addresses. An HMAC with a secret salt cannot, as long as the salt stays in the secret store. The same keyed digest produces the `user.hash` attribute, so you can count distinct users and follow one user's session without storing who they are. Regex redaction (emails, phone numbers, card numbers, API-key shapes, Northwind employee ids) is a floor, not a guarantee. Names, addresses, and free-text descriptions of medical situations pass straight through pattern matching. Production systems put a PII detector behind the same `redactor` function (Chapter 27). They also keep a second line of defense in the collector: the Chapter 28 collector configuration deletes every attribute whose key ends in `.content` before export, so a misconfigured capture policy on one route cannot push content into the shared store. Routes that are allowed to keep redacted content export through a separate, restricted pipeline.
+The hash is keyed. A plain SHA-256 of an email address can be reversed by hashing a list of likely addresses. An HMAC with a secret salt cannot, as long as the salt stays in the secret store. The same keyed digest produces the `user.hash` attribute, so you can count distinct users and follow one user's session without storing who they are. Regex redaction (emails, phone numbers, card numbers, API-key shapes, Northwind employee ids) is a floor, not a guarantee. Names, addresses, and free-text descriptions of medical situations pass straight through pattern matching. Production systems put a PII detector behind the same `redactor` function and wrap the tracer in Chapter 27's `RedactingTracer`. Exception messages and stack traces obey the same capture mode and tenant ceiling: in `hashed` or `off` mode they leave only as a keyed digest. They also keep a second line of defense in the collector: the Chapter 28 collector configuration deletes every attribute whose key ends in `.content` before export, so a misconfigured capture policy on one route cannot push content into the shared store. Routes that are allowed to keep redacted content export through a separate, restricted pipeline.
 
 Telemetry also needs its own access control and retention, covered under production considerations. And a deletion request must reach it: every trace keyed by an erased user's hashed id must be findable and deletable.
 
@@ -101,7 +101,7 @@ Telemetry also needs its own access control and retention, covered under product
 
 Each signal answers a different question and has a different cost profile.
 
-**Metrics** answer "how often" and "how much", aggregated over time and a few low-cardinality dimensions: tenant, route, prompt version, index version, model. They are cheap, kept for everything, and the only signal you should alert on directly. Never put trace ids, user ids, or free text in metric labels. Cardinality explodes and the bill follows.
+**Metrics** answer "how often" and "how much", aggregated over time and a few low-cardinality dimensions: tenant, route, prompt version, index version, model. They are cheap, kept for everything, and the only signal you should alert on directly. Never put trace ids, user ids, or free text in metric labels. Each distinct label value creates its own time series, so an unbounded label multiplies the number of series (its cardinality) and the bill follows.
 
 **Traces** answer "what happened to this request". They are expensive per item, so they are sampled. Head sampling decides at the root by trace-id ratio; it is simple and consistent across services. Tail sampling decides after the trace completes, so it can keep every error, every slow request, and every request with negative feedback. It needs a collector that buffers whole traces. A common arrangement keeps 100% of traces with errors or feedback, a few percent of the rest, and every probe trace.
 
@@ -623,7 +623,7 @@ Run them from the project directory:
 
 ```bash
 cd book/projects/examples/ch31
-../../../../.venv/bin/python -m pytest -q        # 48 passed
+../../../../.venv/bin/python -m pytest -q        # 54 passed
 ../../../../.venv/bin/python incident_walkthrough.py
 ```
 
@@ -659,7 +659,7 @@ Follow one request through `incident_sim.py`, which plays the application. The r
 
 **Counting recovered retries as failures.** Error rates inflated by absorbed rate limits train people to ignore the error panel.
 
-**Tuning prompts before reading traces.** The source material's RAG debugging tree exists to prevent this. Most "the model ignored the evidence" reports turn out to be evidence that never reached the model.
+**Tuning prompts before reading traces.** The RAG debugging tree from Chapters 10 and 14 exists to prevent this. Most "the model ignored the evidence" reports turn out to be evidence that never reached the model.
 
 ## Failure modes
 
@@ -703,7 +703,7 @@ Alert rules deserve their own tests. Replay a quiet period and assert that nothi
 
 ## The debugging playbook: when output quality degrades
 
-The playbook turns the source material's RAG and agent debugging trees into a sequence of queries. Each step narrows the search, and no step involves editing a prompt.
+The playbook turns the RAG debugging tree (Chapters 10 and 14) and the agent debugging tree (Chapter 19) into a sequence of queries. Each step narrows the search, and no step involves editing a prompt.
 
 ```mermaid
 flowchart TD
@@ -817,7 +817,7 @@ request                  4241.1 ms index.version=idx-2026-10-01
   guardrail.check           2.1 ms
 ```
 
-Three chunks used 2,840 of the 3,000-token budget, and the next chunk did not fit. With the old chunker, six chunks of about 380 tokens fit comfortably. The mechanism is now confirmed from traces: the c3 chunker roughly doubled chunk size, the packer's budget did not change, and evidence ranked 4 to 6 is retrieved, reranked, and then silently discarded. Note also that `index.version` appears on the `llm.complete` span. Propagation lets a query over provider attempts alone group by index version.
+Three chunks used 2,840 of the 3,000-token budget, and the next chunk did not fit. With the old chunker, six chunks of about 380 tokens fit comfortably. The mechanism is now confirmed from traces: the c3 chunker made chunks more than twice as large, the packer's budget did not change, and evidence ranked 4 to 6 is retrieved, reranked, and then silently discarded. Note also that `index.version` appears on the `llm.complete` span. Propagation lets a query over provider attempts alone group by index version.
 
 **Step 6, collateral.** Latency moved slightly, with request p95 going from about 4.5 s to 4.9 s, well inside the 8 s target, because input tokens grew. Cost per request rose about 13% for both tenants (illustrative prices), below the 25% alert threshold. Cost per *successful* request rose more, for logistics from 0.00150 to 0.00184. Failed answers still cost money, and the denominator shrank:
 
@@ -828,7 +828,7 @@ after  logistics  cost/req 0.00163  cost/success 0.00184  llm calls/req 1.32
 after  retail     cost/req 0.00150  cost/success 0.00168  llm calls/req 1.01
 ```
 
-**Step 7, close the loop.** The immediate fix is to point the index alias back at `idx-2026-09-15`, which takes minutes because index versions are aliased (Chapter 15). The durable fix is a decision between a larger evidence budget, a packer that takes sections rather than whole chunks, and a smaller chunk size. Make it on the evaluation set, with the funnel as the metric. The incident also leaves three permanent changes. Probe questions whose gold evidence typically ranks 4 to 6 join the regression set. The release gate (Chapter 25) adds a context-truncation check for index builds. The `context_truncation_high` threshold, which fired, gets promoted from ticket to page for index-build windows.
+**Step 7, close the loop.** The immediate fix is to point the index alias back at `idx-2026-09-15`, which takes minutes because index versions are aliased (Chapter 9). The durable fix is a decision between a larger evidence budget, a packer that takes sections rather than whole chunks, and a smaller chunk size. Make it on the evaluation set, with the funnel as the metric. The incident also leaves three permanent changes. Probe questions whose gold evidence typically ranks 4 to 6 join the regression set. The release gate (Chapter 25) adds a context-truncation check for index builds. The `context_truncation_high` threshold, which fired, gets promoted from ticket to page for index-build windows.
 
 The agent loop in the same data is a separate, pre-existing issue that the trajectory view shows plainly:
 
@@ -841,7 +841,7 @@ agent=incident-research max_steps=6 stop=max_steps
   step 2: search_tickets      1782 ms  tokens=1289
   ...
   step 6: search_tickets      1474 ms  tokens=10001
-issues: loop: search_tickets called 6x with identical arguments (433a25309289); terminated by max_steps after 6 steps
+issues: loop: search_tickets called 6x with identical arguments (8b29dbc4f1a1); terminated by max_steps after 6 steps
 ```
 
 The arguments appear only as a keyed hash, because logistics has a `hashed` capture ceiling. The loop is still unambiguous, because identical fingerprints mean identical arguments. Observability under a strict privacy policy remains useful when the schema records structure.

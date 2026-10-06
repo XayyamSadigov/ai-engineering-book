@@ -80,7 +80,9 @@ def mark_error(span: Span, error_class: ErrorClass | str, message: str = "") -> 
 # ============================================================================ capture policy
 _REDACTIONS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"), "[EMAIL]"),
-    (re.compile(r"\b(?:sk|pk|api|key|tok)[-_][A-Za-z0-9]{12,}\b", re.IGNORECASE), "[SECRET]"),
+    (re.compile(r"\b(?:sk|pk|api|key|tok)[-_][A-Za-z0-9_-]{12,}", re.IGNORECASE), "[SECRET]"),   # sk-proj-..., sk-ant-...
+    (re.compile(r"\bgh[pousr]_[A-Za-z0-9]{20,}"), "[SECRET]"),
+    (re.compile(r"\bAKIA[0-9A-Z]{16}\b"), "[SECRET]"),
     (re.compile(r"(?i)\b(bearer)\s+[A-Za-z0-9._~+/=-]{12,}"), r"\1 [SECRET]"),
     (re.compile(r"\b(?:\d[ -]?){13,16}\b"), "[CARD]"),
     (re.compile(r"\+?\d{1,3}[ .-]?\(?\d{2,4}\)?[ .-]?\d{3}[ .-]?\d{2,4}\b"), "[PHONE]"),
@@ -253,11 +255,26 @@ class AITracer(Tracer):
     def _finalize(self, s: LinkedSpan) -> None:
         # the gateway sets its legacy keys after the span opens, so normalize again at the end
         s.attributes = normalize(s.name, s.attributes)
-        if s.pending_content:
+        exceptions = [e for e in s.events if e.get("type") == "exception"]
+        if s.pending_content or exceptions:
             mode = self.capture_policy.decide(s.trace_id, s.baggage.get(Attr.TENANT), s.status == "error")
             for key, text in s.pending_content.items():
                 s.attributes.update(self.capture_policy.render(key, text, mode))
-            s.attributes[Attr.CAPTURE_MODE] = mode
+            # Exception text is content too ("no customer for jane@corp.com"): it obeys the same
+            # mode and tenant ceiling instead of leaving through the span's events untouched.
+            for e in exceptions:
+                for field_name in ("exception.message", "exception.stacktrace"):
+                    text = e.get(field_name)
+                    if not isinstance(text, str):
+                        continue
+                    if mode == "full":
+                        continue
+                    if mode == "redacted":
+                        e[field_name] = self.capture_policy.redactor(text)[: self.capture_policy.max_chars]
+                    else:   # hashed or off: keep the type, replace the text with a keyed digest
+                        e[field_name] = f"hmac:{self.capture_policy.digest(text)}"
+            if s.pending_content:
+                s.attributes[Attr.CAPTURE_MODE] = mode
             s.pending_content.clear()
         if self.emit_genai_aliases:
             s.attributes.update(genai_aliases(s.attributes))

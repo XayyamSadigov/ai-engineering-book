@@ -72,7 +72,9 @@ METRICS: dict[str, MetricFn] = {
     "slo.availability_burn_rate": lambda st: _burn(
         _rate(st, lambda t: t.root is not None and t.root.is_error), SLO_AVAILABILITY),
     "slo.completion_burn_rate": lambda st: _burn(
-        _rate(st, lambda t: t.duration_ms > SLO_COMPLETION_MS), SLO_COMPLETION_OBJECTIVE),
+        # over served requests only, as in Chapter 29: a fast failure is not a fast answer
+        _rate(st, lambda t: None if (t.root is not None and t.root.is_error) else t.duration_ms > SLO_COMPLETION_MS),
+        SLO_COMPLETION_OBJECTIVE),
     # cost and tokens
     "cost.per_request_usd": lambda st: _per_request(st, lambda t: t.cost_usd),
     "cost.input_tokens_per_request": lambda st: _per_request(
@@ -200,8 +202,12 @@ def evaluate(rules: list[AlertRule], store: TraceStore, now: float) -> list[Aler
     proves it is not a blip, the short one proves it is still happening (SLO burn-rate alerts)."""
     results = []
     for rule in rules:
-        current = store.filter(since=now - rule.window, until=now)
-        baseline = store.filter(since=now - rule.window - rule.baseline_window, until=now - rule.window)
+        # Telemetry-health and error-class rules must also see traces that lost their root span:
+        # those are the ones that reveal fragmentation or contamination.
+        loose = rule.metric.startswith(("telemetry.", "errors."))
+        current = store.filter(since=now - rule.window, until=now, require_root=not loose)
+        baseline = store.filter(since=now - rule.window - rule.baseline_window, until=now - rule.window,
+                                require_root=not loose)
         base_groups = _groups(baseline, rule.group_by)
         for group, cur in _groups(current, rule.group_by).items():
             value = compute(rule.metric, cur)
@@ -209,7 +215,8 @@ def evaluate(rules: list[AlertRule], store: TraceStore, now: float) -> list[Aler
                 reference = float(rule.threshold)
             else:
                 base = base_groups.get(group)
-                base_value = compute(rule.metric, base) if base is not None and len(base) else math.nan
+                enough = base is not None and len(base) and sample_count(rule.metric, base) >= rule.min_samples
+                base_value = compute(rule.metric, base) if enough else math.nan   # a thin baseline is no reference
                 reference = base_value * float(rule.baseline_ratio or 1.0)
             samples = sample_count(rule.metric, cur)
             if samples < rule.min_samples or math.isnan(value) or math.isnan(reference):
@@ -217,8 +224,13 @@ def evaluate(rules: list[AlertRule], store: TraceStore, now: float) -> list[Aler
                 continue
             fired = value > reference if rule.op == ">" else value < reference
             if fired and rule.confirm_window is not None:
-                recent = _groups(store.filter(since=now - rule.confirm_window, until=now), rule.group_by).get(group)
-                short = compute(rule.metric, recent) if recent is not None and len(recent) else math.nan
+                recent = _groups(store.filter(since=now - rule.confirm_window, until=now, require_root=not loose),
+                                 rule.group_by).get(group)
+                # the short window also needs enough samples: one failed request must not confirm a page
+                min_short = max(1, rule.min_samples // 4)
+                short = (compute(rule.metric, recent)
+                         if recent is not None and len(recent) and sample_count(rule.metric, recent) >= min_short
+                         else math.nan)
                 confirmed = not math.isnan(short) and (short > reference if rule.op == ">" else short < reference)
                 if not confirmed:
                     results.append(AlertResult(rule.name, group, False, value, reference, samples, rule.severity,

@@ -26,7 +26,7 @@ class FakeTicketSystem:
     """The external system a side-effecting tool talks to.
 
     - `crash_after_commit`: the next create commits remotely, then the calling process dies
-      before it sees the response (the classic lost-acknowledgement case).
+      before it sees the response (the classic lost-acknowledgment case).
     - `crash_before_commit`: the process dies before the request leaves.
     - `supports_lookup`: whether the system can answer "do you have a ticket created with
       idempotency key K?" Many real APIs can (a client reference field, an idempotency-key

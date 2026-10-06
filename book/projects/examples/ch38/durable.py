@@ -9,7 +9,8 @@ adds the three things a long-running, multi-worker deployment needs on top:
    (status per run) updated in the same transaction as each append.
 2. Leases with fencing: one worker owns a run at a time. Every append checks the lease and
    extends it in the same transaction, so a worker that lost its lease (a "zombie" that
-   was paused by GC or a network partition) cannot write another event.
+   was paused by GC or a network partition) cannot write another event. A heartbeat
+   thread keeps the lease alive while a slow tool runs between appends.
 3. Outcome reconciliation for side-effecting tools: `ReconcilingTool` records intent in an
    idempotency ledger that lives outside the worker (Chapter 16's SQLiteIdempotencyStore)
    and, after a crash, asks the external system "did this action already happen?" before
@@ -105,7 +106,7 @@ class Database:
 class Lease:
     run_id: str
     owner: str
-    fence: int           # monotonically increasing per run; a newer owner always has a larger fence
+    fence: int           # increases on every acquire of this run; a newer owner always has a larger fence
     expires_at: float
 
 
@@ -129,8 +130,19 @@ class LeaseManager:
         return Lease(run_id, owner, fence, now + self.ttl_s)
 
     def release(self, lease: Lease) -> None:
+        # Expire the row instead of deleting it: the fence must keep counting up, or the next
+        # owner would get fence 1 again and a zombie holding an old fence 1 would pass the check.
         with self.db.transaction() as c:
-            c.execute("DELETE FROM leases WHERE run_id=? AND fence=?", (lease.run_id, lease.fence))
+            c.execute("UPDATE leases SET expires_at=0 WHERE run_id=? AND fence=?", (lease.run_id, lease.fence))
+
+    def renew(self, lease: Lease) -> bool:
+        """Heartbeat: extend a lease this worker still holds. False means it was lost."""
+        with self.db.transaction() as c:
+            try:
+                self.check_and_extend(c, lease)
+            except LeaseLost:
+                return False
+        return True
 
     def holder(self, run_id: str) -> Lease | None:
         rows = self.db.query("SELECT owner, fence, expires_at FROM leases WHERE run_id=?", (run_id,))
@@ -262,8 +274,11 @@ class ReconcilingTool:
       "it definitely did not happen", so execute now. Without a reconciler the outcome is
       unknowable, and the call fails as FATAL so a human decides instead of the model.
 
-    The run lease guarantees one worker per run, so an `in_progress` record for this run's
-    key always belongs to a dead attempt, never to a live concurrent one.
+    The run lease, kept alive by the runner's heartbeat while the tool runs, means one worker
+    per run, so an `in_progress` record for this run's key belongs to a dead attempt. The
+    exception is a worker frozen (GC, partition) for longer than the lease TTL: fencing stops
+    its next event, but not a side effect it is already performing. Closing that gap needs
+    the external system itself to check the fence or the idempotency key.
     """
 
     inner: Any
@@ -317,19 +332,23 @@ class DurableRunner:
     and configuration, while state comes only from the log."""
 
     def __init__(self, db: Database, factory: RuntimeFactory, *, owner: str, lease_ttl_s: float = 30.0,
-                 clock: Callable[[], float] = time.time) -> None:
+                 heartbeat_s: float | None = None, clock: Callable[[], float] = time.time) -> None:
         self.db = db
         self.factory = factory
         self.owner = owner
         self.store = SqliteEventStore(db)
         self.leases = LeaseManager(db, ttl_s=lease_ttl_s, clock=clock)
+        self.heartbeat_s = heartbeat_s if heartbeat_s is not None else lease_ttl_s / 3
 
     def start(self, goal: str, *, run_id: str, metadata: dict[str, Any] | None = None) -> RunResult:
         return self._with_lease(run_id, lambda rt: rt.run(goal, run_id=run_id, metadata=metadata))
 
     def resume(self, run_id: str, *, approve: bool | None = None, reason: str = "",
-               budget: Budget | None = None) -> RunResult:
-        return self._with_lease(run_id, lambda rt: rt.resume(run_id, approve=approve, reason=reason, budget=budget))
+               budget: Budget | None = None, request_id: str | None = None) -> RunResult:
+        """`request_id` binds a decision to the request it was made for (Chapter 19): if the
+        run is now paused on a different request, agentkit refuses instead of approving it."""
+        return self._with_lease(run_id, lambda rt: rt.resume(run_id, approve=approve, reason=reason, budget=budget,
+                                                             request_id=request_id))
 
     def recover(self) -> list[RunResult]:
         """Resume every run that is marked running but has no live lease: its worker died."""
@@ -348,15 +367,28 @@ class DurableRunner:
         if lease is None:
             raise LeaseHeld(f"run {run_id} is owned by {self.leases.holder(run_id)}")
         runtime = self.factory(self.store.fenced(self.leases, lease))
+        stop = threading.Event()
+        beat = threading.Thread(target=self._heartbeat, args=(lease, stop), daemon=True)
+        beat.start()
         try:
             result = fn(runtime)
         except SimulatedCrash:
+            stop.set()
             raise                               # a dead process releases nothing; the lease must expire
         except BaseException:
+            stop.set()
             self.leases.release(lease)
             raise
+        stop.set()
         self.leases.release(lease)              # paused, stopped, or completed: nobody needs to hold it
         return result
+
+    def _heartbeat(self, lease: Lease, stop: threading.Event) -> None:
+        """Appends extend the lease, but a tool can run longer than the TTL between two
+        appends. Renew on a timer until the call finishes or the lease is gone."""
+        while not stop.wait(self.heartbeat_s):
+            if not self.leases.renew(lease):
+                return
 
 
 __all__ = [

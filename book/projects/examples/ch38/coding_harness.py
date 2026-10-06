@@ -124,9 +124,14 @@ def apply_hunks(original: list[str], hunks: list[Hunk], *, fuzz: int = 3, path: 
 # --------------------------------------------------------------------------- workspace
 class Workspace:
     """A repository directory plus a frozen baseline. All paths are confined to `root`;
-    `protected` globs may be read but never patched."""
+    `protected` globs may be read but never patched. Test configuration (conftest.py,
+    pytest.ini, pyproject.toml, setup.cfg, tox.ini) and anything named like pytest itself are
+    protected by default: each can change what "the tests pass" means without touching a test."""
 
-    def __init__(self, root: str | Path, *, protected: tuple[str, ...] = ("tests/*", "*.lock", ".env*"),
+    def __init__(self, root: str | Path, *,
+                 protected: tuple[str, ...] = ("tests/*", "*.lock", ".env*", "conftest.py", "*/conftest.py",
+                                               "pytest.ini", "pyproject.toml", "setup.cfg", "tox.ini",
+                                               "pytest.py", "pytest/*", "_pytest*", "py.py"),
                  allowed: tuple[str, ...] = ("*",)) -> None:
         self.root = Path(root).resolve()
         self.protected = protected
@@ -150,12 +155,18 @@ class Workspace:
             raise PermissionError(f"path escapes the repository: {rel!r}")
         return target
 
+    @staticmethod
+    def tracked(rel: str) -> bool:
+        """Files the harness snapshots and diffs. The agent may write only these: a change the
+        diff cannot see is a change the scope check cannot judge."""
+        parts = Path(rel).parts
+        return Path(rel).suffix in TEXT_SUFFIXES and not any(p.startswith(".") or p == "__pycache__" for p in parts)
+
     def snapshot(self) -> dict[str, str]:
         out: dict[str, str] = {}
         for p in sorted(self.root.rglob("*")):
             rel = p.relative_to(self.root).as_posix()
-            if (p.is_file() and p.suffix in TEXT_SUFFIXES and p.stat().st_size <= MAX_FILE_BYTES
-                    and not any(part.startswith(".") or part == "__pycache__" for part in Path(rel).parts)):
+            if p.is_file() and self.tracked(rel) and p.stat().st_size <= MAX_FILE_BYTES:
                 out[rel] = p.read_text(encoding="utf-8")
         return out
 
@@ -221,9 +232,13 @@ class CodingTools:
             patches = parse_unified_diff(diff)
             staged: dict[Path, str | None] = {}
             for fp in patches:
-                rel = fp.new_path or fp.old_path
-                assert rel is not None
-                target = self.ws.resolve(rel)
+                raw = fp.new_path or fp.old_path
+                assert raw is not None
+                target = self.ws.resolve(raw)
+                rel = target.relative_to(self.ws.root).as_posix()   # judge the normalized path, not the raw one
+                if not self.ws.tracked(rel):
+                    return ToolOutput.failure(f"{raw} is a hidden or non-text path; the agent may not write it",
+                                              ErrorClass.PERMISSION)
                 if self.ws.is_protected(rel):
                     return ToolOutput.failure(f"{rel} is protected and cannot be modified by the agent",
                                               ErrorClass.PERMISSION)
@@ -233,8 +248,11 @@ class CodingTools:
                 if fp.new_path is None:
                     return ToolOutput.failure("file deletion is not allowed through apply_patch",
                                               ErrorClass.PERMISSION)
-                original = [] if fp.old_path is None else target.read_text(encoding="utf-8").splitlines()
-                if fp.old_path is None and target.exists():
+                if target in staged:            # a second patch to the same file applies on top of the first
+                    original = (staged[target] or "").splitlines()
+                else:
+                    original = [] if fp.old_path is None else target.read_text(encoding="utf-8").splitlines()
+                if fp.old_path is None and (target.exists() or target in staged):
                     raise PatchError(f"{rel} already exists; patch it instead of creating it")
                 staged[target] = "\n".join(apply_hunks(original, fp.hunks, path=rel)) + "\n"
         except PatchError as exc:
@@ -262,8 +280,10 @@ class CodingTools:
         return ToolOutput(content=diff or "no changes", artifacts={"diff_lines": self.ws.changed_line_count()})
 
     def pytest(self, selector: str = "tests") -> dict[str, Any]:
-        """Run pytest on a fresh copy of the workspace. The child sees only the files, a
-        scrubbed environment, and the sandbox limits; it cannot modify the workspace."""
+        """Run pytest on a fresh copy of the workspace, with a scrubbed environment and the
+        sandbox limits. The copy keeps ordinary writes away from the workspace, but this is
+        not filesystem isolation: test code could still reach the workspace by absolute path.
+        Real isolation needs a container or microVM (Chapter 16)."""
         res = self.sandbox.run([sys.executable, "-B", "-m", "pytest", "-q", "-p", "no:cacheprovider",
                                 "-o", "addopts=", "--rootdir=.", selector], files=self.ws.snapshot())
         out = (res.stdout + res.stderr).strip()

@@ -1,16 +1,16 @@
 # Chapter 38 — Durable and Long-Running Agents
 
-After this chapter you will be able to run agents that outlive the process that started them: runs that survive a crash in the middle of a side effect without repeating it, wait hours for an approval or a webhook without holding a thread, escalate and expire unanswered approvals, keep a two-hundred-step task inside a bounded context, and replay any of it offline. You will also read coding, IDE, computer-use, skill, and voice agents as harness engineering problems with one model in the middle. The code in `book/projects/examples/ch38/` extends Chapter 19's `agentkit` and Chapter 16's `toolkit`: a SQLite-backed `DurableRunner` with leases and outcome reconciliation, an `InterruptManager` for approvals, timers, and events, a task ledger with compaction, a coding-agent harness with a deterministic Definition of Done, a skill loader, and a voice-turn gate, all offline with scripted models.
+After this chapter you will be able to run agents that outlive the process that started them: runs that survive a crash in the middle of a side effect without repeating it, wait hours for an approval or a webhook without holding a thread, escalate and expire unanswered approvals, keep a two-hundred-step task inside a bounded context, and replay any of it offline. You will also be able to analyze coding, IDE, computer-use, skill, and voice agents as harness engineering problems, where the harness is the code around the model that runs tools, keeps state, and enforces checks. The code in `book/projects/examples/ch38/` extends Chapter 19's `agentkit` and Chapter 16's `toolkit`: a SQLite-backed `DurableRunner` with leases and outcome reconciliation, an `InterruptManager` for approvals, timers, and events, a task ledger with compaction, a coding-agent harness with a deterministic Definition of Done, a skill loader, and a voice-turn gate, all offline with scripted models.
 
 ## Why this matters
 
 The agent loop of Chapter 19 assumes that a run starts, does its work, and ends while one process watches. Real Northwind work does not fit that shape. An incident research run waits forty minutes for a database failover to finish before it can confirm the fix. A refund reply waits overnight for a team lead to approve it. A carrier claim waits three days for a vendor's email. A coding task runs two hundred tool calls across a repository. During any of these, deploys roll the worker pods, a node is drained, a provider times out, or someone presses Ctrl-C.
 
-When that happens to a naive agent, one of three things goes wrong. The run is lost, and someone has to notice and start over. The run is restarted from the beginning, which repeats every model call and, worse, every side effect: the customer gets two replies, the ticketing system gets two follow-up tickets, the refund is issued twice. Or the run is resumed from a checkpoint that was written before the side effect, and the harness has no idea whether the email it was sending at the moment of the crash actually left. The source material puts the requirement precisely: on restart, the harness determines whether an action completed rather than asking the model to guess.
+When that happens to a naive agent, one of three things goes wrong. The run is lost, and someone has to notice and start over. The run is restarted from the beginning, which repeats every model call and, worse, every side effect: the customer gets two replies, the ticketing system gets two follow-up tickets, the refund is issued twice. Or the run is resumed from a checkpoint that was written before the side effect, and the harness has no idea whether the email it was sending at the moment of the crash actually left. The requirement is precise: on restart, the harness must determine whether an action completed instead of asking the model to guess.
 
 Long runs also break the context window. Every tool result the agent sees stays in the transcript, and by step forty the prompt is mostly stale search results. Truncating blindly loses the one ticket id that the final answer depends on; summarizing with a model loses it differently. And long runs are where humans enter the loop, so approvals need deadlines, owners, and an answer for "what if nobody answers?"
 
-None of this is new to distributed systems. Job queues, workflow engines, and payment systems solved crash recovery, idempotent side effects, timers, and leases long ago. What is new is that the component choosing the next action is probabilistic, so the harness cannot rely on it to remember, reconcile, or stop. As the source material puts it, agent reliability is ordinary distributed-systems reliability plus probabilistic planning. The second half of the chapter applies the same lens to coding, IDE, computer-use, and voice agents, whose quality comes from the harness much more than from the model.
+None of this is new to distributed systems. Job queues, workflow engines, and payment systems solved crash recovery, idempotent side effects, timers, and leases long ago. What is new is that the component choosing the next action is probabilistic, so the harness cannot rely on it to remember, reconcile, or stop. Agent reliability is ordinary distributed-systems reliability plus probabilistic planning. The second half of the chapter applies the same lens to coding, IDE, computer-use, and voice agents, whose quality, in practice, often depends as much on the harness as on the model.
 
 ## Mental model
 
@@ -20,7 +20,7 @@ Everything that matters about a run is in its event log: the goal, every model d
 
 The model is the one component that cannot be trusted with continuity. It does not remember the previous process, it cannot tell whether an email went out, and it should not decide what silence from an approver means. Those are facts, and facts belong to code and storage. This is mental model 7 from Chapter 1 in its strongest form: reliability is engineered around the model, not expected from it.
 
-A second framing helps with side effects. Every external action has three moments: intent (we are about to do X with key K), effect (the outside world changed), and acknowledgement (we learned that it changed). A crash can fall between any two. Durable agent design is mostly the discipline of recording intent before effect, passing the key along with the effect, and having a way to ask the outside world about K when acknowledgement is missing.
+A second framing helps with side effects. Every external action has three moments: intent (we are about to do X with key K), effect (the outside world changed), and acknowledgment (we learned that it changed). A crash can fall between any two. Durable agent design is mostly the discipline of recording intent before effect, passing the key along with the effect, and having a way to ask the outside world about K when acknowledgment is missing.
 
 ## Core concepts
 
@@ -28,15 +28,17 @@ A second framing helps with side effects. Every external action has three moment
 
 Durable execution means that a run's progress is persisted at well-defined points, so that it can continue after any interruption from the last persisted point, with the guarantee that completed steps are not repeated and incomplete steps are retried safely. Workflow engines achieve this by recording every step's result in a history and replaying the history to rebuild state; graph libraries achieve it with checkpointers that save state after each node. Chapter 17 built the second style for workflows. `agentkit` already uses the first style: every decision is an event, appended before state changes, and `AgentRuntime.resume(run_id)` rebuilds state from the log and continues.
 
-Three properties make this work, and each has a failure if you get it wrong. Events must be appended before they are acted on, or a crash leaves state the log cannot explain. Sequence numbers must be dense and checked on append, or two writers can interleave events from different futures of the same run. And state must be derivable from events alone; if a field lives only in memory, it disappears in the crash. `agentkit` enforces all three within one process. Its `JsonlEventStore` checks the sequence in memory, which is racy across processes (Chapter 19, exercise E4); the SQLite store in this chapter moves the check into the database, where the primary key on `(run_id, seq)` makes a second writer of the same sequence number fail inside its transaction. What remains for this chapter is the part that only matters once runs are long and workers are many: storage that survives the host, ownership so that exactly one worker drives a run, and correct handling of the step that was executing when the crash happened.
+Three properties make this work, and each has a failure if you get it wrong. Events must be appended before they are acted on, or a crash leaves state the log cannot explain. Sequence numbers must be dense and checked on append, or two writers can interleave events from different futures of the same run. And state must be derivable from events alone; if a field lives only in memory, it disappears in the crash.
 
-A checkpoint, in this design, is just derived state at a sequence number. You can cache it (store `AgentState` every N events and replay only the tail) when logs get long, but the cache is never the source of truth. That distinction matters during upgrades. If a new release changes how state is derived, a log can be re-folded with the new code; a pickled checkpoint from the old release cannot. Version event schemas the way you version database schemas (Chapter 32), and make the fold tolerant of old event shapes.
+`agentkit` enforces all three within one process. Its `JsonlEventStore` checks the sequence in memory, which is racy across processes (Chapter 19, Engineering question E4); the SQLite store in this chapter moves the check into the database, where the primary key on `(run_id, seq)` makes a second writer of the same sequence number fail inside its transaction. What remains for this chapter is the part that only matters once runs are long and workers are many: storage that survives the host, ownership so that exactly one worker drives a run, and correct handling of the step that was executing when the crash happened.
+
+A checkpoint, in this design, is only derived state at a sequence number. You can cache it (store `AgentState` every N events and replay only the tail) when logs get long, but the cache is never the source of truth. That distinction matters during upgrades. If a new release changes how state is derived, a log can be re-folded with the new code; a pickled checkpoint from the old release cannot. Version event schemas the way you version database schemas (Chapter 32), and make the fold tolerant of old event shapes.
 
 ### The at-least-once window and outcome reconciliation
 
-When a worker resumes a run whose last events are `ToolCallApproved` for `create_ticket` with no matching `ToolResult`, it must decide whether to call the tool again. It has no way to know from the log alone. The tool may never have started; it may have started and failed; it may have created the ticket and died before recording the result. Re-executing gives at-least-once semantics: correct for reads, harmful for writes.
+When a worker resumes a run whose last events are `ToolCallApproved` for `create_ticket` with no matching `ToolResult`, it must decide whether to call the tool again. It has no way to know from the log alone. The tool may never have started; it may have started and failed; it may have created the ticket and died before recording the result. Re-executing gives at-least-once semantics, meaning every action happens one or more times: harmless for reads, harmful for writes.
 
-The standard tool against duplicates is an idempotency key: a stable identifier for one logical action, sent with the request, which the receiving system uses to recognize a retry and return the original result instead of acting twice. Chapter 16 built `SQLiteIdempotencyStore` for duplicate suppression inside our boundary, and `agentkit` already derives the key `"<run_id>:<request_id>"` for every call. The request id comes from the event log, so the key is the same in the process that crashed and in the process that recovers. That stability is the whole trick. A key generated with `uuid4()` at execution time would be different on retry and would protect nothing.
+The standard tool against duplicates is an idempotency key: a stable identifier for one logical action, sent with the request, which the receiving system uses to recognize a retry and return the original result instead of acting twice. Chapter 16 built `SQLiteIdempotencyStore` for duplicate suppression inside our boundary, and `agentkit` already derives the key `"<run_id>:<request_id>"` for every call. The request id comes from the event log, so the key is the same in the process that crashed and in the process that recovers. That stability is what makes the key useful. A key generated with `uuid4()` at execution time would be different on retry and would protect nothing.
 
 A local idempotency record still cannot answer the critical question after a crash in the middle of the side effect. The record says `in_progress`: we reserved the key and called out, then lost track. The only party that knows whether the ticket exists is the ticketing system. Outcome reconciliation is the step that asks it. There are three cases, and the harness must handle each explicitly:
 
@@ -46,29 +48,33 @@ A local idempotency record still cannot answer the critical question after a cra
 | Look up by key (a client reference field, a search by external id) | Asks "do you have K?" first; uses the answer, or executes if absent | One effect, and the original output is recovered |
 | Neither | Cannot know; marks the outcome unknown and stops for a human | No duplicate; a person reconciles |
 
-The third row is uncomfortable, and teams are tempted to "just retry." For a read that is fine. For an email to a customer, a refund, or an access change, an unknown outcome must become a human task, because both guesses are wrong half the time in the worst way. The right long-term fix is to change the integration: put the key in a field you can search, or wrap the system behind a service that records keys before forwarding.
+The third row is uncomfortable, and teams are tempted to "just retry." For a read that is fine. For an email to a customer, a refund, or an access change, an unknown outcome must become a human task, because either guess can be wrong, and both errors (a duplicate refund or a missing one) are costly. The right long-term fix is to change the integration: put the key in a field you can search, or wrap the system behind a service that records keys before forwarding.
 
-There is a fourth crash point that needs no external help: the side effect completed and the local ledger recorded success, but the process died before appending the `ToolResult` event. On resume, the ledger already holds the output, so the harness returns it without calling anything. Recording the outcome in a store that is separate from the event log and written before the event is what makes this case cheap.
+One crash point needs no external help at all: the side effect completed and the local ledger recorded success, but the process died before appending the `ToolResult` event. On resume, the ledger already holds the output, so the harness returns it without calling anything. Recording the outcome in a store that is separate from the event log and written before the event is what makes this case cheap.
 
 ### Leases and fencing: one owner per run
 
 With many workers and a recovery loop, two workers can believe they own the same run. Worker A stalls in a long garbage-collection pause or loses its network for forty seconds; the recovery loop decides A is dead and gives the run to worker B; A wakes up and keeps going. Now two processes append events and call tools for one run.
 
-A lease is a time-limited claim on a run: worker A holds run R until time T, and must renew before T. Leases make liveness explicit, but on their own they do not prevent the zombie problem, because A does not know its lease expired while it was paused. Fencing closes that hole. Each lease carries a fence token, a number that increases every time the run changes owner, and every write checks the token in the same transaction as the write itself. When A wakes and tries to append, the database refuses: the current fence is B's. In `durable.py`, every append extends the lease and checks the fence atomically, so appends double as heartbeats. A tool call that runs longer than the lease without appending needs either a separate heartbeat or a lease longer than the tool's timeout; pick the lease from the slowest tool, not from the average.
+A lease is a time-limited claim on a run: worker A holds run R until time T, and must renew before T. Leases make liveness explicit, but on their own they do not prevent the zombie problem, because A does not know its lease expired while it was paused. Fencing closes that hole. Each lease carries a fence token, a number that increases every time the run is acquired, and every write checks the token in the same transaction as the write itself. When A wakes and tries to append, the database refuses: the current fence is B's.
 
-Leases also define recovery. A run whose status is `running` but whose lease has expired was abandoned by a dead worker; the recovery loop resumes it. A run whose lease is live is merely slow, and must be left alone. A recovery loop that does not check leases is a duplicate-execution generator.
+In `durable.py`, every append extends the lease and checks the fence atomically, so appends double as heartbeats. A tool call can run longer than the lease without appending, so the runner also renews the lease from a background heartbeat while a call is in flight. A heartbeat proves only that the process is alive, so a tool that hangs keeps its lease for as long as the process lives; give every tool call its own timeout. A worker frozen for longer than the lease still loses the run, and fencing then stops its next event but not a side effect it is already performing; that is why the external system should also deduplicate on the idempotency key.
+
+Leases also define recovery. A run whose status is `running` but whose lease has expired was abandoned by a dead worker; the recovery loop resumes it. A run whose lease is live is merely slow, and must be left alone. A recovery loop that does not check leases will run the same work twice.
 
 ### Interrupts as first-class states
 
-A human approval in a short agent is a function call that blocks. In a long-running agent it is a state with a record of its own: which request is pending, with which exact arguments, assigned to whom, created when, escalating when, and expiring when. `agentkit` already pauses the run on approval and persists the pause as `Stopped(approval_required)`. What it does not have is the rest of that record, so the pause cannot outlive the person who was supposed to answer it.
+A human approval in a short agent is a function call that blocks. In a long-running agent it is a state with a record of its own: which request is pending, with which exact arguments, assigned to whom, created when, escalating when, and expiring when. `agentkit` already pauses the run on approval, persists the pause as `Stopped(approval_required)`, and binds a decision to the pending call through `resume(request_id=...)`. What it does not have is the rest of that record (owner, escalation, expiry), so nothing happens if the person who should answer never does.
 
-Four rules make approvals safe in long runs. First, an approval is bound to one request and its arguments. If the agent replans while paused, or a second click arrives after the first, the decision is stale and must be refused. Second, every approval has an owner and an escalation chain: a support lead first, a duty manager after an hour. Escalation is a state change with a notification, recorded in the interrupt's history. Third, every approval expires, and expiry is a denial. Silence is not consent; an agent that sends a refund because nobody objected within a day has turned an approval gate into a timer. Fourth, the authority to decide is checked by code: only someone on the chain, up to the current escalation level, may approve, regardless of who can see the request.
+Four rules make approvals safe in long runs. First, an approval is bound to one request and its arguments. If the agent replans while paused, or a second click arrives after the first, the decision is stale and must be refused. The same holds for timers and events: every resume carries the interrupt's request id, so a timer set for one request cannot approve a later one. Second, every approval has an owner and an escalation chain: a support lead first, a duty manager after an hour. Escalation is a state change with a notification, recorded in the interrupt's history. Third, every approval expires, and expiry is a denial. Silence is not consent; an agent that sends a refund because nobody objected within a day has turned an approval gate into a timer. Fourth, the authority to decide is checked by code: only someone on the chain, up to the current escalation level, may approve, regardless of who can see the request.
 
-The same mechanism handles waits that have nothing to do with humans. An agent that needs to check on a parcel in an hour, or wait for a vendor's reply, should not sleep in a loop or poll a tool. In this chapter's design, a wait is an approval granted by the clock or by the outside world. The agent calls `wait_until(seconds)` or `wait_for_event(event_type, correlation_id, timeout_s)`. Both tools declare that they require approval, so the runtime pauses exactly as it does for a risky tool. The interrupt manager sees which tool is pending and records a timer or an event subscription instead of a human task. When the timer fires or the event arrives, it resumes the run with approval granted, the wait tool executes, and it returns the delivered payload as its observation. Between pause and resume, there is no process and no lease; there are only rows.
+The same mechanism handles waits that have nothing to do with humans. An agent that needs to check on a parcel in an hour, or wait for a vendor's reply, should not sleep in a loop or poll a tool.
 
-External events bring their own two hazards. Webhook providers deliver at least once, so every delivery is deduplicated by its event id before anything happens. And events can arrive before the agent starts waiting for them, for example a delivery scan that lands while the agent is still drafting; those go to an inbox keyed by correlation id, and a later wait is satisfied immediately. A scheduler process calls `tick()` every few seconds to fire due timers, escalate stale approvals, and expire dead ones. Each of those changes is a conditional update that only one replica can win, so running several schedulers for availability is safe.
+In this chapter's design, a wait is an approval granted by the clock or by the outside world. The agent calls `wait_until(seconds)` or `wait_for_event(event_type, correlation_id, timeout_s)`. Both tools declare that they require approval, so the runtime pauses exactly as it does for a risky tool. The interrupt manager sees which tool is pending and records a timer or an event subscription instead of a human task. When the timer fires or the event arrives, it resumes the run with approval granted, the wait tool executes, and it returns the delivered payload as its observation. Between pause and resume, there is no process and no lease; there are only rows.
 
-One accounting detail: an agent's run-time budget (Chapter 19's `deadline_s`) should count active time, not waiting time. `agentkit` measures elapsed time per segment and adds segments, so a run that waits a day for approval still has its full computation budget. The business deadline ("this claim must be filed within 72 hours") is a separate wall-clock limit, enforced by the interrupt's expiry and by a timer that stops the run.
+External events bring their own two hazards. Webhook providers deliver at least once, so every delivery is deduplicated by its event id, in the same transaction that records what the event did. And events can arrive before the agent starts waiting for them, for example a delivery scan that lands while the agent is still drafting; those go to an inbox keyed by correlation id, and a later wait is satisfied immediately. A scheduler process calls `tick()` every few seconds to fire due timers, escalate stale approvals, and expire dead ones. Each of those changes is a conditional update that only one replica can win; the loser skips the item. Every input is recorded before the run is resumed, in the same transaction that fires its timer or consumes its event, and if the resume fails, a later `tick()` finds the recorded resolution on a still-paused run and finishes it. Running several schedulers for availability is therefore safe.
+
+One accounting detail: an agent's run-time budget (Chapter 19's `deadline_s`) should count active time, not waiting time. `agentkit` measures elapsed time per segment and adds segments, so a day spent waiting for approval uses none of the run's computation budget. An operator who extends the budget on resume records it in the `Resumed` event, so replay applies the same limit. The business deadline ("this claim must be filed within 72 hours") is a separate wall-clock limit, enforced by the interrupt's expiry and by a timer that stops the run.
 
 ### Replay and counterfactual testing
 
@@ -92,21 +98,23 @@ Extractive digests are cheaper and more predictable than model summaries, and th
 
 ## Harness engineering in agent products
 
-The source material makes a claim worth taking seriously: the model is interchangeable more often than the surrounding harness, and a stronger harness can make the same base model dramatically more useful. The following agent products are the clearest evidence. In each, the hard engineering is in tools, state, verification, and permissions.
+In many agent products the model is easier to swap than the surrounding harness, and a stronger harness can make the same base model substantially more useful. The products below show why. In each, the hard engineering is in tools, state, verification, and permissions.
 
 ### Coding agents
 
-A coding agent combines repository search, file reading, editing, command execution, tests, and an iterative loop. Its advantage is not code generation, which a single model call can do, but closing the loop with the environment: it edits, runs the tests, reads the failure, and repairs. A coding agent that writes plausible code but never runs tests is a code generator, not an engineering agent.
+A coding agent combines repository search, file reading, editing, command execution, tests, and an iterative loop. Its advantage is not code generation, which a single model call can do, but closing the loop with the environment: it edits, runs the tests, reads the failure, and repairs.
 
 The tool design follows from that loop. Instead of a raw shell, give narrow, high-signal tools: `search_code` (exact regex over the repository, because identifiers must be found exactly), `read_file` with line numbers, `apply_patch` taking a unified diff, `run_tests`, and `show_diff`. Narrow tools make good actions easy and dangerous ones hard. A unified diff is a good edit format because it is reviewable, it carries context lines that let the harness verify it applies to the file the model thinks it is editing, and it fails loudly when the file has changed. When a patch does not apply, the error message should show the lines that are actually there, which turns a wasted step into a correction. Patches should apply all-or-nothing across files, so a half-applied multi-file change never reaches the tests.
 
-The sandbox is the security boundary. Tests execute repository code, and repository code can do anything the process can: read credentials, call the network, delete files. Run tests in an ephemeral environment with only the repository's files, a scrubbed environment, bounded CPU, memory, and wall-clock time, and the network disabled or allow-listed. Package installation deserves its own permission, because installing a package runs arbitrary code. The chapter's harness runs pytest through Chapter 16's `SandboxRunner` on a fresh copy of the workspace, so a test cannot even modify the files the agent is working on. On a laptop that sandbox is a process boundary only; in production use a container or microVM per task.
+The sandbox is the security boundary. Tests execute repository code, and repository code can do anything the process can: read credentials, call the network, delete files. Run tests in an ephemeral environment with only the repository's files, a scrubbed environment, bounded CPU, memory, and wall-clock time, and the network disabled or allow-listed. Package installation deserves its own permission, because installing a package runs arbitrary code. The chapter's harness runs pytest through Chapter 16's `SandboxRunner` on a fresh copy of the workspace, so ordinary test writes land in the copy, not in the files the agent is working on. A copy is not isolation, though: test code can still reach the workspace by absolute path. On a laptop that sandbox is a process boundary only; in production use a container or microVM per task.
 
-The Definition of Done is what makes a coding agent trustworthy, and it must be deterministic. For the Northwind SLA task it is: at least one file changed, the tests pass when the verifier runs them itself, every changed file is inside the allowed paths, no protected file (tests, lockfiles, environment files) changed, the diff is under a size limit, and the agent ran the tests and looked at the diff. The verifier runs the tests rather than reading the transcript, because a model's "all tests pass" is a claim. Protecting the test directory is not paranoia: the cheapest way for a model to make a failing test pass is to edit the test, and it will find that path. Scope and size limits keep diffs reviewable, which matters because the final gate for consequential changes is still a human code review.
+The Definition of Done is what makes a coding agent trustworthy, and it must be deterministic. For the Northwind SLA task it is: at least one file changed, the tests pass when the verifier runs them itself, every changed file is inside the allowed paths, no protected file (tests, test configuration such as `conftest.py` and `pyproject.toml`, lockfiles, environment files) changed, the diff is under a size limit, and the agent ran the tests and looked at the diff. The verifier runs the tests rather than reading the transcript, because a model's "all tests pass" is a claim. Protecting the test directory is not paranoia: the cheapest way for a model to make a failing test pass is to edit the test, and models with write access often find that path. Judge scope on the normalized path, not on the string the model wrote: `northwind_sla/../tests/test_sla.py` is a test file. Scope and size limits keep diffs reviewable, which matters because the final gate for consequential changes is still a human code review.
 
 Context strategy for coding agents is retrieval over code (Chapter 37 covers the retrieval side). Do not dump the repository into the prompt. Search for symbols, references, tests, and neighboring implementations; keep a compact working set; summarize old observations but keep file paths, line numbers, test failures, and decisions, which is exactly what the ledger and literal-preserving digests above are for. Semantic code search helps in very large repositories, but exact identifier search remains essential.
 
-IDE agents add the editor's context: open files, the selection, language-server diagnostics, Git state, terminal output, and a codebase index. The product goal is to minimize the distance between reasoning, modification, and verification, so diagnostics and test results flow back into the loop without the user copying them. Autocomplete and agent mode are different products. Autocomplete predicts a local continuation within tens to a few hundred milliseconds (illustrative), uses a small context around the cursor, takes no actions, and is judged by acceptance rate. Agent mode does multi-step repository work, tolerates minutes, uses tools and tests, and is judged by task success and review findings. Codebase indexes raise freshness and privacy questions: exclude secrets and generated files, update incrementally, and treat the index as a hint that never replaces reading the file.
+IDE agents add the editor's context: open files, the selection, language-server diagnostics, Git state, terminal output, and a codebase index. The product goal is to minimize the distance between reasoning, modification, and verification, so diagnostics and test results flow back into the loop without the user copying them.
+
+Autocomplete and agent mode are different products. Autocomplete predicts a local continuation within tens to a few hundred milliseconds (illustrative), uses a small context around the cursor, takes no actions, and is judged by acceptance rate. Agent mode does multi-step repository work, tolerates minutes, uses tools and tests, and is judged by task success and review findings. Codebase indexes raise freshness and privacy questions: exclude secrets and generated files, update incrementally, and treat the index as a hint that never replaces reading the file.
 
 ### Computer-use agents
 
@@ -116,17 +124,17 @@ Three rules follow. Use computer control only where no stable API exists, and pr
 
 ### Agent Skills: procedural knowledge as a package
 
-A skill packages reusable procedure, reference material, scripts, and assets into a discoverable folder centered on a `SKILL.md` file, whose front matter holds a name, a one-line description, and a version. The value is modularity: rather than putting every procedure in one enormous system prompt, the host loads the relevant procedure when the task needs it. Skills and MCP (Chapter 18) solve different problems and combine well: MCP connects the agent to systems, skills tell it how to do a job with them.
+A skill (a folder format that several agent hosts support, as of 2026) packages reusable procedure, reference material, scripts, and assets into a discoverable folder centered on a `SKILL.md` file, whose front matter holds a name, a one-line description, and a version. The value is modularity: rather than putting every procedure in one enormous system prompt, the host loads the relevant procedure when the task needs it. Skills and MCP (Chapter 18) solve different problems and combine well: MCP connects the agent to systems, skills tell it how to do a job with them.
 
 Progressive disclosure keeps skills cheap. Level one is the catalog of names and descriptions, always in context. Level two is the body, loaded when the task matches a description. Level three is individual resources, such as a return-window table or a postmortem template, loaded only when the procedure asks for them. With thirty skills, the permanent cost is the catalog. The description is therefore the most important line in a skill, because it is what the selector matches against; write it for matching, not marketing. The chapter's selector is lexical and auditable, enough for dozens of skills; beyond that, use embeddings (Chapter 8) and evaluate selection like retrieval, with precision and an abstain rate on unrelated tasks.
 
 A skill should contain the minimum stable procedure. Dynamic facts, such as current prices, policy versions, or who is on call, come from retrieval and tools at run time. A skill that embeds a return window will be wrong the day the policy changes, and nobody will think to update a prompt file.
 
-Skills are also a supply chain. A skill can carry scripts that run, URLs that exfiltrate, and instructions that try to override the system prompt. Treat skills like dependencies: version them, review every change, pin each installed skill to a content hash in a lockfile, and refuse to load a skill whose content changed without a reviewed version bump. An audit step flags executable files, network access, secret-looking assignments, and override language for the reviewer. Restrict what a skill's scripts may do at execution time with the same sandbox and permissions as any tool; a skill does not grant capabilities, it only describes how to use the ones the agent already has. Test skills like code, against representative tasks, and record which skill version each run loaded, so a regression can be traced to a skill change.
+Skills are also a supply chain. A skill can carry scripts that run, URLs that exfiltrate, and instructions that try to override the system prompt. Treat skills like dependencies: version them, review every change, pin each installed skill to a content hash in a lockfile, and refuse to load a skill whose content changed without a reviewed version bump. Serve the exact bytes that were hashed, so a file rewritten after the check cannot slip through. An audit step flags executable files, network access, secret-looking assignments, and override language for the reviewer. Restrict what a skill's scripts may do at execution time with the same sandbox and permissions as any tool; a skill does not grant capabilities, it only describes how to use the ones the agent already has. Test skills like code, against representative tasks, and record which skill version each run loaded, so a regression can be traced to a skill change.
 
 ### Realtime voice agents
 
-A voice agent is the latency-critical extreme of harness engineering. A typical pipeline is audio capture, voice activity detection (VAD, which decides when someone is speaking), streaming automatic speech recognition (ASR), turn detection, agent reasoning and tool calls, text-to-speech (TTS), and streaming playback. Native speech-to-speech models collapse some stages, but the turn-taking, tool, and safety problems remain. Latency is cumulative and every stage takes its share. The source's worked example: ASR partials at 150 ms, model time to first token at 400 ms, first TTS audio at 250 ms, and 150 ms of network and processing put first audio near 950 ms before any queueing, and a one-second target cannot be met by optimizing the model if endpointing alone waits 800 ms.
+A voice agent is the latency-critical extreme of harness engineering. A typical pipeline is audio capture, voice activity detection (VAD, which decides when someone is speaking), streaming automatic speech recognition (ASR), turn detection, agent reasoning and tool calls, text-to-speech (TTS), and streaming playback. Native speech-to-speech models collapse some stages, but the turn-taking, tool, and safety problems remain. Latency is cumulative and every stage takes its share. A worked example with illustrative numbers: ASR partials at 150 ms, model time to first token at 400 ms, first TTS audio at 250 ms, and 150 ms of network and processing put first audio near 950 ms before any queueing, and a one-second target cannot be met by optimizing the model if endpointing alone waits 800 ms.
 
 The engineering response is a per-stage budget, measured at p95, with an owner per stage:
 
@@ -142,11 +150,13 @@ These numbers are illustrative, not SLOs. Summing per-stage p95s overestimates t
 
 Barge-in, the caller speaking over the agent, must stop playback immediately, cancel the in-flight generation so no more audio is queued, and preserve state. A subtle point: the conversation history must record what the caller actually heard, not what the model planned to say. If the agent planned "Your order ships tomorrow. Would you like me to change the address?" and the caller interrupted after the first sentence, the history that the next turn sees must contain only the first sentence plus an interruption marker; otherwise the agent believes it asked a question the caller never heard. Track played characters from the audio clock, not from the text sent to TTS.
 
-The rule that matters most for safety: never act on an unstable partial transcript. Speculation is fine for reads: looking up the account or prefetching the returns policy while the caller is still talking saves hundreds of milliseconds. A side effect needs a final transcript with adequate confidence, then the normal confirmation for that action class: ticket fields read back and confirmed, payments and cancellations behind stronger verification. When ASR confidence is low, ask the caller to repeat rather than guessing an account action. The tool layer, not the model, enforces which authenticated customer's account a call may touch. And call state is durable like any other run: a transient worker restart during a call must not erase a confirmation or create a second ticket, which is the same reconciliation machinery as above with a much shorter clock.
+The rule that matters most for safety: never act on an unstable partial transcript. Speculation is fine for reads: looking up the account or prefetching the returns policy while the caller is still talking saves hundreds of milliseconds. A side effect needs a final transcript with adequate confidence, then the normal confirmation for that action class: ticket fields read back and confirmed, payments and cancellations behind stronger verification. When ASR confidence is low, ask the caller to repeat rather than guessing an account action.
+
+The tool layer, not the model, enforces which authenticated customer's account a call may touch. And call state is durable like any other run: a transient worker restart during a call must not erase a confirmation or create a second ticket, which is the same reconciliation machinery as above with a much shorter clock.
 
 ## How it works
 
-Follow one Northwind run through a crash. The on-call engineer asks why Trackline lookups are slow and wants a follow-up ticket. Worker 1 acquires the run's lease with fence 1. Every event goes through a fenced SQLite store whose append checks the fence, extends the lease, inserts the event, and updates the `runs` projection in one transaction. The model searches the runbooks and proposes `create_ticket`; the approval is appended; `ReconcilingTool` reserves the key `inc-1:2.0` as `in_progress`; the ticketing system commits `TCK-1000`; the process dies before the response arrives.
+Follow one Northwind run through a crash. The on-call engineer asks why Trackline lookups are slow and wants a follow-up ticket. Worker 1 acquires the run's lease with fence 1. Every event goes through a fenced SQLite store whose append checks the fence, extends the lease, inserts the event, and updates the `runs` projection in one transaction. The model searches the runbooks and proposes `create_ticket`; the approval is appended; the reconciling wrapper (`ReconcilingTool`, shown under Implementation) reserves the key `inc-1:2.0` as `in_progress`; the ticketing system commits `TCK-1000`; the process dies before the response arrives.
 
 The database now says the run is `running`, the last event is the approval, the ledger record is `in_progress`, and the lease expires in thirty seconds. Worker 2's recovery loop skips the run while the lease is live, then acquires it with fence 2 and calls `resume`. The runtime folds the log, appends `Resumed(by="recovery")`, and finds the approved call without a result. The wrapper finds the `in_progress` record and, instead of executing, asks the ticketing system whether a ticket with client reference `inc-1:2.0` exists. It does, so `TCK-1000` becomes the observation, and the run completes with one ticket. If worker 1 wakes up, its next append fails with `LeaseLost`.
 
@@ -255,7 +265,7 @@ book/projects/examples/ch38/
   fakes.py             FakeClock, FakeTicketSystem, sample tools
   skills/              three sample Northwind skills
   demo.py              crash after commit, recover, one ticket
-  test_ch38_*.py       38 offline tests
+  test_ch38_*.py       53 offline tests
   pyproject.toml  README.md  conftest.py
 ```
 
@@ -293,7 +303,7 @@ class LeaseHeld(RuntimeError):
 class Lease:
     run_id: str
     owner: str
-    fence: int           # monotonically increasing per run; a newer owner always has a larger fence
+    fence: int           # increases on every acquire of this run; a newer owner always has a larger fence
     expires_at: float
 
 
@@ -317,8 +327,19 @@ class LeaseManager:
         return Lease(run_id, owner, fence, now + self.ttl_s)
 
     def release(self, lease: Lease) -> None:
+        # Expire the row instead of deleting it: the fence must keep counting up, or the next
+        # owner would get fence 1 again and a zombie holding an old fence 1 would pass the check.
         with self.db.transaction() as c:
-            c.execute("DELETE FROM leases WHERE run_id=? AND fence=?", (lease.run_id, lease.fence))
+            c.execute("UPDATE leases SET expires_at=0 WHERE run_id=? AND fence=?", (lease.run_id, lease.fence))
+
+    def renew(self, lease: Lease) -> bool:
+        """Heartbeat: extend a lease this worker still holds. False means it was lost."""
+        with self.db.transaction() as c:
+            try:
+                self.check_and_extend(c, lease)
+            except LeaseLost:
+                return False
+        return True
 
     def holder(self, run_id: str) -> Lease | None:
         rows = self.db.query("SELECT owner, fence, expires_at FROM leases WHERE run_id=?", (run_id,))
@@ -384,8 +405,11 @@ class ReconcilingTool:
       "it definitely did not happen", so execute now. Without a reconciler the outcome is
       unknowable, and the call fails as FATAL so a human decides instead of the model.
 
-    The run lease guarantees one worker per run, so an `in_progress` record for this run's
-    key always belongs to a dead attempt, never to a live concurrent one.
+    The run lease, kept alive by the runner's heartbeat while the tool runs, means one worker
+    per run, so an `in_progress` record for this run's key belongs to a dead attempt. The
+    exception is a worker frozen (GC, partition) for longer than the lease TTL: fencing stops
+    its next event, but not a side effect it is already performing. Closing that gap needs
+    the external system itself to check the fence or the idempotency key.
     """
 
     inner: Any
@@ -442,19 +466,23 @@ class DurableRunner:
     and configuration, while state comes only from the log."""
 
     def __init__(self, db: Database, factory: RuntimeFactory, *, owner: str, lease_ttl_s: float = 30.0,
-                 clock: Callable[[], float] = time.time) -> None:
+                 heartbeat_s: float | None = None, clock: Callable[[], float] = time.time) -> None:
         self.db = db
         self.factory = factory
         self.owner = owner
         self.store = SqliteEventStore(db)
         self.leases = LeaseManager(db, ttl_s=lease_ttl_s, clock=clock)
+        self.heartbeat_s = heartbeat_s if heartbeat_s is not None else lease_ttl_s / 3
 
     def start(self, goal: str, *, run_id: str, metadata: dict[str, Any] | None = None) -> RunResult:
         return self._with_lease(run_id, lambda rt: rt.run(goal, run_id=run_id, metadata=metadata))
 
     def resume(self, run_id: str, *, approve: bool | None = None, reason: str = "",
-               budget: Budget | None = None) -> RunResult:
-        return self._with_lease(run_id, lambda rt: rt.resume(run_id, approve=approve, reason=reason, budget=budget))
+               budget: Budget | None = None, request_id: str | None = None) -> RunResult:
+        """`request_id` binds a decision to the request it was made for (Chapter 19): if the
+        run is now paused on a different request, agentkit refuses instead of approving it."""
+        return self._with_lease(run_id, lambda rt: rt.resume(run_id, approve=approve, reason=reason, budget=budget,
+                                                             request_id=request_id))
 
     def recover(self) -> list[RunResult]:
         """Resume every run that is marked running but has no live lease: its worker died."""
@@ -473,15 +501,28 @@ class DurableRunner:
         if lease is None:
             raise LeaseHeld(f"run {run_id} is owned by {self.leases.holder(run_id)}")
         runtime = self.factory(self.store.fenced(self.leases, lease))
+        stop = threading.Event()
+        beat = threading.Thread(target=self._heartbeat, args=(lease, stop), daemon=True)
+        beat.start()
         try:
             result = fn(runtime)
         except SimulatedCrash:
+            stop.set()
             raise                               # a dead process releases nothing; the lease must expire
         except BaseException:
+            stop.set()
             self.leases.release(lease)
             raise
+        stop.set()
         self.leases.release(lease)              # paused, stopped, or completed: nobody needs to hold it
         return result
+
+    def _heartbeat(self, lease: Lease, stop: threading.Event) -> None:
+        """Appends extend the lease, but a tool can run longer than the TTL between two
+        appends. Renew on a timer until the call finishes or the lease is gone."""
+        while not stop.wait(self.heartbeat_s):
+            if not self.leases.renew(lease):
+                return
 ```
 
 The ticketing fake can crash before or after its remote commit and may or may not support lookup by client reference; the reconciler is the question "did this happen?" asked of the system of record.
@@ -520,7 +561,7 @@ Running `demo.py` shows the crash, the refusal to recover while the lease is liv
 worker-1 died: died after the remote commit, before reading the response
 status after crash: running | recover now: []
 recovered: completed | tickets in system: ['TCK-1000']
-reconciliation log: [{'key': 'demo-1:2.0', 'outcome': 'reconciled_found'}]
+reconciliation log: [{'key': 'inc-1:2.0', 'outcome': 'reconciled_found'}]
    8 tool_call_requested  create_ticket
    9 tool_call_approved   create_ticket
   10 resumed
@@ -537,38 +578,52 @@ reconciliation log: [{'key': 'demo-1:2.0', 'outcome': 'reconciled_found'}]
         """Record why a run paused. Idempotent per (run_id, request_id)."""
         if result.status is not AgentStatus.AWAITING_APPROVAL:
             return None
-        rec = result.state.pending_approval
+        return self._record_pause(result.run_id, result.state.pending_approval)
+
+    def _record_pause(self, run_id: str, rec: Any) -> Interrupt | None:
         assert rec is not None
-        existing = self._find(result.run_id, rec.request_id)
+        existing = self._find(run_id, rec.request_id)
         if existing is not None:
             return existing
         now = self.clock()
-        it = Interrupt(id=uuid.uuid4().hex[:12], run_id=result.run_id, request_id=rec.request_id, tool=rec.tool,
+        it = Interrupt(id=uuid.uuid4().hex[:12], run_id=run_id, request_id=rec.request_id, tool=rec.tool,
                        arguments=dict(rec.arguments), status=InterruptStatus.PENDING, created_at=now,
                        kind=InterruptKind.APPROVAL)
+        claimed_early = False
         if rec.tool == WAIT_UNTIL:
             it.kind = InterruptKind.TIMER
-            self._insert(it)
-            self._schedule(it.id, now + min(float(rec.arguments["seconds"]), self.max_wait_s), "fire")
         elif rec.tool == WAIT_FOR_EVENT:
             it.kind = InterruptKind.EVENT
             it.correlation_key = f"{rec.arguments['event_type']}:{rec.arguments['correlation_id']}"
-            self._insert(it)
-            early = self.db.query("SELECT event_id, payload FROM inbox WHERE correlation_key=? "
-                                  "ORDER BY received_at LIMIT 1", (it.correlation_key,))
-            if early:                                       # the event beat the wait: resolve at once
-                self._consume_inbox(it.correlation_key, early[0][0])
-                self._resolve_and_resume(it, {"status": "received", "payload": json.loads(early[0][1]),
-                                              "event_id": early[0][0], "at": now}, by="event", approve=True)
-                return self._find(result.run_id, rec.request_id)
-            self._schedule(it.id, now + min(float(rec.arguments["timeout_s"]), self.max_wait_s), "timeout")
         else:
             policy = self.policies.get(rec.tool, self.default_policy)
             it.assignee = policy.chain[0]
             it.escalate_at = now + policy.escalate_after_s if len(policy.chain) > 1 else None
             it.expires_at = now + policy.expire_after_s
             it.history.append({"at": now, "event": "assigned", "to": it.assignee})
-            self._insert(it)
+        # The interrupt and what makes it end (a timer, or an event already in the inbox) are
+        # written in one transaction: a crash cannot leave a wait that nothing will ever finish.
+        with self.db.transaction() as c:
+            if not self._insert(c, it):                     # another replica recorded this pause first
+                return self._find(run_id, rec.request_id)
+            if it.kind is InterruptKind.TIMER:
+                self._schedule(c, it.id, now + min(float(rec.arguments["seconds"]), self.max_wait_s), "fire")
+            elif it.kind is InterruptKind.EVENT:
+                early = c.execute("SELECT event_id, payload FROM inbox WHERE correlation_key=? "
+                                  "ORDER BY received_at LIMIT 1", (it.correlation_key,)).fetchone()
+                if early is not None and c.execute("DELETE FROM inbox WHERE correlation_key=? AND event_id=?",
+                                                   (it.correlation_key, early[0])).rowcount == 1:
+                    # the event beat the wait: take it from the inbox and resolve at once
+                    self._claim(c, it, {"status": "received", "payload": json.loads(early[1]),
+                                        "event_id": early[0], "at": now}, by="event")
+                    claimed_early = True
+                else:
+                    self._schedule(c, it.id, now + min(float(rec.arguments["timeout_s"]), self.max_wait_s),
+                                   "timeout")
+        if claimed_early:
+            self._resume(it, approve=True, note="event resolved by event")
+            return self._find(run_id, rec.request_id)
+        if it.kind is InterruptKind.APPROVAL:
             self.notify(it, "assigned")
         return it
 
@@ -587,38 +642,49 @@ reconciliation log: [{'key': 'demo-1:2.0', 'outcome': 'reconciled_found'}]
         pending = state.pending_approval
         if pending is None or pending.request_id != it.request_id:
             raise ValueError("the run is no longer paused on this request; the decision is stale")
+        # The claim records the decision first; if the resume below fails, tick() retries it.
         return self._resolve_and_resume(it, {"approved": approve, "reason": reason, "at": self.clock()},
                                         by=by, approve=approve, note=reason)
 
     def tick(self) -> list[RunResult]:
         """Run by a scheduler every few seconds (cron, a queue consumer, a k8s CronJob).
-        Fires due timers, escalates stale approvals, expires dead ones. Safe to run on
-        several replicas: each state change is a conditional UPDATE that only one wins."""
+        Fires due timers, escalates stale approvals, expires dead ones, and finishes resumes
+        that an earlier call recorded but did not complete. Safe to run on several replicas:
+        each state change is a conditional UPDATE that only one wins, and the loser skips."""
         now = self.clock()
         results: list[RunResult] = []
         for timer_id, interrupt_id, purpose in self.db.query(
                 "SELECT id, interrupt_id, purpose FROM timers WHERE status='scheduled' AND fire_at<=? "
                 "ORDER BY fire_at", (now,)):
-            with self.db.transaction() as c:
-                won = c.execute("UPDATE timers SET status='fired' WHERE id=? AND status='scheduled'",
-                                (timer_id,)).rowcount == 1
-            if not won:
-                continue
             it = self.get(interrupt_id)
-            if it.status is not InterruptStatus.PENDING:
-                continue
-            status = "fired" if purpose == "fire" else "timeout"
-            results.append(self._resolve_and_resume(it, {"status": status, "at": now}, by="clock", approve=True))
+            try:
+                with self.db.transaction() as c:            # firing the timer and claiming commit together
+                    won = c.execute("UPDATE timers SET status='fired' WHERE id=? AND status='scheduled'",
+                                    (timer_id,)).rowcount == 1
+                    if not won or it.status is not InterruptStatus.PENDING:
+                        continue
+                    self._claim(c, it, {"status": "fired" if purpose == "fire" else "timeout", "at": now},
+                                by="clock")
+            except AlreadyResolved:
+                continue                                    # an event or another replica got there first
+            self._try(results, lambda: self._resume(it, approve=True, note=f"{it.kind.value} resolved by clock"))
         for (interrupt_id,) in self.db.query("SELECT id FROM interrupts WHERE kind='approval' AND status='pending' "
                                              "AND expires_at<=?", (now,)):
             it = self.get(interrupt_id)
-            results.append(self._resolve_and_resume(
+            self._try(results, lambda: self._resolve_and_resume(
                 it, {"approved": False, "reason": "expired", "at": now}, by="clock", approve=False,
                 note=f"approval for {it.tool} expired unanswered; treated as denied", status=InterruptStatus.EXPIRED))
         for (interrupt_id,) in self.db.query("SELECT id FROM interrupts WHERE kind='approval' AND status='pending' "
                                              "AND escalate_at IS NOT NULL AND escalate_at<=?", (now,)):
             self._escalate(self.get(interrupt_id), now)
+        results.extend(self._repair())          # last, so it also sees what failed in this tick
         return results
+    def _resume(self, it: Interrupt, *, approve: bool, note: str) -> RunResult:
+        # request_id binds the resume to this interrupt: if the run has moved on to another
+        # request, agentkit refuses rather than approving whatever is pending now.
+        result = self.runner.resume(it.run_id, approve=approve, reason=note, request_id=it.request_id)
+        self.after_run(result)                  # the resumed run may pause again on a new request
+        return result
 ```
 
 ### Ledger and compaction
@@ -726,9 +792,13 @@ def apply_hunks(original: list[str], hunks: list[Hunk], *, fuzz: int = 3, path: 
             patches = parse_unified_diff(diff)
             staged: dict[Path, str | None] = {}
             for fp in patches:
-                rel = fp.new_path or fp.old_path
-                assert rel is not None
-                target = self.ws.resolve(rel)
+                raw = fp.new_path or fp.old_path
+                assert raw is not None
+                target = self.ws.resolve(raw)
+                rel = target.relative_to(self.ws.root).as_posix()   # judge the normalized path, not the raw one
+                if not self.ws.tracked(rel):
+                    return ToolOutput.failure(f"{raw} is a hidden or non-text path; the agent may not write it",
+                                              ErrorClass.PERMISSION)
                 if self.ws.is_protected(rel):
                     return ToolOutput.failure(f"{rel} is protected and cannot be modified by the agent",
                                               ErrorClass.PERMISSION)
@@ -738,8 +808,11 @@ def apply_hunks(original: list[str], hunks: list[Hunk], *, fuzz: int = 3, path: 
                 if fp.new_path is None:
                     return ToolOutput.failure("file deletion is not allowed through apply_patch",
                                               ErrorClass.PERMISSION)
-                original = [] if fp.old_path is None else target.read_text(encoding="utf-8").splitlines()
-                if fp.old_path is None and target.exists():
+                if target in staged:            # a second patch to the same file applies on top of the first
+                    original = (staged[target] or "").splitlines()
+                else:
+                    original = [] if fp.old_path is None else target.read_text(encoding="utf-8").splitlines()
+                if fp.old_path is None and (target.exists() or target in staged):
                     raise PatchError(f"{rel} already exists; patch it instead of creating it")
                 staged[target] = "\n".join(apply_hunks(original, fp.hunks, path=rel)) + "\n"
         except PatchError as exc:
@@ -754,8 +827,10 @@ def apply_hunks(original: list[str], hunks: list[Hunk], *, fuzz: int = 3, path: 
                           artifacts={"changed_files": self.ws.changed_files()})
 
     def pytest(self, selector: str = "tests") -> dict[str, Any]:
-        """Run pytest on a fresh copy of the workspace. The child sees only the files, a
-        scrubbed environment, and the sandbox limits; it cannot modify the workspace."""
+        """Run pytest on a fresh copy of the workspace, with a scrubbed environment and the
+        sandbox limits. The copy keeps ordinary writes away from the workspace, but this is
+        not filesystem isolation: test code could still reach the workspace by absolute path.
+        Real isolation needs a container or microVM (Chapter 16)."""
         res = self.sandbox.run([sys.executable, "-B", "-m", "pytest", "-q", "-p", "no:cacheprovider",
                                 "-o", "addopts=", "--rootdir=.", selector], files=self.ws.snapshot())
         out = (res.stdout + res.stderr).strip()
@@ -846,9 +921,11 @@ def select_skills(task: str, skills: dict[str, Skill], *, k: int = 2, min_score:
         return problems
 
     def trusted(self, skills: dict[str, Skill]) -> dict[str, Skill]:
-        """Only skills whose version and hash match the lock are offered to the agent."""
-        bad = {p.split(":")[0] for p in self.verify(skills)}
-        return {n: s for n, s in skills.items() if n not in bad}
+        """Only skills whose version and hash match the lock are offered to the agent, frozen
+        so that the content checked is exactly the content served."""
+        frozen = {n: s.freeze() for n, s in skills.items()}
+        bad = {p.split(":")[0] for p in self.verify(frozen)}
+        return {n: s for n, s in frozen.items() if n not in bad}
 ```
 
 ```python
@@ -905,7 +982,7 @@ class PlaybackController:
 
 ## Code walkthrough
 
-**Extension points, not forks.** Nothing in `agentkit` changed. The durable store implements its `EventStore` protocol; `ReconcilingTool` satisfies its `Tool` protocol; `CompactingLLM` satisfies `LLMClient`; the wait tools are ordinary `FunctionTool`s that declare `requires_approval`. If your harness needs a source change to add durability, the abstraction boundaries are in the wrong place.
+**Extension points, not forks.** Nothing in `agentkit` changed. The durable store implements its `EventStore` protocol; `ReconcilingTool` satisfies its `Tool` protocol; `CompactingLLM` satisfies `LLMClient`; the wait tools are ordinary `FunctionTool`s that declare `requires_approval`. If your harness needs a source change to add durability, its abstraction boundaries are probably in the wrong place.
 
 **`SimulatedCrash` derives from `BaseException`.** The runtime catches `Exception` around tool execution so that tool errors become observations. A real `kill -9` cannot be caught at all; deriving from `BaseException` gives the tests the same property, so the crash leaves the log exactly where a real one would.
 
@@ -921,20 +998,20 @@ class PlaybackController:
 
 ## Production considerations
 
-**Latency.** Durability costs one database transaction per event. With a local SQLite file that is well under a millisecond; with a networked PostgreSQL it is a round trip per event, a few milliseconds (illustrative), which is small next to a model call but adds up for chatty tools. Batch the events of one step in one transaction if it matters, and never skip the write before a side effect. Compaction adds token counting per request; it removes far more latency by shrinking prefill on long runs (Chapter 34). For voice, the database is off the critical path: append asynchronously for reads, synchronously before side effects.
+**Latency.** Durability costs one database transaction per event. With a local SQLite file that is well under a millisecond; with a networked PostgreSQL it is a round trip per event, a few milliseconds (illustrative), which is small next to a model call but adds up for chatty tools. Batch the events of one step in one transaction if it matters, and never skip the write before a side effect. Compaction adds token counting per request; it removes far more latency by shrinking prefill on long runs (Chapter 34). For voice, keep the database off the critical path where you can: reads may be appended asynchronously, because repeating a read after a crash is harmless, but every side effect waits for its synchronous write.
 
 **Cost.** Budget per run and per segment, and alert on runs that resume many times. Waiting is free, but each resume after a long gap pays a full prompt prefill, because prefix caches rarely survive hours. Counterfactual replay is the cheapest evaluation available, because it reuses recorded observations instead of executing tools.
 
 **Security.** The event log contains prompts, tool arguments, and tool outputs, often with personal data. Encrypt it, restrict access, apply retention, and redact at write time where you can (Chapter 27). Approval decisions are security events: record the decider's identity from authentication, never from a form field. Skills, coding sandboxes, and computer-use environments are execution surfaces; give each task the least privilege that completes it, and keep credentials out of the model's context entirely.
 
-**Operations.** Watch these numbers per agent: runs by status, age of the oldest `running` run without a live lease, recovery count, reconciliation outcomes (found, absent, unknown), pending approvals by age and escalation level, expired approvals, timer lag (fire time minus due time), duplicate webhook rate, compaction rate and tokens saved, and Definition of Done rejection rate. An `unknown` reconciliation outcome should page someone. Run the recovery loop and the scheduler as separate, horizontally scaled processes; both are safe to replicate because every state change is conditional. When moving to PostgreSQL, use `SELECT ... FOR UPDATE SKIP LOCKED` for the timer table and the same conditional updates for fences.
+**Operations.** Watch these numbers per agent: runs by status, age of the oldest `running` run without a live lease, recovery count, reconciliation outcomes (deduplicated, found, absent, unknown), pending approvals by age and escalation level, expired approvals, timer lag (fire time minus due time), duplicate webhook rate, compaction rate and tokens saved, and Definition of Done rejection rate. An `unknown` reconciliation outcome should page someone. Run the recovery loop and the scheduler as separate, horizontally scaled processes; both are safe to replicate because every state change is conditional. When moving to PostgreSQL, use `SELECT ... FOR UPDATE SKIP LOCKED` for the timer table and the same conditional updates for fences.
 
 ## Common mistakes
 
 - **Generating idempotency keys at execution time.** A `uuid4()` per attempt is different on retry. Derive keys from the run id and the request's position in the log.
 - **Restarting a crashed run from the goal.** It repeats every model call and every side effect. Resume from the log.
 - **Recovery without leases.** Two workers drive one run, each believing the other is dead.
-- **Treating expiry as approval.** An approval that nobody gave is not an approval; expiry denies.
+- **Treating expiry as approval.** Expiry must deny the call (see Interrupts as first-class states).
 - **Sleeping inside a tool.** A tool that sleeps an hour holds a worker, a lease, and a connection, and dies with the pod. Waits are persisted interrupts.
 - **Compacting the log instead of the request.** Audit, replay, and the Definition of Done lose the evidence they need.
 - **Letting the coding agent edit tests or run a raw shell** before the sandbox and policy justify it.
@@ -945,7 +1022,7 @@ class PlaybackController:
 
 | Failure | How it shows in telemetry | How to test for it |
 |---|---|---|
-| Duplicate side effect after crash | Two external objects with one `client_ref` prefix; recovery event before a second `tool_result` for the same request id | Crash between commit and acknowledgement with a fake system; assert one object |
+| Duplicate side effect after crash | Two external objects with one `client_ref` prefix; recovery event before a second `tool_result` for the same request id | Crash between commit and acknowledgment with a fake system; assert one object |
 | Unknown outcome retried by the model | `fatal_error` stop missing; a second call with a new request id and the same arguments after a recovery | No-lookup fake, crash after commit; assert the run stops and nothing repeats |
 | Zombie writer | `LeaseLost` errors; two owners in the lease history within one TTL | Advance the clock past the TTL while a fenced store is held; assert the stale append fails |
 | Stale approval applied | Decision on an interrupt whose request id is no longer pending | Decide twice; replan during a pause; assert refusal |
@@ -969,7 +1046,7 @@ class PlaybackController:
 
 ## Evaluation and testing
 
-Test durability by breaking things on purpose. The suite injects crashes before the remote commit, after the commit and before acknowledgement, and after the ledger write but before the `ToolResult` event. Each test asserts the number of external effects and the reconciliation outcome, not merely that the run completed, because a completed run with two tickets is the bug. Lease tests advance a fake clock instead of sleeping and check both directions: no recovery while the lease is live, and refusal of a zombie's write after it expires. Interrupt tests cover approve, reject, a second click, an unauthorized decider, escalation, expiry as denial, an early timer tick, a duplicated webhook, an early webhook, and an event timeout, and each asserts that no lease is held during the wait.
+Test durability by breaking things on purpose. The suite injects crashes before the remote commit, after the commit and before acknowledgment, and after the ledger write but before the `ToolResult` event. Each test asserts the number of external effects and the reconciliation outcome, not merely that the run completed, because a completed run with two tickets is the bug. Lease tests advance a fake clock and check both directions: no recovery while the lease is live, and refusal of a zombie's write after it expires. Two more check that a heartbeat keeps a slow tool's lease alive (the one test that briefly sleeps, to let the heartbeat thread run) and that the fence keeps increasing after a release. Interrupt tests cover approve, a second click, an unauthorized decider, escalation, expiry as denial, an early timer tick, a duplicated webhook, an early webhook, an event timeout, a decision whose resume fails and is finished by the next tick, and a stale timer that must not approve a later request; the approval test also asserts that no lease is held during the wait.
 
 For long-horizon context, measure what compaction keeps, not only what it saves: every request under budget, tool-call pairing valid, early literals present in late requests. A useful offline metric is identifier recall, the fraction of identifiers in the final answer that appear in the request the model actually saw. Rehydration is tested by crashing mid-run and rebuilding the ledger in a fresh store.
 
@@ -983,7 +1060,7 @@ Counterfactual replay ties the evaluation together: before shipping a new prompt
 
 **K1.** Why must an idempotency key be derived from the event log rather than generated when the tool executes? What exactly goes wrong with a fresh key per attempt?
 
-**K2.** Name the four crash points around a side-effecting tool call and the information the harness has after each one.
+**K2.** Name the crash points around a side-effecting tool call (before the remote commit, after the commit but before acknowledgment, and after the ledger write but before the `ToolResult` event) and what the harness knows after each one.
 
 **K3.** What problem does a fence token solve that a lease alone does not?
 

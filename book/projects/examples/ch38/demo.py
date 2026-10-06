@@ -33,15 +33,15 @@ def main(db_path: str = ":memory:") -> None:
     w1 = DurableRunner(db, factory, owner="worker-1", clock=clock)
     w2 = DurableRunner(db, factory, owner="worker-2", clock=clock)
     try:
-        w1.start("Trackline is slow; find the cause and open a follow-up ticket.", run_id="demo-1")
+        w1.start("Trackline is slow; find the cause and open a follow-up ticket.", run_id="inc-1")
     except SimulatedCrash as exc:
         print(f"worker-1 died: {exc}")
-    print("status after crash:", w1.store.status("demo-1"), "| recover now:", w2.recover())
+    print("status after crash:", w1.store.status("inc-1"), "| recover now:", w2.recover())
     clock.advance(31)
     [result] = w2.recover()
     print("recovered:", result.stop_reason.value, "| tickets in system:", [t["id"] for t in system.tickets])
     print("reconciliation log:", tool.log)
-    for e in w2.store.load("demo-1"):
+    for e in w2.store.load("inc-1"):
         print(f"  {e.seq:2d} {getattr(e, 'type'):20s} {getattr(e, 'tool', '')}")
 
 

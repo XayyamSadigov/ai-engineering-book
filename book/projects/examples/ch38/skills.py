@@ -67,15 +67,25 @@ def _tokens(text: str) -> set[str]:
     return {t for t in re.findall(r"[a-z0-9]+", text.lower()) if t not in STOPWORDS and len(t) > 2}
 
 
+def skill_files(directory: Path) -> dict[str, bytes]:
+    """Every file that belongs to a skill, by relative path. The hash, the resource list,
+    and what the agent can read all use this one definition."""
+    return {p.relative_to(directory).as_posix(): p.read_bytes() for p in sorted(directory.rglob("*"))
+            if p.is_file() and "__pycache__" not in p.relative_to(directory).parts}
+
+
+def _hash_files(files: dict[str, bytes]) -> str:
+    h = hashlib.sha256()
+    for rel in sorted(files):
+        h.update(rel.encode())
+        h.update(b"\0")
+        h.update(files[rel])
+    return h.hexdigest()[:16]
+
+
 def content_hash(directory: Path) -> str:
     """Hash of every file's relative path and bytes; any change produces a new hash."""
-    h = hashlib.sha256()
-    for p in sorted(directory.rglob("*")):
-        if p.is_file() and "__pycache__" not in p.parts:
-            h.update(p.relative_to(directory).as_posix().encode())
-            h.update(b"\0")
-            h.update(p.read_bytes())
-    return h.hexdigest()[:16]
+    return _hash_files(skill_files(directory))
 
 
 @dataclass
@@ -85,28 +95,39 @@ class Skill:
     version: str
     path: Path
     meta: dict[str, Any] = field(default_factory=dict)
+    frozen: dict[str, bytes] | None = None      # set by freeze(): content served from memory, not disk
     _body: str | None = None
+
+    def freeze(self) -> "Skill":
+        """A copy holding the skill's bytes in memory. Verify the hash of these bytes and serve
+        these bytes: otherwise a file rewritten after the lock check would be served as trusted."""
+        return Skill(self.name, self.description, self.version, self.path, self.meta, skill_files(self.path))
+
+    def _files(self) -> dict[str, bytes]:
+        return self.frozen if self.frozen is not None else skill_files(self.path)
 
     @property
     def body(self) -> str:
-        """Level 2: read from disk only when the skill is activated."""
+        """Level 2: read only when the skill is activated."""
         if self._body is None:
-            _, self._body = parse_front_matter((self.path / "SKILL.md").read_text(encoding="utf-8"))
+            _, self._body = parse_front_matter(self._files()["SKILL.md"].decode("utf-8"))
         return self._body
 
     def resources(self) -> list[str]:
-        return sorted(p.relative_to(self.path).as_posix() for p in self.path.rglob("*")
-                      if p.is_file() and p.name != "SKILL.md" and "__pycache__" not in p.parts)
+        return sorted(rel for rel in self._files() if rel != "SKILL.md")
 
     def read_resource(self, rel: str) -> str:
-        """Level 3: one file, confined to the skill's own directory."""
+        """Level 3: one file of the skill, by the same definition the hash uses."""
         target = (self.path / rel).resolve()
-        if not target.is_relative_to(self.path.resolve()) or not target.is_file():
+        if not target.is_relative_to(self.path.resolve()):
             raise SkillError(f"{rel!r} is not a resource of skill {self.name}")
-        return target.read_text(encoding="utf-8")
+        data = self._files().get(target.relative_to(self.path.resolve()).as_posix())
+        if data is None:
+            raise SkillError(f"{rel!r} is not a resource of skill {self.name}")
+        return data.decode("utf-8")
 
     def hash(self) -> str:
-        return content_hash(self.path)
+        return _hash_files(self._files())
 
 
 def load_skills(root: str | Path) -> dict[str, Skill]:
@@ -211,9 +232,11 @@ class SkillLock:
         return problems
 
     def trusted(self, skills: dict[str, Skill]) -> dict[str, Skill]:
-        """Only skills whose version and hash match the lock are offered to the agent."""
-        bad = {p.split(":")[0] for p in self.verify(skills)}
-        return {n: s for n, s in skills.items() if n not in bad}
+        """Only skills whose version and hash match the lock are offered to the agent, frozen
+        so that the content checked is exactly the content served."""
+        frozen = {n: s.freeze() for n, s in skills.items()}
+        bad = {p.split(":")[0] for p in self.verify(frozen)}
+        return {n: s for n, s in frozen.items() if n not in bad}
 
 
 # --------------------------------------------------------------------------- agent tools
@@ -247,6 +270,6 @@ def skill_tools(skills: dict[str, Skill]) -> list[FunctionTool]:
 
 
 __all__ = [
-    "SkillError", "parse_front_matter", "content_hash", "Skill", "load_skills", "catalog_prompt", "SkillMatch",
+    "SkillError", "parse_front_matter", "skill_files", "content_hash", "Skill", "load_skills", "catalog_prompt", "SkillMatch",
     "select_skills", "Finding", "audit_skill", "SkillLock", "skill_tools",
 ]

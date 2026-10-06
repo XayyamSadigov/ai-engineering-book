@@ -24,7 +24,7 @@ services:
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-fake-embedding}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-      DATABASE_URL: postgresql://assist:assist@postgres:5432/assist
+      DATABASE_URL: postgresql://assist:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/assist
       REDIS_URL: redis://redis:6379/0
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
       OTEL_SERVICE_NAME: assist-api
@@ -51,7 +51,7 @@ services:
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-fake-embedding}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-      DATABASE_URL: postgresql://assist:assist@postgres:5432/assist
+      DATABASE_URL: postgresql://assist:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/assist
       REDIS_URL: redis://redis:6379/0
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
       OTEL_SERVICE_NAME: assist-worker
@@ -68,10 +68,10 @@ services:
     image: pgvector/pgvector:pg16
     environment:
       POSTGRES_USER: assist
-      POSTGRES_PASSWORD: assist
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
       POSTGRES_DB: assist
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"   # local debugging only; never publish data stores on all interfaces
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
@@ -83,9 +83,11 @@ services:
 
   redis:
     image: redis:7-alpine
-    command: ["redis-server", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"]
+    # noeviction: Redis holds the job queue, and an eviction policy would silently drop queued jobs.
+    # A cache that may evict belongs in a separate instance.
+    command: ["redis-server", "--maxmemory", "256mb", "--maxmemory-policy", "noeviction"]
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
 
   otel-collector:
     image: otel/opentelemetry-collector-contrib:latest

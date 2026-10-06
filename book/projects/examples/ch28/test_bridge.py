@@ -101,3 +101,30 @@ def test_submission_port_is_idempotent_and_refuses_bare_dequeue(env) -> None:
     assert env["delivery"].lease().job.kind == KIND
     with pytest.raises(NotImplementedError):
         port.dequeue()
+
+
+def test_a_cancel_during_a_failing_run_is_not_retried(env) -> None:
+    job, _ = env["jobs"].submit(CTX, "flaky", {}, None, None)
+
+    async def cancel_then_fail(j: Job) -> dict[str, Any]:
+        env["jobs"].cancel(CTX, j.id)
+        raise ConnectionError("upstream reset")
+
+    handlers = {"flaky": cancel_then_fail}
+    worker = make_worker(env["delivery"], env["repo"], handlers, env["webhook"], queue_clock=env["clock"],
+                         clock=env["clock"], sleep=env["clock"].sleep)
+    assert worker.run_once().outcome.value == "dead"            # not retried
+    assert env["repo"].get(job.id).state is JobState.CANCELLED
+    assert worker.run_once() is None                            # nothing left to deliver
+
+
+def test_one_classifier_decides_for_queue_and_repo(env) -> None:
+    async def bad_input(j: Job) -> dict[str, Any]:
+        raise ValueError("bad input")
+
+    worker = make_worker(env["delivery"], env["repo"], {"flaky": bad_input}, env["webhook"],
+                         queue_clock=env["clock"], clock=env["clock"], sleep=env["clock"].sleep,
+                         classify=lambda e: True)   # treat everything as retryable
+    job, _ = env["jobs"].submit(CTX, "flaky", {}, None, None)
+    outcome = worker.run_once().outcome.value
+    assert outcome == "retry" and env["repo"].get(job.id).state is JobState.QUEUED

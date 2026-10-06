@@ -19,7 +19,9 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import ipaddress
 import sys
+import threading
 import time
 import uuid
 from collections import deque
@@ -27,10 +29,11 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, AsyncIterator, Awaitable, Callable, Literal, Protocol
+from urllib.parse import urlsplit
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response, status
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 # ---------------------------------------------------------------------------
 # Shared value objects
@@ -140,6 +143,7 @@ class StoredMessage(BaseModel):
     content: str
     created_at: str
     lineage: Lineage | None = None
+    user_id: str = ""   # the conversation's owner; history is scoped to tenant and user
 
 
 class JobState(str, Enum):
@@ -297,7 +301,8 @@ class InMemoryConversationRepo:
 
     def history(self, ctx: RequestContext, conversation_id: str) -> list[StoredMessage]:
         return [
-            m for m in self._rows if m.conversation_id == conversation_id and m.tenant_id == ctx.tenant_id
+            m for m in self._rows
+            if m.conversation_id == conversation_id and m.tenant_id == ctx.tenant_id and m.user_id == ctx.user_id
         ]
 
 
@@ -413,6 +418,7 @@ class ChatService:
                 id=str(uuid.uuid4()),
                 conversation_id=conversation_id,
                 tenant_id=ctx.tenant_id,
+                user_id=ctx.user_id,
                 role="user",
                 content=text,
                 created_at=now_iso(),
@@ -464,6 +470,7 @@ class ChatService:
                 id=str(uuid.uuid4()),
                 conversation_id=conversation_id,
                 tenant_id=ctx.tenant_id,
+                user_id=ctx.user_id,
                 role="assistant",
                 content=answer,
                 created_at=now_iso(),
@@ -483,6 +490,7 @@ JobHandler = Callable[[Job], Awaitable[dict[str, Any]]]
 class JobService:
     repo: JobRepoPort
     queue: JobQueuePort
+    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     def submit(
         self,
@@ -492,7 +500,15 @@ class JobService:
         idempotency_key: str | None,
         callback_url: str | None,
     ) -> tuple[Job, bool]:
-        """Return (job, created). A repeated idempotency key returns the original job."""
+        """Return (job, created). A repeated idempotency key returns the original job.
+
+        The lock makes check-then-insert atomic within one process (FastAPI runs sync routes in a
+        threadpool); across processes, the UNIQUE(tenant_id, idempotency_key) constraint does it."""
+        with self._lock:
+            return self._submit(ctx, job_type, payload, idempotency_key, callback_url)
+
+    def _submit(self, ctx: RequestContext, job_type: str, payload: dict[str, Any],
+                idempotency_key: str | None, callback_url: str | None) -> tuple[Job, bool]:
         if idempotency_key:
             existing = self.repo.find_by_idempotency_key(ctx.tenant_id, idempotency_key)
             if existing is not None:
@@ -546,9 +562,13 @@ class Worker:
         self.repo.save(job)
         try:
             handler = self.handlers[job.type]
-            job.result = await handler(job)
-            job.state = JobState.SUCCEEDED
+            result = await handler(job)
+            if self._cancelled(job.id):
+                return self.repo.get(job.id)   # cancellation is a state: do not overwrite it
+            job.result, job.state = result, JobState.SUCCEEDED
         except Exception as exc:  # noqa: BLE001 - the worker is the last line of defense
+            if self._cancelled(job.id):
+                return self.repo.get(job.id)
             job.error = f"{type(exc).__name__}: {exc}"
             if job.attempts < job.max_attempts:
                 job.state = JobState.QUEUED
@@ -559,6 +579,10 @@ class Worker:
         if job.state in TERMINAL_STATES and job.callback_url:
             await self.webhook.notify(job.callback_url, {"job_id": job.id, "state": job.state.value})
         return job
+
+    def _cancelled(self, job_id: str) -> bool:
+        current = self.repo.get(job_id)
+        return current is not None and current.state is JobState.CANCELLED
 
     async def run_forever(self, idle_sleep_s: float = 0.5) -> None:
         while True:
@@ -590,10 +614,42 @@ class MessageIn(BaseModel):
     text: str = Field(min_length=1, max_length=8000)
 
 
+MAX_JOB_PAYLOAD_BYTES = 64_000   # illustrative; large inputs go to object storage, the payload holds a reference
+
+
 class JobIn(BaseModel):
     type: Literal["ingest_document", "evaluate"]
     payload: dict[str, Any] = Field(default_factory=dict)
     callback_url: str | None = None
+
+    @field_validator("payload")
+    @classmethod
+    def _bounded(cls, v: dict[str, Any]) -> dict[str, Any]:
+        if len(json.dumps(v, default=str)) > MAX_JOB_PAYLOAD_BYTES:
+            raise ValueError(f"payload exceeds {MAX_JOB_PAYLOAD_BYTES} bytes")
+        return v
+
+    @field_validator("callback_url")
+    @classmethod
+    def _public_https(cls, v: str | None) -> str | None:
+        """The worker POSTs here, so an internal address would be a server-side request forgery."""
+        if v is None:
+            return v
+        parts = urlsplit(v)
+        if parts.scheme != "https" or not parts.hostname:
+            raise ValueError("callback_url must be an https URL")
+        host = parts.hostname.rstrip(".").lower()
+        if host == "localhost" or host.endswith((".localhost", ".internal", ".local")):
+            raise ValueError("callback_url must be a public host")
+        try:
+            ip = ipaddress.ip_address(host)
+        except ValueError:
+            # A name, or a numeric form such as 127.1 or 0x7f000001 that ip_address does not parse:
+            # resolve and re-check the address at delivery time in production (DNS can change too).
+            return v
+        if not ip.is_global:
+            raise ValueError("callback_url must be a public host")
+        return v
 
 
 def sse(event: str, data: dict[str, Any], event_id: int | None = None) -> str:
@@ -680,12 +736,13 @@ def build_app(
         if stream:
 
             async def body_iter() -> AsyncIterator[str]:
-                async for ev in events:
-                    if await request.is_disconnected():
-                        # Client went away: stop generating. The model stream is
-                        # cancelled when this generator is closed.
-                        break
-                    yield sse(ev["event"], ev["data"], ev.get("id"))
+                try:
+                    async for ev in events:
+                        if await request.is_disconnected():
+                            break  # client went away: stop generating
+                        yield sse(ev["event"], ev["data"], ev.get("id"))
+                finally:
+                    await events.aclose()  # closing the generator cancels the model stream now, not at GC
 
             return StreamingResponse(
                 body_iter(),

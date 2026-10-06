@@ -93,8 +93,14 @@ def bridge_handler(
         job.attempts = delivery.attempts
         repo.save(job)
         try:
-            result = asyncio.run(handlers[job.type](job))
+            # Bound the run by the delivery's deadline, so a hung handler cannot outlive its lease
+            # and be leased (and run) a second time alongside itself. Work that finished is recorded
+            # even if a shutdown arrived meanwhile: discarding it would only force a rerun.
+            result = asyncio.run(asyncio.wait_for(handlers[job.type](job), timeout=ctx.deadline.remaining()))
         except Exception as exc:
+            current = repo.get(job.id)
+            if current is not None and current.state is JobState.CANCELLED:
+                raise PermanentJobError(f"job {job.id} was cancelled while running") from exc
             job.error = f"{type(exc).__name__}: {exc}"
             final = not classify(exc) or delivery.attempts >= delivery.max_attempts
             job.state = JobState.FAILED if final else JobState.QUEUED
@@ -119,8 +125,11 @@ def make_worker(
     webhook: WebhookPort | None = None,
     **worker_kwargs: Any,
 ) -> Worker:
-    """A Chapter 29 worker that runs Chapter 28 jobs."""
-    return Worker(queue, {KIND: bridge_handler(repo, handlers, webhook)}, **worker_kwargs)
+    """A Chapter 29 worker that runs Chapter 28 jobs. One `classify` decides retries for both the
+    queue and the repo, so the two can never disagree about whether a job will run again."""
+    classify = worker_kwargs.pop("classify", is_retryable)
+    return Worker(queue, {KIND: bridge_handler(repo, handlers, webhook, classify=classify)},
+                  classify=classify, **worker_kwargs)
 
 
 def reconcile_dead_letters(queue: JobQueue, repo: JobRepoPort, webhook: WebhookPort | None = None) -> list[str]:

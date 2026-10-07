@@ -32,7 +32,7 @@ All numbers in this chapter are illustrative. They are chosen to be internally c
 
 ### How to use the cases as practice
 
-Each case has the same five parts. A **Try it first** box states the prompt the way an interviewer or an architecture review would, and lists what a complete answer covers. Close the book, spend 45 minutes on your own design with the Chapter 35 worksheet, and only then read the ten steps. After the steps, a **Whiteboard version** shows what you would actually say in five minutes, **Follow-up questions** list what you will be pushed on, and a **Scoring rubric** separates a weak, a solid and a strong answer. Score your own attempt against the rubric before reading the follow-ups. Appendix C (Interview Preparation) has the one-paragraph summaries of all nine cases in section 2.10, the numbers worth memorizing in section 3, and the drill method in section 5.
+Each case has the same five parts. A **Try it first** box states the prompt the way an interviewer or an architecture review would, and lists what a complete answer covers. Close the book, spend 45 minutes on your own design with the Chapter 35 worksheet, and only then read the ten steps. After the steps, a **Whiteboard version** shows what you would actually say in five minutes, **Follow-up questions** list what you will be pushed on, and a **Scoring rubric** separates a weak, a solid and a strong answer. Score your own attempt against the rubric, then answer the follow-ups aloud. Appendix C (Interview Preparation) summarizes all nine cases in section 2.10, lists the numbers worth memorizing in section 3, and describes the drill method in section 5.
 
 ---
 
@@ -184,7 +184,7 @@ I evaluate on 60 gold questions with key facts: coverage, citation support rate,
 
 ### Scoring rubric
 
-| Level | What the answer does |
+| Answer | What it looks like |
 |---|---|
 | Weak | Draws an open-ended agent with "search" and "browse" tools, budgets stated in the prompt, citations generated as text, no plan for evaluation beyond reading reports. |
 | Solid | Justifies the agent, enforces budgets in the harness, separates synthesis from the loop, uses evidence IDs, keeps fetched text out of the planner, filters internal documents by ACL, and names coverage and citation support as metrics. |
@@ -465,7 +465,7 @@ I score execution accuracy by result equivalence on 300 gold questions over a fr
 
 ### Scoring rubric
 
-| Level | What the answer does |
+| Answer | What it looks like |
 |---|---|
 | Weak | Puts the schema in the prompt, has the model call `run_sql` directly, relies on the prompt or a keyword blocklist for read-only, and evaluates by comparing SQL text. |
 | Solid | Retrieves a schema slice, validates SQL with a parser (single SELECT, table allowlist, `LIMIT`), runs it under a read-only role with tenant row-level security, and evaluates by execution accuracy. |
@@ -612,7 +612,7 @@ Model cost is about seven cents a vendor and irrelevant. The metric that matters
 
 ### Scoring rubric
 
-| Level | What the answer does |
+| Answer | What it looks like |
 |---|---|
 | Weak | Builds an agent with document, sanctions and ERP tools and a prompt describing the procedure; approvals are a tool the agent calls; no idempotency story. |
 | Solid | Chooses a deterministic workflow with model calls inside steps, keeps decisions in rules, makes ERP writes idempotent, models approvals as pause states, and keeps an audit log. |
@@ -735,7 +735,7 @@ I autoscale on queue wait and admission rejections, with KV utilization as the l
 
 ### Scoring rubric
 
-| Level | What the answer does |
+| Answer | What it looks like |
 |---|---|
 | Weak | Sizes by requests per second from a vendor benchmark, autoscales on GPU utilization, puts all traffic in one pool, and does not mention memory. |
 | Solid | Uses a gateway with quotas and version stamping, admits by KV tokens, separates interactive and batch, and sizes replicas from a load test with headroom. |
@@ -865,7 +865,7 @@ Cost sets the cadence: a full agent suite is about 45 million tokens and $100, s
 
 ### Scoring rubric
 
-| Level | What the answer does |
+| Answer | What it looks like |
 |---|---|
 | Weak | Describes a scripts-and-dashboard setup: run cases, average a judge score, fail below a threshold; no versions, no fixtures, agents run against real tools. |
 | Solid | Versions cases, suites, runs and judges; mocks tools; compares runs with intervals; runs a smoke subset in CI and a full suite nightly. |

@@ -44,7 +44,7 @@ Three properties make this work, and each has a failure if you get it wrong. Eve
 
 `agentkit` enforces all three within one process. Its `JsonlEventStore` checks the sequence in memory, which is racy across processes (Chapter 19, Engineering question E4); the SQLite store in this chapter moves the check into the database, where the primary key on `(run_id, seq)` makes a second writer of the same sequence number fail inside its transaction. What remains for this chapter is the part that only matters once runs are long and workers are many: storage that survives the host, ownership so that exactly one worker drives a run, and correct handling of the step that was executing when the crash happened.
 
-A checkpoint, in this design, is only derived state at a sequence number. You can cache it (store `AgentState` every N events and replay only the tail) when logs get long, but the cache is never the source of truth. That distinction matters during upgrades. If a new release changes how state is derived, a log can be re-folded with the new code; a pickled checkpoint from the old release cannot. Version event schemas the way you version database schemas (Chapter 32), and make the fold tolerant of old event shapes.
+A checkpoint, in this design, is only derived state at a sequence number. You can cache it (store `AgentState` every N events and replay only the tail) when logs get long, but the cache is never the source of truth. That distinction matters during upgrades. If a new release changes how state is derived, a log can be re-folded with the new code; a pickled checkpoint from the old release cannot. Version event schemas the way you version database schemas, and make the fold tolerant of old event shapes.
 
 ### The at-least-once window and outcome reconciliation
 
@@ -62,7 +62,7 @@ A local idempotency record still cannot answer the critical question after a cra
 
 The third row is uncomfortable, and teams are tempted to "just retry." For a read that is fine. For an email to a customer, a refund, or an access change, an unknown outcome must become a human task, because either guess can be wrong, and both errors (a duplicate refund or a missing one) are costly. The right long-term fix is to change the integration: put the key in a field you can search, or wrap the system behind a service that records keys before forwarding.
 
-One crash point needs no external help at all: the side effect completed and the local ledger recorded success, but the process died before appending the `ToolResult` event. On resume, the ledger already holds the output, so the harness returns it without calling anything. Recording the outcome in a store that is separate from the event log and written before the event is what makes this case cheap.
+One crash point needs no external help at all: the side effect completed and the local ledger recorded success, but the process died before appending the `ToolResult` event. On resume, the ledger already holds the output, so the harness returns it without calling anything. Recording the outcome in a store that is separate from the event log and written before the event is what makes this case cheap. That store must be shared and durable: a ledger in process memory or on the dead pod's local disk disappears with the worker that wrote it, and the recovering worker sees no record at all.
 
 ### Leases and fencing: one owner per run
 
@@ -173,7 +173,7 @@ Skills are also a supply chain. A skill can carry scripts that run, URLs that ex
 
 ### Realtime voice agents
 
-A voice agent is the latency-critical extreme of the same harness problem, and Chapter 35 (Case 2) owns its design: the streaming pipeline, the per-stage latency budget, barge-in, and evaluation. Three harness rules from this chapter carry over unchanged and are what `voice_gate.py` encodes. A partial transcript may trigger only reads; a side effect needs a final transcript above a confidence threshold plus the normal confirmation for its action class. After barge-in, the conversation history must hold only what the caller actually heard, measured from the audio clock, or the next turn reasons about a question the caller never heard. And call state is durable like any other run: a worker restart mid-call must not erase a confirmation or create a second ticket, which is the reconciliation machinery above with a much shorter clock.
+A voice agent is the latency-critical extreme of the same harness problem, and Chapter 35 (Case 2) owns its design: the streaming pipeline, the per-stage latency budget, barge-in, and evaluation. Three harness rules from this chapter carry over unchanged; `voice_gate.py` encodes the first two. A partial transcript may trigger only reads; a side effect needs a final transcript above a confidence threshold plus the normal confirmation for its action class. After barge-in, the conversation history must hold only what the caller actually heard, measured from the audio clock, or the next turn reasons about a question the caller never heard. And call state is durable like any other run: a worker restart mid-call must not erase a confirmation or create a second ticket, which is the reconciliation machinery above with a much shorter clock.
 
 ## How it works
 
@@ -709,6 +709,7 @@ def compact_messages(messages: Sequence[Message], *, keep_recent_steps: int, led
     parts.append("Earlier steps, oldest first:\n" + "\n".join(digest))
     return [*head, Message.user("\n\n".join(parts)), *(m for g in recent for m in g)]
 
+# ... class CompactingLLM: an LLMClient decorator (on disk); its request rewrite:
     def _rewrite(self, req: CompletionRequest) -> CompletionRequest:
         before = count_message_tokens(req.messages, req.model)
         if before <= self.max_input_tokens:
@@ -757,6 +758,7 @@ def apply_hunks(original: list[str], hunks: list[Hunk], *, fuzz: int = 3, path: 
         offset += len(new) - len(old)
     return result
 
+# ... class CodingTools (on disk); its patch tool:
     def apply_patch(self, diff: str) -> ToolOutput:
         try:
             patches = parse_unified_diff(diff)
@@ -864,6 +866,7 @@ def select_skills(task: str, skills: dict[str, Skill], *, k: int = 2, min_score:
             out.append(SkillMatch(s.name, round(score, 3), matched))
     return sorted(out, key=lambda m: (-m.score, m.name))[:k]
 
+# ... class SkillLock (on disk):
     def verify(self, skills: dict[str, Skill]) -> list[str]:
         problems = []
         for s in skills.values():

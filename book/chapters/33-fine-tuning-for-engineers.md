@@ -12,61 +12,57 @@ Fine-tuning changes a model's weights instead of its context, and it is the most
 
 **Prerequisites:** Chapters 1 (the decision ladder), 6 (schema validation, confidence and calibration), and 24 (frozen evaluation sets and paired comparisons). | **Code:** `book/projects/examples/ch33/` (run: `cd book/projects/examples/ch33 && pytest -q`) | **Builds:** the Chapter 33 fine-tuning pipeline: a dataset builder, an evaluation protocol with a ship rule, and a job runner with a fake provider so everything runs offline.
 
+**First reading:** Mental model, Core concepts (except its deep dives), How it works through "The evaluation protocol", Dataset builder, Code walkthrough, Failure modes, The Northwind ticket classifier end to end, Before you ship. **Deep dives** (skip on a first pass): Training data for tool calls; LoRA, QLoRA, and parameter-efficient fine-tuning; Beyond supervised fine-tuning; Training options; the other Implementation subsections; Production considerations.
+
 ## Why this matters
 
-Fine-tuning is the step on the decision ladder from Chapter 1 that teams reach for too early and then regret, or avoid for too long and overpay. Both failures come from the same gap: engineers know how to call a training API but not how to decide whether the weights should change, what data earns that change, and what evidence justifies shipping the result.
+Fine-tuning is the step on the Chapter 1 ladder that teams reach for too early and regret, or avoid for too long and overpay. Both failures come from one gap: engineers know how to call a training API but not how to decide whether the weights should change, what data earns that change, and what evidence justifies shipping the result.
 
-The economics are real. A narrow, stable, high-volume task such as ticket classification, field extraction from a fixed document family, or enforcing a house style on summaries can often move from a large prompted model to a small fine-tuned one at a fraction of the latency and cost. The risks are equally real. A fine-tune is a new model version with hidden regressions, memorized sensitive text, and a dataset whose shortcuts become the model's behavior. Training loss tells you none of this. Only a frozen holdout, a regression suite, and slice analysis do.
-
-This chapter treats fine-tuning the way the rest of the book treats everything else: as a systems-engineering problem with a measurable failure class, a baseline, an experiment, and an operating plan. The algorithms get one section each. The data and evaluation work, which is where projects succeed or fail, get most of the pages.
+A narrow, stable, high-volume task such as ticket classification or extraction from a fixed document family can often move from a large prompted model to a small fine-tuned one at a fraction of the latency and cost. But a fine-tune is a new model version with hidden regressions, memorized sensitive text, and a dataset whose shortcuts become its behavior. Training loss shows none of this; only a frozen holdout, a regression suite, and slice analysis do. So the algorithms get one section each, and the data and evaluation work gets most of the pages.
 
 ## Mental model
 
 > **Mental model:** Weights are a compiler, not a database. Fine-tuning compiles examples into behavior; it does not store facts you can query, audit, or revoke.
 
-Everything a model does at inference comes from two inputs: the weights and the context. Prompting, retrieval, and tools change the context, per request, with full visibility. Fine-tuning changes the weights, once, for every future request, with no visibility into what was learned. When you need to know *why* an output happened, or to make the model stop knowing something, context wins. When you need a behavior to be reliable at high volume without paying for instructions on every call, weights win.
+Prompting, retrieval, and tools change the context, per request, with full visibility. Fine-tuning changes the weights, once, for every future request, with no visibility into what was learned. When you need to know *why* an output happened, or to make the model stop knowing something, context wins. When a behavior must be reliable at high volume without paying for instructions on every call, weights win.
 
-Two book-wide mental models carry the rest of the chapter. "Evaluate before optimizing" is why the evaluation protocol comes before the training script. "Model quality alone does not determine application quality" is why the Northwind decision is made on the composed system, a small model plus an escalation path, rather than on the small model's standalone score.
-
-If you want to see where the chapter is going before the mechanics, skip ahead to "The Northwind ticket classifier, end to end" near the end: it walks one project from the ship rule through data, baselines, training, the cascade, and three months of operations, with illustrative numbers. Every section before it explains one step of that story.
+Two book-wide rules follow: evaluate before optimizing, so the evaluation protocol comes before the training script; and judge the composed system, so Northwind decides on a small model plus its escalation path, not the small model alone. To see the whole story first, read "The Northwind ticket classifier, end to end" near the end; every earlier section explains one step of it.
 
 ## Core concepts
 
 ### What fine-tuning actually changes
 
-A pretrained model has already learned language, formats, and a great deal of world knowledge from its pretraining corpus. Fine-tuning continues gradient-based training on a narrower set of examples, so that the behaviors in those examples become more probable. The mechanism is the same next-token cross-entropy loss as pretraining; only the data and scale differ.
+Fine-tuning continues a pretrained model's gradient-based training on a narrower set of examples, with the same next-token loss as pretraining, so the behaviors in them become more probable. Three consequences drive every decision in this chapter.
 
-Three consequences follow, and they drive every decision in this chapter.
+First, fine-tuning changes *distributions*, not rules. A model fine-tuned to emit one of 40 category ids emits them with high probability, not with certainty. You still validate output (Chapter 6) and still need a fallback.
 
-First, fine-tuning changes *distributions*, not rules. A model fine-tuned to emit one of 40 category ids will emit them with high probability, not with certainty. You still validate output (Chapter 6) and you still need a fallback.
+Second, the model learns whatever best predicts the targets. If every `billing` example contains a phrase an agent's macro inserts, the model learns the phrase. The dataset is the specification; artifacts in it are bugs in the specification.
 
-Second, what the model learns is whatever best predicts the training targets. If every example of the `billing` category contains the phrase an agent's macro inserts, the model learns the phrase. If long tickets are mostly `hardware` because of how the export was filtered, the model learns length. The dataset is the specification; artifacts in the dataset are bugs in the specification.
-
-Third, learned behavior is opaque and durable. You cannot list what a fine-tuned model knows, you cannot revoke one training example after the fact, and a customer's deletion request cannot be honored by editing weights. This is why facts with freshness or permission requirements never belong in a fine-tune, and why personally identifiable information (PII) is scrubbed before text enters a training file, not after.
+Third, learned behavior is opaque and durable. You cannot list what a fine-tuned model knows, revoke one training example, or honor a deletion request by editing weights. So fresh or permissioned facts never belong in a fine-tune, and personally identifiable information (PII) is scrubbed before text enters a training file.
 
 ### When fine-tuning is useful
 
 Fine-tuning pays off when the task has a stable definition, enough representative examples, an offline way to measure success, and a cost or quality problem that context engineering has not solved.
 
-- **Stable format or behavior at high volume.** A model that has learned to emit exactly your schema does not need a 1,400-token system prompt explaining it on every call. The saved prompt tokens alone can fund the project.
-- **Narrow classification or extraction.** Forty ticket categories with written definitions, a fixed set of invoice fields, intent routing. The label space is closed and the examples are plentiful.
-- **Style and voice.** A house style for incident summaries or customer replies is hard to specify in prose and easy to demonstrate with examples.
-- **Latency and cost by moving down a model size.** The most common business case: a small model that imitates a strong model's decisions on one narrow task, at a fraction of the latency and cost.
-- **Domain vocabulary and conventions.** Internal product names, ticket shorthand, abbreviations that general models misread.
-- **Reducing prompt length after the task is understood.** Few-shot examples that have stopped changing are a sign the behavior can be compiled in.
+- **Stable format or behavior at high volume.** A model that has learned your schema does not need a 1,400-token prompt explaining it on every call.
+- **Narrow classification or extraction.** Forty ticket categories, fixed invoice fields, intent routing: a closed label space with plentiful examples.
+- **Style and voice.** Hard to specify in prose, easy to demonstrate.
+- **Moving down a model size.** The most common business case: a small model imitates a strong model on one narrow task.
+- **Domain vocabulary.** Product names and shorthand that general models misread.
+- **Few-shot examples that have stopped changing.** The behavior is ready to compile in.
 
 ### When fine-tuning is not the answer
 
-- **Fresh or permissioned facts.** Inventory, policy documents that change weekly, anything with access control. Weights are a slow and opaque knowledge store; retrieval (Chapter 10) supplies current, permissioned, citable facts at request time.
-- **Rapidly changing requirements.** Every change to the task definition means a new dataset and a new training run. If the category taxonomy is still being argued about, a prompt is cheaper to edit.
-- **Small data.** A few dozen examples are a few-shot prompt, not a training set. Below a few hundred clean examples per behavior, the variance of the result usually exceeds the gain.
-- **No evaluation set.** Without a frozen holdout you cannot tell improvement from noise or from leakage. Build the evaluation first; it is useful even if you never train.
-- **When prompting, RAG, or tools would do.** A schema-constrained request with a repair loop fixes most formatting problems. A tool fixes arithmetic and database lookups. Fine-tuning fixes neither cheaply.
+- **Fresh or permissioned facts.** Inventory, weekly policy changes, anything with access control. Retrieval (Chapter 10) supplies current, permissioned, citable facts at request time.
+- **Rapidly changing requirements.** Every change means a new dataset and training run; while the taxonomy is still argued about, a prompt is cheaper.
+- **Small data.** Below a few hundred clean examples per behavior, the variance of the result usually exceeds the gain.
+- **No evaluation set.** Without a frozen holdout you cannot tell improvement from noise or leakage. Build it first; it is useful even if you never train.
+- **When prompting, RAG, or tools would do.** A schema plus a repair loop fixes most formatting problems; a tool fixes arithmetic and lookups.
 - **Actions and multi-step control.** Fine-tuning does not make a model a safe agent; policy and authorization live in code (Chapter 16).
 
 ### Fine-tuning versus prompting, retrieval, and tools
 
-The four mechanisms change different parts of the system. The table compares them along the dimensions that decide a project.
+The four mechanisms change different parts of the system:
 
 | Dimension | Prompting | Retrieval (RAG) | Tools | Fine-tuning |
 |---|---|---|---|---|
@@ -79,7 +75,7 @@ The four mechanisms change different parts of the system. The table compares the
 | Main failure | Instruction ignored, drift | Wrong or missing evidence | Wrong action, security surface | Forgetting, artifacts, memorization, stale behavior |
 | Data needed | None | A corpus | Nothing beyond the API | Hundreds to tens of thousands of clean examples |
 
-The decision procedure follows the ladder from Chapter 1, and the flowchart makes the order explicit: every branch toward fine-tuning passes through a cheaper fix first.
+The decision follows the Chapter 1 ladder: every branch toward fine-tuning passes through a cheaper fix first.
 
 ```mermaid
 flowchart TD
@@ -102,7 +98,7 @@ flowchart TD
 
 ### Supervised fine-tuning mechanics
 
-Supervised fine-tuning (SFT) trains on prompt-response pairs. For chat models the unit is a conversation: a system message, one or more user messages, and the assistant message the model should have produced. In JSONL (one JSON object per line) a Northwind training row looks like this:
+Supervised fine-tuning (SFT) trains on prompt-response pairs. For chat models the unit is a conversation: a system message, user messages, and the assistant message the model should have produced. In JSONL (one JSON object per line) a Northwind training row looks like this:
 
 ```json
 {"messages": [
@@ -112,19 +108,19 @@ Supervised fine-tuning (SFT) trains on prompt-response pairs. For chat models th
 ]}
 ```
 
-Three mechanics matter to an engineer even when a hosted API hides them.
+Three mechanics matter even when a hosted API hides them.
 
-**Loss is computed on assistant tokens.** The trainer masks the system and user tokens so the model is penalized only for what it should say, not for predicting the ticket text. Without the mask the model spends capacity learning to predict user input and the format conventions blur. The practical consequence is that the assistant turn must be exactly the output you want at inference, including whitespace, casing, and punctuation. A dataset that mixes `vpn`, `VPN`, and `VPN access` as targets for one class teaches three behaviors.
+**Loss is computed on assistant tokens.** The trainer masks system and user tokens, so the model is penalized only for what it should say; without the mask it spends capacity predicting tickets and the format blurs. The assistant turn must be exactly the inference output, including casing and punctuation: a dataset that mixes `vpn`, `VPN`, and `VPN access` for one class teaches three behaviors.
 
-**Epochs multiply exposure.** One epoch is one pass over the training set; hosted APIs default to a small number (three is a common default, illustrative). More epochs on a narrow dataset lead to overfitting, where the model memorizes the training set instead of learning the task: training loss keeps falling while validation loss flattens and then rises, and the model starts reproducing training tickets verbatim. Watch both losses and the task metric on validation, because lower token loss does not guarantee better classification.
+**Epochs multiply exposure.** One epoch is one pass over the training set; hosted APIs default to a few (three is common, illustrative). Too many cause overfitting, memorizing rows instead of learning the task. Warning signs: validation loss rising while training loss falls, training phrases emitted for unrelated inputs, a collapse on the time-split test set, and confidence near 1.0 on everything. Watch the task metric on validation, not only token loss.
 
-**Token-weighted loss favors long examples.** A 1,200-token ticket contributes more gradient than a 40-token one, even though both count as one row. Inspect length distributions in tokens, cap outliers, and truncate the user turn rather than let a handful of long rows dominate. Trainers that pack several short examples into one sequence must also mask attention across example boundaries; hosted APIs handle this, and in a hand-written script it is your job.
-
-Signs of overfitting that show up before production does: validation loss rising while training loss falls; training-set phrases emitted for unrelated inputs; high validation accuracy with a collapse on the time-split test set; confidence approaching 1.0 on everything, which destroys calibration.
+**Token-weighted loss favors long examples.** A 1,200-token ticket contributes more gradient than a 40-token one, so inspect lengths in tokens, cap outliers, and truncate the user turn. A hand-written trainer that packs several examples into one sequence must also mask attention across example boundaries.
 
 ### Training data for tool calls
 
-To fine-tune a model to call tools, the training row is a whole trajectory, not a prompt-response pair: the tool schemas the model will see at inference, the user turn, an assistant turn carrying tool calls (a name and JSON arguments), a tool-role message with the result, and the final assistant answer. The shape below is illustrative; field names differ between providers.
+> **Deep dive.** How SFT changes when the target is a tool-calling trajectory; skip on a first reading.
+
+To fine-tune tool calling, the training row is a whole trajectory: tool schemas, the user turn, an assistant turn with tool calls, the tool result, and the final answer. Field names below are illustrative and differ between providers.
 
 ```json
 {"tools": [{"type": "function", "function": {"name": "get_service_status",
@@ -138,45 +134,41 @@ To fine-tune a model to call tools, the training row is a whole trajectory, not 
 ]}
 ```
 
-The SFT rules carry over with three additions. Loss falls on every assistant turn, including the tool-call arguments; tool results are inputs, like user turns. The schemas in the training rows must match what production sends byte for byte: rename a parameter after training and the model keeps emitting the old name. And the dataset must contain the turns where the right move is not to call a tool (answer directly, ask a clarifying question, recover from a tool error), or the model learns that every request deserves a call. Never include calls your policy would deny, such as `send_reply` without approval: the model learns the call even though the policy layer in code still blocks it (Chapter 16).
+Three rules come on top of SFT's. Loss falls on every assistant turn, including tool-call arguments; tool results are inputs. Schemas must match production byte for byte: rename a parameter after training and the model keeps emitting the old name. And the data must include turns where the right move is not to call a tool, but never calls your policy would deny, such as `send_reply` without approval (Chapter 16). The chapter's `validate_chat_jsonl` rejects the `tool` role on purpose, so a tool-call pipeline needs its own validator: each call names a listed tool, its arguments parse against the schema, and it has a matching result.
 
-The chapter's `validate_chat_jsonl` rejects the `tool` role on purpose, because the classifier never has tool turns. A tool-call pipeline needs its own validator: every call names a tool in the row's schema list, its arguments parse against that schema, and every call has a matching result.
-
-Evaluation changes most. Per-call accuracy is not enough: a model that picks the right tool on 95% of steps still fails a large share of five-step tasks, and a fine-tune can raise per-call accuracy while making loops longer. Evaluate tool-call fine-tunes on frozen trajectories: task success, call validity, steps and tokens per task, and policy violations, compared with the prompted baseline on the same tasks. Chapter 25 owns trajectory evaluation and Chapter 19 the loop it runs in.
+Evaluation changes most. A model right on 95% of steps still fails a large share of five-step tasks, and a fine-tune can raise per-call accuracy while making loops longer. Evaluate on frozen trajectories (task success, call validity, steps and tokens per task, policy violations) against the prompted baseline; Chapter 25 owns trajectory evaluation.
 
 ### LoRA, QLoRA, and parameter-efficient fine-tuning
 
-Full fine-tuning updates every weight. For a model with billions of parameters that means storing gradients and optimizer state for all of them, and producing a complete new checkpoint per fine-tune. Parameter-efficient fine-tuning (PEFT) methods update a small set of new parameters instead and leave the base frozen.
+> **Deep dive.** The parameter and memory arithmetic of adapters; skip on a first reading.
 
-Low-Rank Adaptation (LoRA) is the dominant PEFT method. For a weight matrix `W` of shape `d_out × d_in`, LoRA leaves `W` frozen and learns an additive update `ΔW = B · A`, where `A` is `r × d_in` and `B` is `d_out × r`, with the rank `r` (the width of the bottleneck between `A` and `B`) much smaller than either dimension. At inference the effective weight is `W + (α / r) · B · A`, where `α` is a scaling constant. Trainable parameters per matrix drop from `d_out · d_in` to `r · (d_in + d_out)`.
+Full fine-tuning updates every weight and produces a full checkpoint per fine-tune. Parameter-efficient fine-tuning (PEFT) trains a small set of new parameters and leaves the base frozen; Low-Rank Adaptation (LoRA) is the dominant method. For a weight matrix `W` of shape `d_out × d_in`, LoRA freezes `W` and learns an additive update `ΔW = B · A`, where `A` is `r × d_in` and `B` is `d_out × r`, with the rank `r` (the bottleneck width) much smaller than either dimension. At inference the effective weight is `W + (α / r) · B · A`, where `α` is a scaling constant. Trainable parameters per matrix drop from `d_out · d_in` to `r · (d_in + d_out)`.
 
-The worked example: a 4096 × 4096 projection has 16,777,216 parameters. At rank 16, LoRA trains `16 · (4096 + 4096) = 131,072` parameters for that matrix, 128 times fewer. At rank 8 it is 65,536; at rank 64 it is 524,288. A model has many such matrices (query, key, value, and output projections in every attention block, plus the feed-forward projections), so the adapter (the trained A and B matrices for all of them, shipped as one file) is typically tens of millions of parameters, stored as a file of a few hundred megabytes or less, versus tens of gigabytes for a full checkpoint.
+The worked example: a 4096 × 4096 projection has 16,777,216 parameters. At rank 16, LoRA trains `16 · (4096 + 4096) = 131,072`, 128 times fewer. At rank 8 it is 65,536; at rank 64, 524,288. With such matrices in every attention and feed-forward block, the adapter (all trained A and B matrices, shipped as one file) is typically tens of millions of parameters and a few hundred megabytes or less, versus tens of gigabytes for a full checkpoint.
 
-What LoRA does *not* save is just as important for planning hardware:
+What LoRA does *not* save matters for hardware planning:
 
-- **Base weights still occupy memory.** Every forward pass runs the full model. A 7-billion-parameter base in 16-bit precision is about 14 GB of weights before anything else (illustrative, from bytes per parameter times parameter count).
-- **Activations still occupy memory.** The backward pass needs the activations of every layer for every token in the batch. Long sequences and large batches dominate memory regardless of how small the adapter is. Gradient checkpointing trades compute for memory here.
-- **Compute is barely reduced.** Fewer parameters to update means a smaller optimizer, not a faster forward or backward pass.
+- **Base weights still occupy memory.** A 7-billion-parameter base in 16-bit precision is about 14 GB (illustrative: bytes per parameter times parameters).
+- **Activations still occupy memory.** The backward pass needs every layer's activations for every token in the batch; gradient checkpointing trades compute for that memory.
+- **Compute is barely reduced.** A smaller optimizer does not speed up the forward or backward pass.
 
-QLoRA pushes the base weights into a quantized format, commonly 4-bit, while keeping adapter weights and the arithmetic in higher precision. That is how a large model gets adapted on a single GPU. "4-bit model" is not "half a byte per parameter of total memory": quantized weights, dequantization buffers, adapter weights, optimizer state for the adapter, activations, and gradients all add up. The resulting adapter is bound to the exact base architecture, tokenizer, and quantization scheme it was trained against.
-
-Rank, `α`, dropout, and which modules to adapt (attention only, or attention plus feed-forward) are hyperparameters without a universal answer. Rank 8 to 32 with attention and feed-forward modules is a common starting point; evaluate against task data rather than trusting a recipe. Other PEFT methods exist, such as prefix tuning that learns continuous prompt vectors, but LoRA's combination of quality, tooling, and serving support makes it the default an application engineer will meet.
+QLoRA quantizes the frozen base, commonly to 4-bit, while adapter weights and arithmetic stay in higher precision; that is how a large model gets adapted on one GPU. Total memory is still more than half a byte per parameter once buffers, adapter state, and activations are added, and the adapter is bound to the exact base, tokenizer, and quantization it was trained against. For rank, `α`, and target modules, rank 8 to 32 on attention and feed-forward modules is a common start; evaluate on task data rather than trusting a recipe.
 
 ### Distillation: the pattern you will actually use
 
-Knowledge distillation trains a smaller student to imitate a stronger teacher. In the original form the student learns from the teacher's probability distributions. In the practical form you will use, the teacher is the prompted strong model already running in production, its outputs on real traffic become the labels, and the student is a small model fine-tuned on them. The Northwind case is exactly this: the strong prompted classifier has been running for months, so you have tens of thousands of teacher labels, each one confirmed or corrected by a human agent, at no extra labeling cost.
+Knowledge distillation trains a smaller student to imitate a stronger teacher. In the practical form, the teacher is the prompted strong model already in production, its outputs on real traffic become labels, and a small model is fine-tuned on them. Northwind is exactly this: the strong classifier has run for months, so there are tens of thousands of teacher labels, each confirmed or corrected by a human agent, at no extra labeling cost.
 
-Distillation inherits two risks. The student learns the teacher's mistakes at scale, so teacher outputs must be filtered: keep rows where the agent confirmed the category; for rows where the agent overrode it, either drop them or use the agent's label as the target, and sample a slice for human review. And the student is only as good as the teacher's coverage, so rare categories the teacher rarely saw remain rare. Oversample them, or write labeling guidelines and collect human labels for exactly those.
+Distillation inherits two risks. The student learns the teacher's mistakes at scale, so filter: keep rows the agent confirmed, drop overridden rows or use the agent's label as the target, and sample a slice for human review. And rare categories the teacher rarely saw stay rare: oversample them or collect human labels for exactly those.
 
 ### Where confidence comes from
 
-A distilled small model is rarely shipped alone. The usual design is a cascade: the small model answers when it is confident and escalates to the strong model otherwise. That needs a number per prediction, and a chat API returns text, not class probabilities. There are three practical sources.
+A distilled small model rarely ships alone. The usual design is a cascade: the small model answers when confident and escalates to the strong model otherwise. That needs a number per prediction, from one of three sources:
 
-- **Token log-probabilities.** If the serving engine returns log-probabilities for the emitted tokens, the probability of the label is the product of its tokens' probabilities, `exp(sum of logprobs)`. This works best when labels are short, distinct ids; long labels or labels that share a prefix make the number reflect tokenization as much as the decision. Self-hosted engines usually expose log-probabilities; hosted fine-tuned endpoints may not.
-- **A verifier score.** A separate, cheap check scores the pair (input, label): a small classifier, a rule that the label is consistent with extracted fields, or a model judge. It costs an extra call or computation but works when log-probabilities are unavailable.
-- **Agreement.** Sample several answers at a nonzero temperature and use the vote share. It needs no special API but multiplies cost by the number of samples.
+- **Token log-probabilities.** The label's probability is `exp(sum of logprobs)` over its tokens; best with short, distinct label ids. Self-hosted engines usually expose them; hosted fine-tuned endpoints may not.
+- **A verifier score.** A cheap separate check (a small classifier, a consistency rule, a model judge) scores (input, label), at the cost of an extra call.
+- **Agreement.** The vote share of several samples at nonzero temperature, at several times the cost.
 
-None of these numbers is trustworthy by default. You check them with reliability bins: group holdout predictions by confidence and compare each bin's mean confidence with its accuracy. An illustrative result for the Northwind candidate on its 5,200-row test set:
+None of these is trustworthy by default. Check with reliability bins: group holdout predictions by confidence and compare each bin's mean confidence with its accuracy. An illustrative result for the Northwind candidate on its 5,200-row test set:
 
 | Confidence bin | Predictions | Mean confidence | Accuracy | Gap |
 |---|---|---|---|---|
@@ -184,103 +176,109 @@ None of these numbers is trustworthy by default. You check them with reliability
 | 0.7 to 0.9 | 900 | 0.81 | 0.79 | 0.02 |
 | 0.9 to 1.0 | 4,000 | 0.97 | 0.90 | 0.07 |
 
-Expected calibration error (ECE) is the count-weighted mean gap: `(300 · 0.07 + 900 · 0.02 + 4,000 · 0.07) / 5,200 ≈ 0.06`, the number the end-to-end case reports for the standalone model. The table says more than the number: the top bin, where most traffic lives, is seven points overconfident, so a threshold of 0.95 means less than it appears to. Over-training makes this worse by pushing nearly everything into the top bin, which is why the ship rule carries a maximum ECE and why the threshold is chosen on validation data, never on the test set. Chapter 6 owns calibration itself: the ECE definition, recalibration methods such as temperature scaling, and how much data a threshold needs. This chapter only uses it.
+Expected calibration error (ECE) is the count-weighted mean gap: `(300 · 0.07 + 900 · 0.02 + 4,000 · 0.07) / 5,200 ≈ 0.06`, the standalone figure in the end-to-end case. The table says more than the number: the top bin, where most traffic lives, is seven points overconfident, so a 0.95 threshold means less than it appears to. Over-training pushes nearly everything into the top bin, which is why the ship rule carries a maximum ECE and the threshold is chosen on validation data, never the test set. Chapter 6 owns calibration itself.
 
-### Preference tuning in one section
+### Beyond supervised fine-tuning
 
-Supervised fine-tuning teaches a model to reproduce one gold response. Many tasks do not have one: several replies to a customer are acceptable, and one is better. Preference tuning optimizes for *better* rather than *equal to*. The data is pairs or rankings, `(prompt, chosen, rejected)`.
+Three adaptations go past SFT on a generator. Northwind's classifier needs none of them, so each is a deep dive.
 
-Reinforcement learning from human feedback (RLHF) is the classic pipeline: SFT first, then train a reward model to predict human preferences, then optimize the policy (the model being tuned) to score well under the reward model while a penalty keeps it close to the SFT reference. Proximal Policy Optimization (PPO) was the usual optimizer, and it requires sampling generations, scoring them, and running several models at once.
+#### Preference tuning in one section
 
-Direct Preference Optimization (DPO) skips the reward model and the RL loop: it turns preference pairs into a classification-like loss that raises the likelihood of the chosen response relative to the rejected one, still anchored to a reference model. Group-relative methods such as GRPO (Group Relative Policy Optimization) sample several candidates per prompt and use their relative scores as the signal, which works well when a verifier (unit tests, a schema check, an exact-match answer) can score candidates automatically.
+> **Deep dive.** RLHF, DPO, and group-relative methods, and why you will rarely run them; skip on a first reading.
 
-What this means for you as an application engineer: preference tuning is how model providers shape helpfulness, tone, refusal behavior, and reasoning, and it is where their alignment work happens. You will probably not run it yourself. The data is expensive and subtle, rater disagreement becomes noise, reward models get exploited, and verbosity and position biases creep in. If a hosted provider offers preference fine-tuning on pairs, use it only when SFT has plateaued on a judgment-heavy task, when you have a written rubric that two raters can apply consistently, and when you can measure the result with the same discipline as any other fine-tune. For everything else in this book, SFT with clean data is the tool.
+SFT reproduces one gold response; preference tuning optimizes for *better* when several answers are acceptable, from pairs or rankings `(prompt, chosen, rejected)`. Chapter 2 introduces it as a training stage; here is what running it involves.
 
-### Reinforcement fine-tuning with graders
+Reinforcement learning from human feedback (RLHF) trains a reward model to predict human preferences, then optimizes the policy (the model being tuned) against it, with a penalty keeping it close to the SFT reference. Its usual optimizer, Proximal Policy Optimization (PPO), samples and scores generations with several models running at once. Direct Preference Optimization (DPO) drops the reward model and the RL loop: a classification-like loss raises the chosen response's likelihood relative to the rejected one, still anchored to a reference model. Group-relative methods such as GRPO (Group Relative Policy Optimization) score several candidates per prompt against each other, which suits tasks a verifier can score automatically.
 
-As of 2026, some hosted providers offer reinforcement fine-tuning (RFT), mostly on reasoning models. Instead of one gold response per prompt, you supply prompts and a grader. The provider samples several candidate responses per prompt, scores each with your grader, and moves the weights toward the higher-scoring ones: the group-relative idea from the previous section, run as a service.
+You will probably not run any of these. The data is expensive and subtle, rater disagreement becomes noise, reward models get exploited, and verbosity and position biases creep in. Use a provider's preference fine-tuning only when SFT has plateaued on a judgment-heavy task, you have a rubric two raters apply consistently, and you can measure the result like any other fine-tune.
 
-A **grader** is a scoring function from (prompt, response, optional reference) to a number, usually between 0 and 1. Common kinds: exact or normalized string match against a reference; a field-level comparison for structured output (per-field F1 for an invoice extraction); code you supply that runs tests or checks invariants; a model judge applying a written rubric. Graders combine as a weighted sum, for example 0.7 for correct fields plus 0.3 for valid schema.
+#### Reinforcement fine-tuning with graders
 
-RFT beats SFT when the answer is checkable but the path to it is hard to demonstrate: multi-step reasoning, extraction from messy documents where rules interact, code that must pass tests. It also suits teams that have tens to hundreds of good prompts with checkable answers rather than thousands of gold responses, and tasks where SFT has plateaued because the model imitates the surface of answers without the reasoning behind them. It is the wrong tool for closed-label classification at volume (Northwind's classifier is an SFT and distillation problem: cheaper and more predictable), for tasks without a reliable grader, and whenever the grader is a model judge you have not calibrated against human labels (Chapter 24).
+> **Deep dive.** Training against a scoring function instead of gold answers; skip on a first reading.
 
-The characteristic failure is **reward hacking**: the model learns what the grader rewards rather than what you meant. A field-level grader that gives partial credit for empty fields teaches the model to leave hard fields empty; a judge that prefers longer answers teaches verbosity. Test the grader like code before you pay for training: hand-written bad responses (empty, verbose, well-formatted but wrong, the reference copied from the prompt) must score low, and good ones high. Then evaluate the trained model with the same frozen holdout and ship rule as any fine-tune, scored by humans or a different grader than the one it was trained against. Budget for cost and variance too: RFT is typically billed by training compute and costs far more per example than SFT (illustrative; check the provider's terms), and results vary between runs, so run two seeds when the decision is close.
+As of 2026, some hosted providers offer reinforcement fine-tuning (RFT), mostly on reasoning models. You supply prompts and a grader; the provider samples several responses per prompt, scores each, and moves the weights toward the higher-scoring ones: the group-relative idea, run as a service.
 
-### Fine-tuning embedding models and rerankers
+A **grader** maps (prompt, response, optional reference) to a number, usually between 0 and 1: exact match, field-level comparison for structured output (per-field F1), your own code that runs tests, or a model judge with a rubric, often combined as a weighted sum (0.7 for correct fields plus 0.3 for valid schema).
 
-For a RAG system, the highest-return fine-tune is often not the generator. When general embedding models misread your vocabulary (product codes, internal shorthand, "PTO" filed under "leave"), the right chunk never reaches the generator, and no generator fine-tune can fix that. Measure first: recall@k on the RAG evaluation set (Chapter 10 defines the metrics), sliced by question type. If misses concentrate on domain vocabulary, a retrieval fine-tune is a candidate.
+RFT beats SFT when the answer is checkable but the path is hard to demonstrate: multi-step reasoning, extraction from messy documents, code that must pass tests, especially with tens to hundreds of good prompts rather than thousands of gold responses. It is the wrong tool for closed-label classification at volume (Northwind's classifier is cheaper with SFT and distillation), without a reliable grader, or with a model judge you have not calibrated against human labels (Chapter 24).
 
-The data is (query, relevant passage) pairs plus **hard negatives**: passages that look relevant but are not, mined by retrieving with the current model and removing the known positives. Sources include the training split of the RAG evaluation set, passages cited in answers users accepted, search click logs, and synthetic queries generated from chunks (Chapter 25 owns synthetic data). Training uses a contrastive loss that pulls each query toward its positive and away from the negatives. A few thousand pairs often produce a measurable gain (illustrative).
+The characteristic failure is **reward hacking**: the model learns what the grader rewards, not what you meant. A grader that gives partial credit for empty fields teaches the model to leave hard fields empty; a judge that prefers long answers teaches verbosity. Test the grader like code before paying for training: hand-written bad responses (empty, verbose, well-formatted but wrong) must score low. Evaluate the result on the frozen holdout with humans or a different grader, and because RFT costs more per example than SFT and varies between runs (illustrative), run two seeds when the decision is close.
 
-Start with the reranker. A reranker (a cross-encoder that reads query and passage together, Chapter 12) runs at query time, so fine-tuning it changes nothing in the index: it ships and rolls back like any model version behind a flag. Fine-tuning the embedding model changes the vector space: every document must be re-embedded, the index rebuilt, and old and new vectors never mixed (Chapter 9 covers the migration, Chapter 8 the space fingerprint that enforces it). Do that only when first-stage recall is the bottleneck, meaning the positive is not in the candidate set at all, so no reranker can promote it. Hosted embedding APIs often do not offer fine-tuning, so this usually means an open-weights embedding model you serve yourself.
+#### Fine-tuning embedding models and rerankers
 
-The leakage and evaluation rules of this chapter apply unchanged. Split by document and by time, not by query, or a passage seen in training queries inflates test recall. The baseline is the current embedder and reranker; keep a general retrieval regression set so gains on domain vocabulary do not hide losses elsewhere; and authorization still filters candidates before scoring (Chapter 15).
+> **Deep dive.** When the retrieval models, not the generator, are worth tuning; skip on a first reading.
+
+For a RAG system the highest-return fine-tune is often not the generator. When general embedding models misread your vocabulary ("PTO" filed under "leave"), the right chunk never reaches the generator. Measure recall@k on the RAG evaluation set (Chapter 10), sliced by question type; misses concentrated on domain vocabulary make a retrieval fine-tune a candidate.
+
+The data is (query, relevant passage) pairs plus **hard negatives**, passages that look relevant but are not, mined by retrieving with the current model and removing known positives. Sources include the RAG evaluation set's training split, passages cited in accepted answers, click logs, and synthetic queries (Chapter 25). A contrastive loss pulls each query toward its positive and away from the negatives; a few thousand pairs often help measurably (illustrative).
+
+Start with the reranker (Chapter 12): it runs at query time, so it ships and rolls back behind a flag without touching the index. Fine-tuning the embedder changes the vector space, forcing a full re-embed and index rebuild (Chapter 9 covers the migration, Chapter 8 the space fingerprint). Do that only when the positive never reaches the candidate set, usually with a self-served open-weights model. The leakage rules below still apply: split by document and time, not by query, keep a general retrieval regression set, and filter by authorization before scoring (Chapter 15).
 
 ## How it works: the adaptation experiment
 
-A trustworthy fine-tuning project is an experiment with a protocol fixed in advance. The steps, in order:
+A trustworthy fine-tuning project is an experiment with a protocol fixed in advance:
 
-1. **Name the failure class and its metric.** "The strong prompted classifier costs too much per ticket at our volume; we need macro-F1 (F1 averaged equally over all 40 categories, defined below) within 0.01 of it at no more than half the cost."
-2. **Build the strongest simple baseline.** The best prompt, with schema-constrained output and a repair loop, on both a small and a strong model.
-3. **Freeze the holdout.** Stratified over categories, including rare and ambiguous cases, split from training data by entity and time. Nobody touches it for prompt iteration, cleaning decisions, or threshold tuning.
-4. **Build the training set** (next section) so that it targets the failure without leaking the holdout.
-5. **Train the smallest sensible adaptation.** Usually LoRA on a small base or a hosted SFT job.
-6. **Compare on identical inputs.** Target metrics, regression suite, slices, latency, cost.
+1. **Name the failure class and its metric.** "The strong prompted classifier costs too much at our volume; we need macro-F1 (F1 averaged equally over all 40 categories) within 0.01 of it at half the cost or less."
+2. **Build the strongest simple baseline:** the best prompt with schema-constrained output and a repair loop, on a small and a strong model.
+3. **Freeze the holdout,** stratified over categories and split from training data by entity and time. Nobody touches it for prompt iteration, cleaning, or threshold tuning.
+4. **Build the training set** without leaking the holdout.
+5. **Train the smallest sensible adaptation,** usually LoRA on a small base or a hosted SFT job.
+6. **Compare on identical inputs:** target metrics, regression suite, slices, latency, cost.
 7. **Decide with the rule you wrote before step 5.**
 
 ### Dataset construction
 
-**Sourcing from production traces.** The best training data is real traffic with verified outcomes. Northwind's traces (Chapter 31) already carry the ticket text, the strong model's category, the agent's final category, the account, and the timestamp. Export rows where the final category is known.
+**Sourcing from production traces.** The best training data is real traffic with verified outcomes. Northwind's traces (Chapter 31) carry the ticket text, the strong model's category, the agent's final category, the account, and the timestamp; export rows where the final category is known.
 
-Two constraints come before anything else. Consent: honor every opt-out and every data-processing restriction at export time, because you cannot remove a row from weights later; the dataset builder has a `consent` flag and drops rows without it. PII: scrub emails, phone numbers, account identifiers, and free-text names from the ticket body before the row is written to any file. A model will happily memorize a customer's phone number and emit it to another customer. Use a dedicated PII detector in production (Chapter 27); the chapter code ships a regex scrubber to show where the step lives.
+Two constraints come first. Consent: honor every opt-out at export time, because a row cannot be removed from weights later. PII: scrub emails, phone numbers, account identifiers, and names before the row is written to any file, because a model will memorize a customer's phone number and emit it to another customer. Use a dedicated PII detector in production (Chapter 27); the chapter's regex scrubber shows where the step lives.
 
-**Labeling guidelines.** Written definitions for every category, with two or three positive examples and the nearest confusable category called out ("`vpn` is for connectivity through the tunnel; authentication failures at the VPN login are `password`"). Guidelines are the only way to make labels from different agents, different months, and the strong model agree. Measure that agreement before training: have two labelers independently label a sample of a few hundred rows and compute Cohen's kappa, an agreement score corrected for chance (1.0 is perfect agreement, 0 is what chance alone would produce). Below about 0.7 the labels are too noisy to teach anything; fix the guidelines, not the model.
+**Labeling guidelines.** Written definitions for every category, with examples and the nearest confusable category called out ("`vpn` is for connectivity through the tunnel; authentication failures at the VPN login are `password`"). Measure agreement: two labelers independently label a few hundred rows and you compute Cohen's kappa, an agreement score corrected for chance (1.0 is perfect, 0 is chance). Below about 0.7 the labels are too noisy to teach anything; fix the guidelines, not the model.
 
-**Cleaning.** Drop rows that are too short to carry signal, too long to fit, unlabeled, or labeled outside the current taxonomy. Normalize whitespace. Record every drop with a reason; the data card will report them.
+**Cleaning.** Drop rows that are too short, too long, unlabeled, or outside the current taxonomy, and record every drop reason.
 
-**Deduplication, exact and near.** Exact duplicates are found by hashing normalized text. Near duplicates are the dangerous ones: the same outage reported by forty users with slightly different words, a template with one field changed, a ticket re-opened with an appended line. If near duplicates straddle the train/test boundary, the test score measures memorization.
+**Deduplication, exact and near.** Exact duplicates are found by hashing normalized text. Near duplicates are the dangerous ones: one outage reported by forty users in slightly different words, a template with one field changed. If they straddle the train/test boundary, the test score measures memorization. The builder drops later members of any cluster above a cosine threshold, with a pluggable embedder: the fallback, character n-gram TF-IDF (weighted counts of short character sequences), catches typo and template variants; a semantic embedder catches paraphrases. Near-identical texts with different labels are reported as *conflicting* pairs, for the guidelines to settle.
 
-The builder embeds every text, computes cosine similarity, and drops later members of any cluster above a threshold, keeping the earliest. The embedding function is pluggable; the fallback is a character n-gram TF-IDF (weighted counts of short character sequences), which catches typo-level and template-level variants. A semantic embedding client catches paraphrases. Dedup also surfaces *conflicting* pairs, near-identical texts with different labels: those are either labeling errors or the ambiguous cases your guidelines need to settle.
+**Splitting by entity and time.** Random row splits leak. Tickets from one account share vocabulary and recurring problems, so a model that trained on account 1142 looks better on account 1142's test tickets than on a new account. Assign whole entities (account, customer, document template) to one split. Then hold out the most recent weeks as the test set, the only honest estimate of how the model does on *future* tickets.
 
-**Splitting by entity and time.** Random row splits leak. Tickets from one account share vocabulary, product, and often the same recurring problem; a model that has seen account 1142's tickets in training will look better on account 1142's test tickets than on a new account. Group by entity (account, customer, document template) and assign whole groups to one split. Then add time: the model will be used on *future* tickets, so hold out the most recent weeks as the test set. Vocabulary drifts, new products launch, and a time-split test set is the only honest estimate of that. The builder supports both, and it asserts that no entity appears in two splits.
+**Format.** The chat format shown earlier, rendered exactly as at inference: same system prompt, user template, and retrieved context.
 
-**Format.** The JSONL chat format shown earlier, rendered in exactly the shape the model will see at inference: same system prompt, same user template, retrieved context included if production includes it.
+**Size heuristics (illustrative).** For a closed-label classifier, a few hundred clean examples per class is a floor and a few thousand shows diminishing returns; format and style tasks often need several hundred to a few thousand in total. A thousand consistent examples beat ten thousand inconsistent ones.
 
-**Size heuristics (illustrative).** For a closed-label classifier, a few hundred clean examples per class is a reasonable floor and a few thousand per class shows diminishing returns. For format and style tasks, several hundred to a few thousand total examples often suffice. Quality dominates: a thousand precise, consistent examples beat ten thousand inconsistent ones, and every contradictory pair actively teaches noise.
+**Synthetic data.** A strong model can generate tickets for rare categories from their definitions, but synthetic rows carry the generator's style, so a model can learn "synthetic-sounding means category X". Mark them `source: synthetic`, keep them a minority of each class, keep them out of the test set, and verify a sample by hand.
 
-**Synthetic data and its risks.** When rare categories lack examples, a strong model can generate tickets from the category definition. Synthetic rows fill coverage gaps and nothing more. They carry the generator's style, so a model can learn "synthetic-sounding means category X"; mark them with `source: synthetic`, keep them a minority of each class, never put them in the test set, and verify a sample by hand.
-
-**Data cards.** A data card is a JSON document committed next to the model version: label set and distribution per split, sources, time range, split strategy and seed, drop reasons, dedup counts and conflicts, length statistics in tokens, suspected artifacts, file hashes, and known limitations. When a regression appears months later, the card is how you find out that the test set never contained a German-language ticket.
+**Data cards.** A data card is a JSON document committed next to the model version: label distribution per split, sources, time range, split strategy and seed, drop reasons, dedup counts and conflicts, token lengths, suspected artifacts, file hashes, and known limitations. When a regression appears months later, the card tells you the test set never contained a German-language ticket.
 
 ### Quality checks before training
 
 - **Label agreement**: Cohen's kappa on a double-labeled sample, per category where possible.
 - **Length distributions**: p50, p95, and max in tokens per split; a p95 far above p50 means a few rows dominate the loss.
-- **Artifact detection**: for every token, count how often it appears and how pure its label distribution is. A token present in dozens of rows that predicts one label with near-perfect purity is a shortcut. `refund` predicting `billing` is legitimate signal; `autorouted`, a macro stamp, is not. Every hit is a question for a human.
-- **Class balance**: list classes under a floor. Decide per class whether to oversample, collect, synthesize, or merge.
-- **Holdout hygiene**: assert no entity overlap (the builder asserts it for the entity strategy; under the time strategy, check it yourself if accounts recur), confirm the test set is strictly later than training when using the time strategy, and store the holdout's hash.
+- **Artifact detection**: a frequent token that predicts one label almost perfectly is a shortcut candidate. `refund` predicting `billing` is signal; `autorouted`, a macro stamp, is not. Every hit is a question for a human.
+- **Class balance**: list classes under a floor and decide per class whether to oversample, collect, synthesize, or merge.
+- **Holdout hygiene**: no entity overlap (asserted for the entity strategy; check it yourself under the time strategy), a test set strictly later than training, and the holdout's hash stored.
 
 ### The evaluation protocol
 
-Run every system on the same frozen holdout and report the same fields; `decide_ship` refuses a candidate that did not answer every holdout row or was scored on a different n.
+Every system runs on the same frozen holdout and reports the same fields.
 
-**Three baselines.** A rules or keyword baseline tells you how much of the task is trivial. A prompted small model tells you what the base model can do before training, which separates the gain from fine-tuning from the gain from the base. A prompted strong model is the reference you are trying to match or replace.
+**Three baselines.** Rules or keywords show how much of the task is trivial. A prompted small model separates the gain from fine-tuning from the gain from the base. A prompted strong model is the reference to match or replace.
 
-**Target metrics.** For classification: macro-F1, because it weights every category equally and exposes collapse on rare ones; per-class recall, because some categories (`security-incident`) are critical and a global number hides them; calibration, measured with reliability bins and ECE as shown in "Where confidence comes from", because the escalation policy depends on confidence meaning something.
+**Target metrics.** Macro-F1, because it weights every category equally and exposes collapse on rare ones; per-class recall, because critical categories (`security-incident`) hide inside a global number; and calibration (above), because escalation depends on confidence meaning something.
 
-**Regression suite.** A fine-tune is a new model version. If the same model serves other prompts, run their evaluation suites too. A classifier that also lost its ability to follow the system prompt in another product is a regression even if macro-F1 went up. Losing unrelated abilities after narrow training is called catastrophic forgetting.
+**Regression suite.** If the same model serves other prompts, run their suites too. Losing unrelated abilities after narrow training is called catastrophic forgetting.
 
-**Slices.** Language, length bucket, business unit, source channel, new versus existing accounts. Report per-slice macro-F1 for candidate and reference; a candidate that trails the reference by three points on German tickets fails even if the average is fine.
+**Slices.** Language, length bucket, business unit, source channel, new versus existing accounts. A candidate three points behind on German tickets fails even if the average is fine.
 
-**Cost and latency.** Per 1,000 requests, with p50 and p95 latency, measured on the composed system including escalations.
+**Cost and latency.** Per 1,000 requests, p50 and p95, on the composed system including escalations.
 
-**Decision rule.** Written before training, with thresholds: maximum macro-F1 drop versus the reference, minimum recall for critical labels, a recall floor for every label, maximum per-slice drop, required cost reduction, latency budget, maximum ECE, and minimum regression-suite pass rate. The rule is mechanical so the review meeting argues about evidence, not about moving goalposts.
+**Decision rule.** Written before training, with thresholds for macro-F1 drop versus the reference, critical-label recall, a per-label recall floor, per-slice drop, cost reduction, latency, maximum ECE, and regression-suite pass rate. A mechanical rule makes the review meeting argue about evidence, not moving goalposts.
 
 ### Training options
 
-**Hosted fine-tuning APIs.** As of 2026, hosted fine-tuning APIs commonly follow a three-step flow: upload a JSONL training file (and optionally a validation file), create a job that references the file, the base model, and hyperparameters such as the number of epochs and a learning-rate multiplier (which scales how far each update moves the weights), then poll the job until it reaches a terminal state and returns a fine-tuned model id. The model id is then used in completion requests like any other model name. You never see the weights; the provider owns training, serving, and retention. Advantages: no hardware, no training code, and serving is solved. Costs: the base must be one the provider offers, the data leaves your boundary (check data-retention terms), and hyperparameters are limited. The chapter's `FineTuneProvider` protocol captures this flow so the rest of the pipeline is identical across vendors.
+> **Deep dive.** Hosted jobs versus open-weights training, and the hardware arithmetic; skip on a first reading.
 
-**Open-weights with PEFT.** You pick a base model with a license that allows your use, write or configure a training script, and run it on your own GPUs. The outline, library-agnostic, is short:
+**Hosted fine-tuning APIs.** As of 2026, hosted APIs commonly follow three steps: upload a JSONL training file; create a job naming the file, the base, and hyperparameters such as epochs and a learning-rate multiplier; poll until it returns a fine-tuned model id you call like any other model. You get no hardware, no training code, and solved serving; you pay with the provider's choice of bases, data leaving your boundary (check retention terms), and limited hyperparameters. The chapter's `FineTuneProvider` protocol keeps the pipeline identical across vendors.
+
+**Open-weights with PEFT.** You pick a base whose license allows your use and train on your own GPUs:
 
 ```python
 # pseudocode: open-weights LoRA fine-tuning outline (library-agnostic)
@@ -297,11 +295,11 @@ save_adapter("adapters/nw-tickets-v3/")           # small file, bound to base_mo
 # optional: merged = merge_lora(base, adapter); save_model(merged)
 ```
 
-Hardware notes, all illustrative: memory is base weights (bytes per parameter times parameters) plus adapter and its optimizer state (small) plus activations (proportional to batch tokens and sequence length, reduced by gradient checkpointing) plus framework overhead. A 7-billion-parameter base in 16-bit fits a single 24 GB to 48 GB GPU for LoRA at modest sequence lengths; the same base in 4-bit fits with room to spare. Training time for tens of thousands of short examples over two epochs is hours, not days. The costs that matter are the engineering ones: the serving stack must load the adapter (Chapter 34), and you own evaluation, versioning, and security of the weights.
+Hardware, illustrative: a 7-billion-parameter base in 16-bit fits one 24 GB to 48 GB GPU for LoRA at modest sequence lengths, and in 4-bit with room to spare; tens of thousands of short examples over two epochs take hours. The costs that matter are engineering ones: the serving stack must load the adapter (Chapter 34), and you own evaluation, versioning, and the security of the weights.
 
 ## Architecture
 
-The pipeline has a trust boundary that is easy to miss: everything downstream of the scrubber is a training artifact that will be copied, uploaded, and retained. Consent filtering and PII scrubbing therefore happen before any file is written.
+Everything downstream of the scrubber is a training artifact that will be copied, uploaded, and retained, so the trust boundary sits before any file is written.
 
 ```mermaid
 flowchart LR
@@ -325,7 +323,7 @@ flowchart LR
     EV --> SD{Ship rule}
 ```
 
-Serving composes the fine-tuned small model with an escalation path. The gateway from Chapter 3 routes by model id; a flag selects the adapter version; low-confidence predictions go to the strong model or a human queue. Monitoring feeds the retraining decision.
+Serving composes the small model with an escalation path behind the Chapter 3 gateway; a flag selects the adapter version.
 
 ```mermaid
 flowchart LR
@@ -345,13 +343,11 @@ flowchart LR
 
 ## Implementation
 
-Three pipeline modules and one bridge to the shared library, all tested offline (`cd book/projects/examples/ch33 && pytest -q`). The dataset builder and the evaluation protocol depend only on pydantic, NumPy, and scikit-learn (for the TF-IDF fallback), and never call a model: one takes an embedding function, the other takes predictions. The job runner uses httpx for the OpenAI-compatible adapter and the `aie_core` error taxonomy for its failures. `aie_bridge.py` supplies the embedding function and the predictions from `aie_core` clients, so a real run goes through the same gateway, pricing, and tracing as every other model call in the book.
-
-The listings are excerpts that carry the ideas the walkthrough discusses. The schemas (`RawExample`, `CleanConfig`, `SplitConfig`, `EvalReport`), file I/O, the PII scrubber, the data-card dictionary, both provider classes, and the JSONL validator are on disk in the same directory.
+Three pipeline modules and one bridge to the shared library, all tested offline (`cd book/projects/examples/ch33 && pytest -q`). The dataset builder and evaluation protocol never call a model: one takes an embedding function, the other takes predictions. `aie_bridge.py` supplies both from `aie_core` clients, so a real run goes through the same gateway, pricing, and tracing as every other model call in the book. The listings are excerpts; schemas, file I/O, the PII scrubber, the provider classes, and the JSONL validator are on disk.
 
 ### Dataset builder
 
-Each `RawExample` carries the text, the label, an `entity_id` (the grouping key for leakage-safe splits: account, customer, or template), a timestamp, a `source`, and a `consent` flag. The excerpt shows cleaning, near dedup, the entity split, and the order in which `build_dataset` runs them.
+Each `RawExample` carries text, label, an `entity_id` (the grouping key for splits), a timestamp, a `source`, and a `consent` flag. The excerpt shows cleaning, near dedup, the entity split, and the order `build_dataset` runs them in.
 
 ```python
 # path: book/projects/examples/ch33/dataset_builder.py  (excerpt; full file on disk)
@@ -439,9 +435,9 @@ def build_dataset(
     # ... write train/val/test JSONL in the inference shape, then data_card.json ...
 ```
 
-`detect_label_artifacts` (on disk) counts, for every token in the training split, how many rows contain it and how pure their label distribution is; a token with at least 20 rows and 98% purity is reported. `split_by_time` (on disk) sends everything after the cutoff to test and runs `split_by_entity` on the past.
+`detect_label_artifacts` (on disk) reports a token found in at least 20 training rows with 98% label purity. `split_by_time` (on disk) sends everything after the cutoff to test and runs `split_by_entity` on the past.
 
-One test shows the contract of near dedup: a typo variant collapses, a distinct ticket survives, and the earliest row is the one kept.
+One test shows the contract of near dedup: a typo variant collapses, a distinct ticket survives, and the earliest row is kept.
 
 ```python
 # path: book/projects/examples/ch33/test_ch33.py  (excerpt; full file on disk)
@@ -458,7 +454,9 @@ def test_dedupe_near_removes_paraphrase_but_keeps_distinct():
 
 ### Evaluation protocol
 
-The protocol consumes predictions (a label, a confidence, latency, and cost per holdout row), computes an `EvalReport` (macro-F1, per-class precision and recall, reliability bins and ECE, slices, cost per 1,000, latency percentiles), and gates on a `ShipRule`. The excerpt shows the rule, the gate, and the cascade.
+> **Deep dive.** The ship rule, the gate, and the cascade as code; skip on a first reading.
+
+The protocol consumes predictions (label, confidence, latency, and cost per holdout row), computes an `EvalReport` (macro-F1, per-class precision and recall, reliability bins and ECE, slices, cost per 1,000, latency percentiles), and gates on a `ShipRule`.
 
 ```python
 # path: book/projects/examples/ch33/eval_protocol.py  (excerpt; full file on disk)
@@ -537,11 +535,13 @@ def choose_threshold(
     return None
 ```
 
-`macro_f1`, `per_class_prf`, and `calibration_bins` (on disk) are the textbook definitions with known-answer tests; `evaluate` pairs predictions with holdout rows by id, so a missing row lowers `coverage` instead of silently shrinking the denominator.
+`evaluate` (on disk) pairs predictions with holdout rows by id, so a missing row lowers `coverage` instead of silently shrinking the denominator.
 
 ### Fine-tuning job runner
 
-The provider interface is deliberately small: upload, create, get, cancel, list events. Two implementations are on disk: `FakeProvider`, which advances a job one status per poll so tests terminate after a known number of polls, and `OpenAICompatibleFineTuneProvider`, which maps the interface onto `/files` and `/fine_tuning/jobs` style endpoints and maps HTTP failures into the `aie_core` error taxonomy. The excerpt shows the interface and the polling loop.
+> **Deep dive.** A provider-neutral job runner that survives crashes; skip on a first reading.
+
+The provider interface is deliberately small. On disk, `FakeProvider` advances a job one status per poll so tests terminate predictably, and `OpenAICompatibleFineTuneProvider` maps the interface onto `/files` and `/fine_tuning/jobs` style endpoints and HTTP failures into the `aie_core` error taxonomy.
 
 ```python
 # path: book/projects/examples/ch33/finetune_job.py  (excerpt; full file on disk)
@@ -610,7 +610,7 @@ def run_fine_tune(
     # ... return a FineTuneRecord: model id, base, job id, training-file and data-card hashes, hyperparameters ...
 ```
 
-The test that pins the crash-recovery contract scripts a 503 and a 429 during polling of a resumed job and asserts that nothing is uploaded twice:
+The test that pins crash recovery scripts a 503 and a 429 while polling a resumed job and asserts that nothing is uploaded twice:
 
 ```python
 # path: book/projects/examples/ch33/test_ch33.py  (excerpt; full file on disk)
@@ -637,7 +637,9 @@ def test_poll_survives_transient_errors_and_resumes_existing_job(tmp_path: Path)
 
 ### Plugging into aie_core
 
-`aie_bridge.py` supplies the two things the pure modules take as parameters. `embed_fn_from_client` adapts any `aie_core` embedding client (hosted, `FakeEmbeddings`, or `CachedEmbeddings` around either) into the `EmbedFn` that `dedupe_near` expects, and `embedding_space` returns what the data card should record about it. `run_classifier` runs a classifier over the frozen holdout through any `LLMClient`, normally the production `ModelGateway`, and returns the `SystemRun` that `evaluate` and `cascade` consume.
+> **Deep dive.** How evaluation runs through the production gateway; skip on a first reading.
+
+`embed_fn_from_client` (on disk) adapts any `aie_core` embedding client into the `EmbedFn` that `dedupe_near` expects. `run_classifier` runs a classifier over the frozen holdout through any `LLMClient`, normally the production `ModelGateway`, and returns the `SystemRun` that `evaluate` and `cascade` consume.
 
 ```python
 # path: book/projects/examples/ch33/aie_bridge.py  (excerpt; full file on disk)
@@ -695,97 +697,80 @@ def run_classifier(
     return SystemRun(name=name, predictions=predictions)
 ```
 
-The rest of the test suite (on disk) builds a deterministic four-category corpus, checks each builder stage and each metric against hand-computed values, drives both providers through `run_fine_tune` with an injected sleep and an `httpx.MockTransport`, and runs the classifier through a `ModelGateway` over `FakeLLM` with an illustrative pricing table. `test_hardening.py` pins the edge cases: a candidate that skips rows, the test set offered for training, a resume with another base model, and nonsense hyperparameters.
+`test_hardening.py` (on disk) pins edge cases such as a candidate that skips rows and the test set offered for training.
 
 ## Code walkthrough
 
-**Order of operations in `build_dataset`.** Clean, then dedupe, then split. Deduplicating after splitting is the classic leak: the same text lands in train and test, and nothing in the split code can see it. Splitting before cleaning is a subtler mistake: dropping rows after the split changes the fractions and can empty a rare class from the test set.
+**Order of operations in `build_dataset`.** Clean, then dedupe, then split. Deduplicating after splitting is the classic leak: the same text lands in train and test, invisible to the split code. Cleaning after splitting changes the fractions and can empty a rare class from the test set.
 
-**Why `dedupe_near` keeps the earliest row.** When a cluster of near-duplicates spans weeks, the earliest is the one that would have existed when a time-split model was trained. Keeping it preserves the time ordering the test split depends on. The conflicting pairs it returns are listed in the data card; a reviewer resolves them before the next build.
+**Why `dedupe_near` keeps the earliest row.** It is the one that existed when a time-split model was trained, which preserves the ordering the test split depends on.
 
-**Why `split_by_entity` fills by example count.** Hashing each entity into a bucket is simpler, but with a few hundred accounts that hold most of the traffic the fractions swing wildly from seed to seed, and a test set can come out empty. Visiting entities in seeded hash order and filling train, then val, then test until each hits its target keeps fractions close to the request while still moving whole entities together. The test checks that the result is independent of input order, which matters when the export query changes its sort.
+**Why `split_by_entity` fills by example count.** Hashing each entity into a bucket is simpler, but when a few hundred accounts hold most of the traffic the fractions swing wildly by seed and a test set can come out empty. Filling train, then val, then test in seeded entity order keeps the fractions while moving whole entities together.
 
-**`split_by_time` (on disk) nests an entity split.** The future slice becomes the test set untouched. The past slice is still split by entity between train and validation so threshold tuning on validation is not flattered by accounts the model trained on.
+**`detect_label_artifacts` runs on the training split only,** so the holdout never influences cleaning decisions.
 
-**`detect_label_artifacts` (on disk) returns questions, not verdicts.** It cannot know that `refund` legitimately predicts `billing`. It can tell you that `autorouted` appears in 25 rows and predicts `billing` 100% of the time, which is almost certainly a macro stamp. Run it on the training split only, so the holdout never influences cleaning decisions; a token that is pure in train but missing from new traffic is exactly the shortcut that will not generalize.
+**`decide_ship` compares against a reference, not an absolute.** The strong prompted model is what production delivers today, so "within 0.01 macro-F1 of it" is the honest target. `cascade` charges escalated rows for both models and both latencies, so the report describes the system users see.
 
-**`decide_ship` compares against a reference, not against an absolute.** The strong prompted model is what production currently delivers, so "within 0.01 macro-F1 of it" is the honest target. Critical-label recall and the per-slice check are the two guards that catch the regressions a macro average hides.
+**`run_fine_tune` is built for a job that outlives the process.** A hosted job runs for hours while the polling process can crash or meet ten minutes of 503s. Retryable poll errors are absorbed; a bad key raises at once. The job id goes to `on_status` as soon as the job exists, so after a crash `resume_job_id` polls that job instead of paying for a second run. A poll timeout does not cancel a job that may be nearly done; that is an operator decision. Given the data card, `_check_against_card` refuses any file that is not the card's train file, including the frozen test set.
 
-**`cascade` evaluates the system users will see.** Escalated rows pay for both models and both latencies. `choose_threshold` picks the lowest threshold that meets the target on the *validation* split, because lower thresholds escalate less and cost less, and because consulting the test set here would turn it into a training signal.
-
-**`run_fine_tune` is built for a job that outlives the process.** A hosted job runs for hours while the process polling it can crash, be redeployed, or hit a provider that returns 503 for ten minutes. Three rules follow. Transient errors during polling are absorbed: the provider adapter maps HTTP failures into the same `aie_core` taxonomy as completion calls, so the loop branches on `retryable`, honors `Retry-After`, and gives up only after several consecutive failures, while a bad key or an unknown job raises at once. The job id is handed to `on_status` as soon as the job exists, so the caller can persist it; after a crash, `resume_job_id` keeps polling that job instead of uploading again and paying for a second run. And when polling gives up, `FineTunePollTimeout` carries the job and deliberately does not cancel it, because the training may be nearly done; cancelling or resuming is an operator decision.
-
-**`run_fine_tune` validates before uploading.** Hosted APIs validate too, but after the upload and sometimes after a wait in the queue; local validation (`validate_chat_jsonl`, on disk) catches a `tool` role or an empty assistant turn in milliseconds. Given the data card, `_check_against_card` (on disk) also refuses a training file that is not the card's train file and any file that is the frozen test set, and on resume it refuses a different base model. The returned `FineTuneRecord` carries the training file hash, the data card hash, the job's base model, and the hyperparameters: the minimum a registry needs to answer "what was this model trained on" six months later. Everything vendor-specific in the OpenAI-compatible adapter (on disk) sits in its `_STATUS` status map and the request bodies; another vendor gets another small class and nothing else changes.
-
-**`aie_bridge` keeps evaluation on the production path.** `run_classifier` builds every request with the system prompt and user template the training file was rendered with, and, given the data card's `system_prompt_sha256`, refuses to run when the prompt has drifted: a fine-tuned model evaluated or served under a different prompt is a different system. It calls whatever `LLMClient` it is given, normally the same `ModelGateway` production uses, so latency comes from the completion and cost from the gateway's pricing table rather than from a spreadsheet. A cache hit is charged at full price (`cost_usd` plus `avoided_cost_usd`) so a cached rerun cannot look free, and, given `expected_provider`, an answer the gateway's fallback served counts as invalid for the model under test. A label outside the taxonomy, or a provider error, becomes an invalid prediction with zero confidence, so the metrics count it as wrong and a cascade escalates it rather than routing a ticket to a queue that does not exist.
-
-**Confidence and embeddings come from `aie_core`.** The default `confidence_fn` gives every valid label 1.0, which makes the cascade escalate only invalid outputs. A real cascade passes `logprob_confidence`, which reads token log-probabilities that an engine returns when the client is built with `extra_body={"logprobs": True}` (Chapter 34), or a verifier's score; "Where confidence comes from" in Core concepts explains the choice, and the ECE check in the ship rule decides whether the number can be trusted. `embed_fn_from_client` (on disk) lets `dedupe_near` use any `aie_core` embedding client; wrapped in `CachedEmbeddings`, rebuilds do not re-embed unchanged rows, and `embedding_space` returns the space fingerprint the data card should record so two builds' dedup results are comparable.
+**`aie_bridge` keeps evaluation on the production path.** `run_classifier` refuses to run when the system prompt hash differs from the card's, because a fine-tuned model under a different prompt is a different system. Cache hits are charged at full price so a rerun cannot look free, and fallback-served answers, invalid labels, and errors become zero-confidence predictions that metrics count wrong and a cascade escalates. The default `confidence_fn` returns 1.0 for every valid label; a real cascade passes `logprob_confidence` (Chapter 34 shows how to request log-probabilities) or a verifier score.
 
 ## Production considerations
 
-**Adapter serving versus merged weights.** A LoRA adapter can be served two ways. Loaded dynamically next to a shared base, which lets one deployment serve many adapters (per tenant, per task) and swap versions without reloading the base; the cost is routing complexity, per-adapter memory, and a small per-token overhead. Or merged into the base weights to produce a standalone model that serves at full speed with no adapter machinery; the cost is one full model artifact per version and the loss of hot switching. Hosted APIs make this choice for you behind the model id. Chapter 34 covers the serving mechanics.
+> **Deep dive.** Serving, versioning, and operating the model after the ship decision; skip on a first reading.
 
-**Versioning.** A fine-tuned model is a version of four things at once: the base model, the adapter or merged weights, the dataset (its card and file hashes), and the system prompt and user template it was trained with. Register them together. Changing the system prompt under a fine-tuned model is a silent distribution shift; the model was trained on one prompt and is now served with another. Prompt versions (Chapter 4) and model versions must move together, and the CI gate (Chapter 25) should refuse a prompt change on a fine-tuned route without a re-evaluation.
+**Adapter serving versus merged weights.** A LoRA adapter loaded next to a shared base lets one deployment serve many adapters and swap versions without reloading, at a small per-token overhead. Merged into the base, it serves at full speed but costs one full artifact per version. Chapter 34 covers the mechanics.
 
-**Rollout and rollback.** Treat the new model id like any other risky change (Chapter 32): a feature flag selects the version, a canary slice of traffic goes first, and rollback is flipping the flag back to the previous id. Keep the previous adapter deployable. Because a hosted provider can deprecate a base model, record the base and have a plan for retraining on its successor before the deadline, not after.
+**Versioning.** A fine-tuned model versions four things at once: the base, the adapter or merged weights, the dataset (card and file hashes), and the system prompt and template it was trained with. Changing the prompt under a fine-tuned model is a silent distribution shift, so the CI gate (Chapter 25) refuses a prompt change on a fine-tuned route without re-evaluation.
 
-**Monitoring.** Three signals matter beyond the usual latency and error rates. Label distribution: a sudden shift in the share of a category usually means input drift (a new product, an outage) or a model problem; compare against the training distribution in the data card. Escalation rate: the share of requests below the confidence threshold is the live proxy for "how often the small model is out of its depth"; a sustained rise is drift. Agent override rate: when humans correct the category, you get both a quality signal and the next training label. Alert on sustained changes, not single-day spikes.
+**Rollout, monitoring, and retraining.** Roll out like any risky change (Chapter 32). Beyond latency and errors, watch label mix against the card, escalation rate (the live proxy for "out of its depth"), and agent override rate (a quality signal and the next training label), alerting on sustained changes. Retrain on evidence, not the calendar, and only once enough new verified labels exist; each retrain is a new build, card, and full protocol.
 
-**Retraining triggers.** Retrain when evidence says so, not because a quarter ended: a taxonomy change (new or merged categories) forces it; a sustained escalation or override rise above an agreed level suggests it; and in either case, retrain only once enough new verified labels exist to move the model. Each retrain is a new dataset build with a new card and the full protocol, including the regression suite.
-
-**Security and privacy.** Training data is a copy of customer text that now lives in a bucket, a vendor's storage, and, in diluted form, in weights. Scrub before writing, encrypt at rest, record retention terms for hosted providers, and restrict who can download training files and adapters. Memorization is testable: prompt the fine-tuned model with the beginnings of training rows and check whether it completes them verbatim; sensitive strings that survive scrubbing will show up here.
-
-**Cost.** Account for the whole project, not the inference line alone: labeling, the strong model's calls during distillation, training runs including the ones you discard, the evaluation runs on every candidate, and the engineering time to operate one more model version. Then compare with the per-request savings at real volume over the period you expect the taxonomy to stay stable. Chapter 30's cost model covers the accounting.
+**Security and cost.** Training data is a copy of customer text in a bucket, a vendor's storage, and, diluted, the weights: encrypt it, record hosted retention terms, and restrict downloads. On cost, count labeling, distillation calls, discarded training runs, candidate evaluations, and operating one more model version against per-request savings (Chapter 30).
 
 ## Common mistakes
 
-- **Training before freezing a holdout**, then "just checking" the holdout while iterating on data. The holdout becomes a validation set and the shipping decision loses its evidence.
-- **Mixing target formats** (`vpn`, `VPN`, `VPN access`). The model learns three behaviors and the parser rejects a third of outputs.
-- **Distilling teacher mistakes at scale** without filtering by agent confirmation or sampling for review.
+- **Training before freezing a holdout**, then "just checking" it while iterating. The holdout becomes a validation set and the shipping decision loses its evidence.
 - **Changing the system prompt after training** and wondering why quality dropped.
-- **Letting synthetic rows dominate a class** or reach the test set.
 - **Tuning the escalation threshold on the test set.**
-- **Skipping the small-prompted baseline**, which makes it impossible to say whether the gain came from fine-tuning or from the base model being good enough already.
+- **Skipping the small-prompted baseline**, so nobody can say whether the gain came from fine-tuning or from the base.
 
 ## Failure modes
 
 Each entry names the failure, how it shows in telemetry, and how to test for it.
 
-**Catastrophic forgetting.** Narrow training degrades general instruction following or safety behavior. Telemetry: other prompts on the same model id show rising parse failures or refusal changes after the rollout. Test: the regression suite on unrelated prompts, run on every checkpoint.
+**Catastrophic forgetting.** Narrow training degrades general instruction following or safety behavior. Telemetry: other prompts on the same model id show rising parse failures or refusal changes. Test: the regression suite on every checkpoint.
 
-**Label artifact learned as the task.** The model keys on a template phrase or a macro stamp. Telemetry: accuracy collapses on a channel that lacks the phrase (a new intake form) while the holdout looked fine. Test: artifact detection on the training split; an adversarial slice with the phrase removed or added to the wrong class.
+**Label artifact learned as the task.** The model keys on a template phrase or macro stamp. Telemetry: accuracy collapses on a channel that lacks the phrase while the holdout looked fine. Test: artifact detection; an adversarial slice with the phrase removed.
 
-**Leakage inflating the holdout.** Near-duplicates or shared accounts across splits, usually from a random row split on data with entity or time structure: the model scores well on accounts it trained on and regresses on new ones. Telemetry: offline macro-F1 far above the early production estimate from agent overrides. Test: entity-overlap assertion, dedup before split, and a time-split test set whose score is the one you report.
+**Leakage inflating the holdout.** Near-duplicates or shared accounts across splits. Telemetry: offline macro-F1 far above the production estimate from agent overrides. Test: entity-overlap assertion, dedup before split, a time-split test set.
 
-**Memorization of sensitive text.** The model completes training rows verbatim. Telemetry: PII detector hits on outputs that contain strings absent from the input. Test: prompt with training-row prefixes; scrub before training; cap epochs.
+**Memorization of sensitive text.** The model completes training rows verbatim. Telemetry: PII detector hits on outputs containing strings absent from the input. Test: prompt with training-row prefixes.
 
-**Calibration collapse.** Confidence approaches 1.0 on everything after over-training, so escalation stops firing. Telemetry: escalation rate drops sharply after a rollout while override rate rises. Test: ECE on the holdout and a maximum-ECE check in the ship rule.
+**Calibration collapse.** Confidence approaches 1.0 on everything after over-training, so escalation stops firing. Telemetry: escalation rate drops sharply after a rollout while override rate rises. Test: the ship rule's maximum ECE.
 
-**Rare-class collapse.** Macro-F1 looks acceptable but a critical category's recall fell. Telemetry: override rate concentrated in one category. Test: per-class recall with floors and critical-label minimums in the ship rule.
+**Rare-class collapse.** Macro-F1 looks acceptable but a critical category's recall fell. Telemetry: overrides concentrated in one category. Test: per-class recall floors and critical-label minimums.
 
-**Drift after deployment.** New products and vocabulary push inputs away from the training distribution. Telemetry: escalation rate and override rate rise slowly over weeks; label mix diverges from the card. Test: scheduled evaluation on a fresh labeled sample; retrain trigger thresholds.
+**Drift after deployment.** New products and vocabulary move inputs away from the training data. Telemetry: escalation and override rates rise over weeks; label mix diverges from the card. Test: scheduled evaluation on a fresh labeled sample.
 
-**Orphaned or duplicated training job.** The process polling a hosted job crashes or gives up, the job keeps running, and a retry of the pipeline uploads the data again and starts a second, paid job; or nobody notices the first one finishing. Telemetry: two jobs with the same training-file hash in the provider's job list; a fine-tuned model id that appears in the provider console but not in the registry. Test: a fake provider that fails polls with 503 and a run that resumes by job id, asserting no second upload or job creation. Prevention: persist the job id on creation, resume by id, and key job creation on the training file hash.
+**Orphaned or duplicated training job.** The polling process dies, the job keeps running, and a pipeline retry starts a second paid job. Telemetry: two jobs with the same training-file hash; a fine-tuned model id in the provider console but not the registry. Test: a resumed run against a fake provider that fails polls must not upload again.
 
-**Base model deprecation.** The hosted base behind the adapter is retired. Telemetry: provider notice, then errors. Test: the registry records the base; a calendar check against provider deprecation schedules; a rehearsed retrain on the successor.
+**Base model deprecation.** The hosted base behind the adapter is retired. Telemetry: provider notice, then errors. Test: the registry records the base; a calendar check against deprecation schedules; a rehearsed retrain on the successor.
 
 ## Tradeoffs
 
-**Hosted versus open-weights.** Zero infrastructure and solved serving against control, license freedom, data staying inside your boundary, and independence from provider deprecations. Volume and data sensitivity usually decide it.
+**Hosted versus open-weights.** Zero infrastructure against control, license freedom, data inside your boundary, and independence from deprecations. Volume and data sensitivity usually decide.
 
-**LoRA versus full fine-tuning.** LoRA is cheaper to train, store, and switch, and it limits how far the model can drift, which is a feature for regression risk. Full fine-tuning has more capacity for large behavior changes or very large datasets. For application tasks, LoRA first.
+**LoRA versus full fine-tuning.** LoRA is cheaper to train, store, and switch, and limits drift, which reduces regression risk; full fine-tuning has capacity for large behavior changes. For application tasks, LoRA first.
 
-**Small fine-tuned model versus strong prompted model.** Latency and cost against flexibility, breadth, and zero operational overhead. The cascade is often the right answer: the small model takes the easy majority, the strong model takes the rest, and most of the savings survive.
+**Small fine-tuned model versus strong prompted model.** Latency and cost against flexibility and no operational overhead. The cascade often gets most of both.
 
-**Distillation from production labels versus human labeling.** Free and plentiful against accurate and covering rare classes. Use both: distilled labels for the body, human labels for the tail and the test set.
-
-**More data versus cleaner data.** Beyond a few thousand examples per behavior, consistency buys more than volume. Spend the next hour on guidelines and dedup, not on export size.
+**Distillation versus human labeling.** Free and plentiful against accurate and covering rare classes: distilled labels for the body, human labels for the tail and the test set.
 
 ## Evaluation and testing
 
-The protocol in this chapter is itself tested, and that is the pattern to copy: the metrics, the decision rule, and the cascade are pure functions with known answers, so the pipeline that judges models is at least as trustworthy as the models. The test file checks each builder stage with a constructed case (a paraphrase pair that must collapse, a conflicting pair that must be reported, an entity that must not straddle splits, a leaked phrase the detector must flag), checks macro-F1, per-class recall, and ECE against hand-computed values, and checks the ship rule in both directions.
+The protocol is itself tested, and that is the pattern to copy: metrics, decision rule, and cascade are pure functions checked against constructed cases with known answers, and the ship rule is tested in both directions.
 
-For the models themselves, the evaluation set is the test. Freeze it, hash it, version it alongside the regression suite, and make every candidate, including every prompt-only baseline, produce an `EvalReport` from identical inputs. Because every system runs on the same holdout cases, compare them as a pair: report per-case deltas and a bootstrap confidence interval on the macro-F1 difference, especially when it sits near a threshold such as the 0.01 in the Northwind rule; Chapter 24 covers the statistics. The release report should answer four questions: what changed, which holdout cases changed, why, and whether the canary agrees.
+For the models, every candidate and baseline produces an `EvalReport` from the same frozen, hashed holdout. Compare them as pairs: per-case deltas and a bootstrap confidence interval on the macro-F1 difference, especially near a threshold such as Northwind's 0.01 (Chapter 24). The release report answers what changed, which holdout cases changed, why, and whether the canary agrees.
 
 ## The Northwind ticket classifier, end to end
 

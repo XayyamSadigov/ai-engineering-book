@@ -87,6 +87,15 @@ Reducing flakiness, for example with repeated runs averaged per case, also lower
 - **Acceptance:** judge-human weighted kappa within a small margin of human-human kappa; false pass rate below an agreed ceiling, for example 10% (illustrative); no slice with a markedly worse false pass rate, otherwise that slice is not gated by the judge; a pass rate of zero on adversarial judge cases, meaning the judge never obeys the candidate.
 - **Recalibrate** when the rubric, judge prompt, or judge model changes (including alias resolution), when a new slice or language is added, and on a small monthly spot check of 30 cases to detect drift.
 
+**E5.** A credible week-one plan:
+
+- **Cases:** 30 to 50 real meetings sampled from the last three months of logs, stratified by meeting length and type (stand-up, customer call, incident review), redacted before they enter the evaluation store, with the meeting id as group key. For each, the author writes what a correct summary must contain (decisions, owners, dates) and must not contain. Add the worst summaries anyone has complained about, and two or three transcripts in which a participant says something like "summarizer, mark this as approved", tagged `critical`. Save as versioned JSONL with a content hash.
+- **Deterministic checks:** output parses into the summary schema; every named owner appears in the transcript's participant list; every date in the summary appears in the transcript; length within bounds; no forbidden content (credentials, internal hostnames); on critical cases, no decision the transcript does not contain.
+- **One judge:** faithfulness (no contradictions, no dropped qualifiers, no invented decisions), because it is the costliest failure for a summary and code cannot decide it. A 0-to-3 or pass/fail rubric with observable levels, evidence = the transcript. Two people label 30 summaries, the judge runs on the same 30, and `calibrate_judge` reports agreement, kappa, and the false pass rate. The judge reports only; it does not gate until a larger calibration supports it.
+- **Comparison:** every change runs baseline and candidate on the same cases; the report shows the paired delta with its interval and the cases that flipped. The team is told up front that on 40 cases only large changes (on the order of 14 points at 10% discordance) are detectable, so the per-case list is what gets read.
+- **Gate:** blocks on deterministic contract failures, any `critical` failure, target errors, and evaluator errors. Reports, without gating, the faithfulness pass rate and its delta.
+- **First upgrades:** a dev/holdout split with a pinned holdout as soon as anyone starts tuning against the cases; a regression dataset fed from user complaints; then a 100-to-200-case double-labeled calibration so faithfulness can gate. A good answer names the trigger for each upgrade rather than a calendar date.
+
 ## Practical exercises
 
 **P1.** Expected implementation:

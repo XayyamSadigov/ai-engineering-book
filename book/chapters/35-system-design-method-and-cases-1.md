@@ -1,8 +1,18 @@
 # Chapter 35 — System Design Method and Cases I
 
-After this chapter you will be able to take a one-paragraph product request such as "an assistant that answers employee questions from our documents" and turn it into a defensible design: requirements with numbers, the simplest architecture that meets them, model and retrieval and tool choices justified per step, a security boundary, an evaluation plan, a capacity and cost estimate with the arithmetic shown, and a list of failure modes with their degraded modes. The chapter gives you a ten-step method and a reusable worksheet, then runs the method end to end on four systems: an enterprise knowledge assistant, a customer support copilot with a voice channel, a document processing system, and a repository-aware coding assistant. Each case ends with a map from the design's boxes to the packages and projects earlier chapters built, so a design is also a build plan.
+This chapter turns a one-paragraph product request, such as "an assistant that answers employee questions from our documents", into a defensible design: numbers first, the simplest architecture that meets them, and a list of what breaks and what happens then. It gives you a ten-step method and a worksheet, runs the method end to end on four systems (an enterprise knowledge assistant, a customer support copilot with a voice channel, a document processing system, and a repository-aware coding assistant), and packages each case as a practice problem you can attempt before reading the answer.
 
-The only new code is a small sizing module, `book/projects/examples/ch35/back_of_envelope.py`, whose tests reproduce the step-9 numbers quoted in all four cases. Chapter 36 applies the same method to research agents, analytics assistants, workflow automation, a serving platform, and an evaluation platform.
+**You will be able to:**
+- Write requirements as testable statements with numbers: correctness, permissions, side effects, SLOs as percentiles, scale, and a cost ceiling.
+- Choose the simplest architecture that meets them, and justify each model, retrieval, tool, and memory decision per step.
+- Compute peak rate, token throughput, in-flight requests (Little's Law), daily cost with and without prefix caching, and vector storage on a whiteboard, then re-run them with `back_of_envelope.py`.
+- Place the security controls and degraded modes in code, and name the telemetry signal that detects each failure.
+- Design a voice agent's latency budget, barge-in path, and the rule that keeps side effects away from partial transcripts.
+- Present a design in five minutes and hold up under follow-up questions.
+
+**Prerequisites:** Parts I to IX, at least in outline (the cases reuse the gateway of Chapter 3, retrieval of Chapters 11 to 15, tools of Chapter 16, agents of Chapter 19, evaluation of Chapters 24 and 25, security of Chapters 26 and 27, and the cost and serving math of Chapters 30 and 34). | **Code:** `book/projects/examples/ch35/` (run: `cd book/projects/examples/ch35 && pytest -q`) | **Builds:** the `back_of_envelope.py` sizing module, whose tests reproduce the step-9 numbers of all four cases.
+
+Each case ends with a map from the design's boxes to the packages and projects earlier chapters built, so a design is also a build plan. Chapter 36 applies the same method to research agents, analytics assistants, workflow automation, a serving platform, and an evaluation platform.
 
 ## Why this matters
 
@@ -104,41 +114,85 @@ Fill one row per step before any review. Empty cells are findings.
 
 ### The sizing module
 
-The chapter's one runnable artifact turns the step-9 formulas into named functions, so that a design review can re-run the arithmetic when an assumption changes. The full file is at `book/projects/examples/ch35/back_of_envelope.py`; the public interface is shown here, and the test file `test_back_of_envelope.py` asserts that the step-9 figures of all four cases below (token volumes, peak rates, in-flight counts, daily cost with and without prefix caching, vector storage, and the review-cost line of Case 3) come out of these functions. When a reviewer challenges an assumption, change it in the test and see which conclusions survive.
+The chapter's one runnable artifact turns the step-9 formulas into named functions, so that a design review can re-run the arithmetic when an assumption changes. Each formula above is one function (`peak_rps`, `tokens_per_second`, `inflight_requests`, `daily_tokens`, `cost_per_day`, `vector_storage_bytes`, `replicas_needed`), and `estimate` runs them all for one request class. The excerpt shows two formulas, the workload record, and the part of `estimate` that splits input into cached and uncached tokens; the remaining functions and the `Estimate` result type are on disk.
 
 ```python
-# path: book/projects/examples/ch35/back_of_envelope.py  (public interface; full file on disk)
-def peak_rps(daily_requests: float, active_hours: float = 8.0, peak_factor: float = 3.0) -> float: ...
-def tokens_per_second(rps: float, tokens_per_request: float) -> float: ...
-def inflight_requests(rps: float, avg_latency_s: float) -> float: ...          # Little's Law
-def daily_tokens(daily_requests: float, tokens_per_request: float) -> float: ...
-def cost_per_day(input_tokens, output_tokens, price_in_per_m, price_out_per_m,
-                 cached_input_tokens=0.0, price_cached_per_m=0.0, fixed_cost=0.0) -> float: ...
-def vector_storage_bytes(chunks: int, dimensions: int, bytes_per_dim: int = 4,
-                         index_overhead: float = 1.5) -> float: ...
-def replicas_needed(demand_tokens_per_s, replica_tokens_per_s, headroom: float = 1.5) -> int: ...
+# path: book/projects/examples/ch35/back_of_envelope.py (excerpt; full file on disk)
+def peak_rps(daily_requests: float, active_hours: float = 8.0, peak_factor: float = 3.0) -> float:
+    # ...
+    if active_hours <= 0:
+        raise ValueError("active_hours must be positive")
+    return daily_requests / (active_hours * 3600.0) * peak_factor
 
+
+def inflight_requests(rps: float, avg_latency_s: float) -> float:
+    """Little's Law: average concurrency L = arrival rate x time in system."""
+    return rps * avg_latency_s
+
+# ...
 @dataclass(frozen=True)
-class Workload:   # name, daily_requests, input_tokens, output_tokens, avg_latency_s,
-    ...           # active_hours=8, peak_factor=3, cached_fraction=0.0
+class Workload:
+    """One request class: how often it happens and what each request costs in tokens."""
 
-@dataclass(frozen=True)
-class Prices:     # input_per_m, output_per_m, cached_input_per_m=None (required if anything is cached)
-    ...
+    name: str
+    daily_requests: float
+    input_tokens: float  # per request, before caching
+    output_tokens: float  # per request
+    avg_latency_s: float
+    active_hours: float = 8.0
+    peak_factor: float = 3.0
+    cached_fraction: float = 0.0  # share of input tokens served from a prefix cache
 
+# ...
 def estimate(workload: Workload, prices: Prices, fixed_cost: float = 0.0) -> Estimate:
-    """peak_rps, peak_input_tps, peak_output_tps, inflight, daily tokens by class, cost/day, cost/request."""
+    """Run the full step-9 arithmetic for one workload. Each field is one formula above."""
+    if workload.cached_fraction > 0 and prices.cached_input_per_m is None:
+        raise ValueError("set Prices.cached_input_per_m: cached tokens are discounted, not free")
+    rps = peak_rps(workload.daily_requests, workload.active_hours, workload.peak_factor)
+    cached = daily_tokens(workload.daily_requests, workload.input_tokens * workload.cached_fraction)
+    uncached = daily_tokens(workload.daily_requests, workload.input_tokens) - cached
+    out = daily_tokens(workload.daily_requests, workload.output_tokens)
+    # ...
 ```
 
-Run it with:
+Two details are deliberate. `estimate` refuses a cached fraction without a cached price, because treating cached tokens as free is the most common silent error in cost estimates. And `cached_fraction` lives on the workload, not the prices, because it is a property of the prompt layout (Chapter 5), not of the provider.
+
+The test file `test_back_of_envelope.py` asserts that the step-9 figures of all four cases below (token volumes, peak rates, in-flight counts, daily cost with and without prefix caching, vector storage, and the review-cost line of Case 3) come out of these functions. One representative test, for Case 2:
+
+```python
+# path: book/projects/examples/ch35/test_back_of_envelope.py (excerpt; full file on disk)
+def test_case2_prefix_cache_changes_the_cost_line() -> None:
+    """Support copilot: 72,000 suggestions/day, 5,800 in / 250 out, half the prefix cached."""
+    base = Workload("copilot", 72_000, 5_800, 250, avg_latency_s=4.0, peak_factor=2)
+    cached = Workload("copilot", 72_000, 5_800, 250, avg_latency_s=4.0, peak_factor=2, cached_fraction=0.5)
+    prices = Prices(input_per_m=2.0, output_per_m=8.0, cached_input_per_m=0.2)
+    e0, e1 = estimate(base, prices), estimate(cached, prices)
+    assert e0.peak_rps == pytest.approx(5.0)
+    assert e0.inflight == pytest.approx(20.0)
+    assert e0.cost_per_day == pytest.approx(979.2)
+    assert e1.daily_cached_tokens == pytest.approx(208.8e6)
+    assert e1.cost_per_day == pytest.approx(603.36)
+```
+
+When a reviewer challenges an assumption, change it in the test and see which conclusions survive. Run the suite with:
 
 ```bash
-/path/to/.venv/bin/python -m pytest book/projects/examples/ch35 -q
+cd book/projects/examples/ch35 && pytest -q
 ```
 
 All prices in this chapter are illustrative inputs: 2 USD per million input tokens, 8 USD per million output tokens, and 0.2 USD per million cached input tokens for a capable model; one tenth of those for a small model. Replace them with your contract's numbers; the structure of the arithmetic is what matters.
 
+## Using the cases as practice
+
+Each case below opens with a **Try it first** box: the prompt as a product owner or an interviewer would give it, and what a complete answer covers. Close the book, set a 45-minute timer, and produce the worksheet, one diagram with the trust boundary, and the step-9 arithmetic before reading on. Then compare. The question is not whether you picked the same components; it is whether you answered the same questions and found the same hardest constraint.
+
+After each case, three short sections turn it into a drill: a **whiteboard version** (what you would actually say in five minutes), the **follow-up questions** an interviewer would ask next, and a **scoring rubric** that separates a weak, a solid, and a strong answer. Appendix C (Interview Preparation) is the companion: its section 2.10 summarizes each case in one line per step for recall, and its section 5 describes the timed drill these boxes are built for.
+
 ## Case 1: Enterprise knowledge assistant
+
+> **Try it first.** "Northwind has about 4,000 employees in two business units. Build an assistant that answers their questions from HR policies, IT runbooks, product documentation, and past incident reports. Some documents are restricted to HR or on-call staff, and neither business unit may ever see the other's documents. Policies change weekly." Spend 45 minutes on your own design before reading on.
+>
+> A complete answer covers: testable correctness (cited, current, permitted evidence, and abstention when evidence is thin); the decision not to use an agent or tools; where the permission filter sits; the retrieval funnel with k values; cache keys; a gold set with leakage and injection cases; the step-9 arithmetic (peak rate, tokens, in-flight requests, cost per question, vector storage); a time-to-first-token budget that sums; and a degraded-mode ladder.
 
 This is Northwind Assist in its first release: a read-only assistant over HR policies, IT runbooks, product documentation, and past incident reports for about 4,000 employees in two business units, `retail` and `logistics`.
 
@@ -288,7 +342,39 @@ Every box in the diagram already exists in the book's code. The design work is c
 
 Do not add an agent because the product is called an assistant. Do not fine-tune a model to memorize policy text; policies change and the fine-tuned model cannot cite. Do not embed documents without source identity and permissions, because retrofitting ACLs means re-indexing everything. Do not evaluate on five hand-picked demo questions. Do not cache answers keyed only by question text.
 
+### Whiteboard version
+
+"Requirements first: about 6,000 questions a day from 4,000 employees, a peak of about one request per second, p95 time to first token under 2 s, every claim cited from a current document the asker may read, abstain when evidence is thin, read-only, under 5 cents an answer.
+
+This is a workflow, not an agent: the steps are the same for every question. The identity gateway resolves groups and tenant. A small model rewrites the question. Hybrid retrieval runs with the ACL as a pre-filter inside both lexical and dense search, 50 candidates each, fused to about 60, reranked to 8. The context builder packs those 8 as untrusted data, a capable model streams a grounded answer, and a validator checks every citation id. Indexing is asynchronous: change events within minutes, a nightly reconciliation for missed deletes.
+
+The hardest constraint is permissions, including the caches. The filter runs before candidates exist, and every cache key carries tenant, group set, index version, and prompt version.
+
+Numbers: 4,500 input and 300 output tokens per question, about 68 USD a day, about a cent per answer, 6 requests in flight at peak. A million chunks is about 6 GB of vectors with index overhead: one PostgreSQL instance. The TTFT budget sums to 1.65 s, leaving 350 ms of margin.
+
+Evaluation: 200 gold questions with the asker's permission context, 20 of them adversarial, and recall@50 and recall@8 measured before anyone touches the prompt. Degraded ladder: skip rewrite, skip rerank, lexical only, smaller model, search results only."
+
+### Follow-up questions an interviewer would ask
+
+1. A group is renamed in the identity provider. Walk through what happens to the index, the caches, and a request in flight.
+2. Recall@8 on the gold set is fine, but employees say answers are out of date. Where do you look first?
+3. Finance wants a cheaper model for "easy" questions. What evidence do you need before agreeing, and how do you price a misroute?
+4. At 40,000 employees and 600,000 documents, which numbers move, and which component needs attention first?
+5. Leadership wants the assistant to remember each employee's preferences across sessions. What does that cost in security and privacy, and what would you ship instead?
+
+### Scoring rubric
+
+| Answer | What it looks like |
+|---|---|
+| Weak | Starts with a vector database and a model name; permissions live in the prompt or are checked after generation; no numbers; evaluation is "we will test it"; proposes an agent. |
+| Solid | Requirements with numbers; a workflow, not an agent; ACL pre-filter inside retrieval; hybrid funnel with k values; gold set with retrieval measured apart from generation; cost per question computed. |
+| Strong | All of solid, plus raises the cache-key and stale-version hazards unprompted, gives a latency budget that sums, defines a degraded ladder with a detection signal per rung, and says which assumption would change the design. |
+
 ## Case 2: Customer support copilot
+
+> **Try it first.** "Northwind's 300 support agents handle chat for retail and logistics customers. Build a copilot that drafts replies, looks up the customer's account, and creates tickets. Also design a voice agent for the phone line, about 8,000 calls a day, that handles routine requests and hands the rest to a human. Customer messages and calls may contain anything." Spend 45 minutes on your own design before reading on.
+>
+> A complete answer covers: why the chat copilot never sends on its own; the customer id bound by the tool layer, not the model; a side-effect class per tool, with confirmation bound to arguments and idempotency keys; sensitive intents routed to humans; the prefix-cache arithmetic; voice concurrency by Little's Law; a voice latency budget from end of speech to first audio, with overlaps; barge-in cancellation; the rule that no write runs from a partial transcript; call state that survives a worker restart; evaluation sliced by accent, noise, and codec; and which line dominates voice cost.
 
 Northwind's support organization has about 300 agents handling chat for retail and logistics customers. The copilot sits beside the agent: it drafts replies, looks up account data, and creates tickets. A second channel, phone support, routes some calls to a voice agent that handles routine requests and hands the rest to a human.
 
@@ -405,6 +491,8 @@ The voice latency budget, measured from the end of the caller's speech to the fi
 
 To reach a 1 s median the stages must overlap: start the model on a stable partial transcript when the intent is read-only, and let STT finalization run concurrently. Barge-in is a cancellation path: when voice activity detection (VAD) detects speech during playback, TTS stops within 200 ms, the in-flight generation is cancelled, and the conversation state records what the caller actually heard, not what the model generated. The hazard to design against is a side effect triggered from a partial: `create_ticket` is only ever called from a finalized transcript plus an explicit confirmation turn, never from a partial, because partials can revise "cancel the order" into "don't cancel the order" 300 ms later. Chapter 38's `TurnGate` encodes exactly this rule in code: an unstable partial may trigger only read-class tools, and only a final transcript above a confidence threshold unlocks writes, which still pass the normal policy and confirmation.
 
+**Cascaded pipeline or speech-to-speech model.** The design above is a cascaded pipeline: separate speech-to-text (STT), a text model, and text-to-speech (TTS). As of 2026, several providers also offer speech-to-speech models that take audio in and stream audio out in one session, often with built-in turn detection and tool calling. They can cut latency by removing two hand-offs, and they keep tone and hesitation that a transcript loses. The price is visibility and control. The text in the middle of a cascade is what this design leans on: the transcript a write is confirmed against, the partial-versus-final distinction that gates tools, redaction before logging, and per-stage latency spans. An integrated model still needs all of these, so a production design obtains a transcript of both sides (from the model or a parallel STT stream), keeps tool execution in your orchestrator behind the same policy and confirmation rules, and records what the caller actually heard. Choose a cascade when you need per-stage control, domain-tuned recognition, a specific voice, or a text model the speech vendor does not offer. Consider speech-to-speech when conversational latency and naturalness are the product and the action set is narrow and mostly read-only. Evaluate both the same way (task completion, wrong-action rate, barge-in, time to first audio, sliced by accent and noise), and measure built-in turn detection against your endpointing requirement rather than assuming it meets it.
+
 ### Step 10: Failure modes
 
 | Failure | Detection signal | Mitigation |
@@ -437,7 +525,37 @@ Degraded modes: drop knowledge retrieval and draft from account context only; fa
 
 Do not let the model send to customers in chat without a human; the acceptance rate metric is also the safety net. Do not give the voice agent the same intent allowlist as the chat copilot; a human is in the loop in one and not the other. Do not trigger any write from a partial transcript. Do not pass the customer id as a model-controlled tool argument. Do not optimize the LLM prompt for voice cost before measuring that speech processing is two thirds of the bill.
 
+### Whiteboard version
+
+"Two channels, one core. Chat first: 72,000 drafts a day, 5 per second at peak, time to first token 1 s. A human always sends, so the copilot is a workflow with read tools, not an agent. Per customer message: a small model classifies the intent, and sensitive intents such as payments go straight to a human. The account comes from a tool bound to the conversation's authenticated customer id, which the model never supplies. Knowledge comes from the public knowledge base with ACLs. The draft cites both. `create_ticket` needs the agent to confirm the exact fields, with an idempotency key per turn.
+
+Cost: 5,800 input tokens per draft is about 980 USD a day uncached. Keeping the rules and the account context as a stable prefix caches half the input and brings that to about 600, the biggest lever in the design.
+
+Voice: 1,500 calls an hour at peak, 6 minutes each, is 150 concurrent calls, so 150 speech-to-text, text-to-speech, and model streams. From end of speech to first audio the serial budget is about 1.2 s; a 1 s median needs overlap: start the model on a stable partial for read-only intents and stream speech synthesis by sentence. The hardest constraint: no write from a partial transcript. Writes need a final transcript plus a confirmation turn, enforced in code. Barge-in cancels playback and generation within 200 ms and records what the caller actually heard. Call state persists per turn.
+
+Speech is two thirds of the voice bill, so shorter calls beat prompt tuning. Evaluate on recorded calls sliced by accent, noise, and codec, with wrong-action rate as the critical metric. Degraded modes: macros in chat; a scripted menu and the human queue in voice."
+
+### Follow-up questions an interviewer would ask
+
+1. A caller says "cancel my order... actually, no, don't." Trace what your system does, stage by stage.
+2. Why not let the model decide which account to look up? What would an attack look like if it could?
+3. Voice p95 time to first audio is 1.9 s against a 1.5 s target. Which spans do you read first, and what would you trade away?
+4. Would you replace speech-to-text, the text model, and text-to-speech with one speech-to-speech model? What do you gain and what do you lose?
+5. How do you know the handoff threshold is right? Which metric tells you the voice agent hands off too little?
+
+### Scoring rubric
+
+| Answer | What it looks like |
+|---|---|
+| Weak | Lets the model send replies or create tickets without confirmation; treats voice as chat with speech recognition bolted on; no concurrency number; optimizes the LLM prompt to cut voice cost. |
+| Solid | Human sends in chat; the tool layer binds the customer id; confirmation bound to arguments, plus idempotency keys; a voice latency budget that sums; a barge-in path. |
+| Strong | All of solid, plus the partial-transcript rule enforced in code, call state that survives a restart, speech identified as the dominant voice cost, evaluation sliced by accent, noise, and codec, the prefix-cache arithmetic, and separate intent allowlists for chat and voice because only chat has a human in the loop. |
+
 ## Case 3: Document processing system
+
+> **Try it first.** "Northwind's finance and legal teams receive about 8,000 invoices and 200 contracts a day as PDFs, scans, and images, in several languages. Extract a fixed schema into the ERP and the contract register. Invoices that arrive by 09:00 must be posted by 11:00. A wrong total or a wrong bank account costs real money." Spend 45 minutes on your own design before reading on.
+>
+> A complete answer covers: per-field correctness with named critical fields and evidence locations; a workflow, not an agent; text-layer versus OCR routing; a small-to-capable confidence cascade; deterministic validation (sums, supplier master); a human review queue; an idempotent ERP write; bank-detail changes always reviewed; a field-level gold set held out by supplier; batch throughput arithmetic; review cost against model cost; and when fine-tuning would pay for itself.
 
 Northwind's finance and legal teams receive invoices and contracts from thousands of suppliers. The system extracts a fixed schema from each document into the ERP and the contract register.
 
@@ -553,7 +671,37 @@ Degraded modes: when the capable model is unavailable, the small model's low-con
 
 Do not build this as an agent with "read page" and "write field" tools; the path is fixed and an agent only adds steps and nondeterminism. Do not report document-level accuracy; a 95 percent document success rate can hide a 100 percent error rate on one critical field. Do not fine-tune before classifying failures by stage. Do not let bank details auto-pass. Do not split random rows into train and test when invoices share templates.
 
+### Whiteboard version
+
+"Throughput, not latency: 8,000 invoices a day, a 4,000-invoice morning batch, a two-hour window, under 25 cents an invoice all in. Correctness is per field. Total, bank details, and counterparty are critical: right or flagged, never silently wrong.
+
+It is a batch workflow: queue, classify, native text or OCR, structure-aware split with page references, schema extraction with evidence locations, deterministic validation, then the ERP or human review. Each stage persists its output by document id and stage version, so retries are safe. A small model goes first; low confidence or failed validation escalates to a capable model, then to review. The ERP write is the only irreversible effect: idempotent on document id and schema version, and only after validation or approval. A change of bank details always goes to review, which is what defuses an invoice that says 'pay this new account'.
+
+Numbers: model cost is about 15 USD a day on the cascade, and 20 workers clear the batch in about 67 minutes; workers are the scaling knob, not the model. Review is the real cost: 15 percent of 8,000 invoices at 2 minutes each is 40 hours, about 1,200 USD a day. So the optimization target is the review rate. Each point is about 80 USD a day, which is also how you justify a fine-tune for one stable supplier family.
+
+Evaluation: 1,000 labeled invoices held out by supplier, per-field exact match with critical fields weighted, a release gate on per-field deltas, and every reviewer correction becomes a new case."
+
+### Follow-up questions an interviewer would ask
+
+1. Why not have a vision model read every page directly and skip OCR? When would you?
+2. How do you set the auto-pass confidence threshold, and how do you know it is still right in three months?
+3. A new supplier template appears and its review rate is 60 percent. What happens this week, and what happens next month?
+4. Legal wants contracts processed in under a minute instead of within a day. What changes in the design and the cost?
+5. A retry posted the same invoice twice. Where exactly was the idempotency boundary wrong?
+
+### Scoring rubric
+
+| Answer | What it looks like |
+|---|---|
+| Weak | Builds an agent with page and field tools; reports document-level accuracy; trusts model confidence without validation; never prices human review. |
+| Solid | A workflow with persisted stages; schema with evidence locations; deterministic validation; a review queue; field-level metrics; an idempotent ERP write. |
+| Strong | All of solid, plus shows with arithmetic that review rate dominates cost, forces bank-detail changes to review, holds out by supplier and template, audits a sample of auto-passed documents to keep confidence honest, and states the conditions under which fine-tuning pays. |
+
 ## Case 4: Coding assistant
+
+> **Try it first.** "Northwind's 400 engineers want a repository-aware coding assistant with two modes: inline autocomplete in the editor, and an agent mode that takes a task such as 'add a validation endpoint and tests' and produces a patch for human review. Some repositories may use hosted models; others must stay in-house." Spend 45 minutes on your own design before reading on.
+>
+> A complete answer covers: two architectures for two modes; a deterministic Definition of Done checked by the runtime; narrow tools with side-effect classes, no general shell, and package installation behind approval; a sandbox without network; a context strategy (search, a capped working set, compaction that keeps paths and test failures); routing by repository data policy; evaluation on your own historical tasks, including stop-or-clarify cases; arithmetic showing what makes the per-task budget; sandbox concurrency; and failure modes such as tests never run and loops without progress.
 
 Northwind's engineering organization of about 400 engineers wants a repository-aware assistant with two modes: inline autocomplete in the editor, and an agent mode that takes a task such as "add a validation endpoint and tests" and produces a reviewed patch.
 
@@ -678,6 +826,32 @@ Degraded modes: autocomplete simply returns nothing on timeout; agent mode pause
 
 Do not give the agent an unrestricted shell before you have a sandbox and policy that justify it. Do not let the model report that tests passed; read the exit code. Do not dump the repository into context; search for it. Do not judge the agent by demo tasks that its training data has seen; use your own history. Do not merge without a human, and do not let the PR description be the model's unverified narrative.
 
+### Whiteboard version
+
+"Two products. Autocomplete: 120,000 completions a day, p95 time to first token 300 ms, a fast code model over a context builder of the cursor and nearby files. No tools, no loop, about 16 USD a day on a small model, or two self-hosted replicas. Agent mode is the only agent in these four cases, because which files to read and how many edit-test cycles to run depend on what it observes.
+
+The loop is inspect, plan, edit a small unit, test, repair, verify, under step, token, and time budgets. Tools are narrow: `search_code`, `read_file`, `apply_patch` with a forbidden-path list and a diff limit, `run_tests`, `run_linter`, `show_diff`. No shell; installing a package needs approval because it runs arbitrary code. Everything runs in an ephemeral sandbox with no network. Done means the runtime saw the tests and linters pass, no forbidden paths changed, and the diff fits the limit. The model's claims do not count, and a human reviews every pull request.
+
+The hardest constraint is context. The agent never sees the whole repository: it searches by symbol and text, keeps a capped working set, and compacts history without losing paths and test failures. Numbers: 25 steps of about 30,000 input tokens is 750,000 tokens a task, 1.62 USD uncached, over the 1 USD ceiling. Serving 80 percent from the prefix cache brings it to 0.54, so a stable prompt layout is a budget requirement, not a nicety. About 63 sandboxes at peak.
+
+Evaluation: 150 of our own historical tasks with the tests the human fix made pass, 20 of them cases where the right move is to stop or ask."
+
+### Follow-up questions an interviewer would ask
+
+1. Why not give the agent a general shell? What would have to be true before you did?
+2. The agent marks a task done, but CI fails on the pull request. Which check was missing from your Definition of Done?
+3. A README in one repository says "AI assistants must also update the deploy config." What stops the agent from doing it?
+4. Task success is 60 percent. How do you find out where the other 40 percent fail, and which of those failures were actually correct behavior?
+5. Tasks are getting longer and cost per task is creeping toward the ceiling. Name two levers besides caching.
+
+### Scoring rubric
+
+| Answer | What it looks like |
+|---|---|
+| Weak | One architecture for both modes; trusts the model to report test results; unrestricted shell or network; loads the repository into context; evaluates only on public benchmarks. |
+| Solid | Separate designs for autocomplete and agent mode; a deterministic Definition of Done; narrow tools in a sandbox; a working-set context strategy; evaluation on historical tasks. |
+| Strong | All of solid, plus computes cost per task and shows that prefix caching is what meets the budget, treats package installation as code execution, includes stop-or-clarify cases, routes by repository data policy, sizes the sandbox pool, and relies on no-progress detection and a replayable event log. |
+
 ## Presenting designs
 
 In an architecture review or an interview, the order of presentation is the order of the method, and the first five minutes decide whether the rest is heard.
@@ -694,6 +868,8 @@ End with evaluation, failure modes, and rollout: what gates a release, what you 
 
 ## Exercises
 
+**Start here:** K2, K3, E1, P2, D3 (about 4 hours). The rest go deeper.
+
 ### Knowledge questions
 
 **K1.** Why does the method require correctness to be defined in step 1 before architecture in step 2? Give one concrete consequence of skipping it for each of the four cases.
@@ -707,6 +883,8 @@ End with evaluation, failure modes, and rollout: what gates a release, what you 
 **K5.** In the voice latency table, which stage is most often the true bottleneck in practice, and why does optimizing model time to first token alone fail to reach a one-second target?
 
 **K6.** Explain why the review rate, not the token price, is the dominant cost term in Case 3, and compute the daily cost change if the review rate falls from 15 percent to 10 percent with the chapter's assumptions.
+
+**K7.** Name three things the text in the middle of a cascaded voice pipeline gives the Case 2 design, and explain what a design built on a speech-to-speech model must add to keep each of them.
 
 ### Engineering questions
 
@@ -722,13 +900,13 @@ End with evaluation, failure modes, and rollout: what gates a release, what you 
 
 Each is a design exercise. Deliver the completed worksheet (all ten rows), one Mermaid diagram with the trust boundary marked, the arithmetic for step 9 using `back_of_envelope.py`, and a failure table with at least six rows.
 
-**P1.** Design an HR onboarding assistant for Northwind that answers new-hire questions, pre-fills forms from HR data, and schedules required training sessions. Acceptance criteria: side-effect classes identified for every tool; at least one tool requires confirmation bound to arguments; cost per new hire computed; degraded mode defined for the scheduling system being down.
+**P1.** (about 2 hours) Design an HR onboarding assistant for Northwind that answers new-hire questions, pre-fills forms from HR data, and schedules required training sessions. Acceptance criteria: side-effect classes identified for every tool; at least one tool requires confirmation bound to arguments; cost per new hire computed; degraded mode defined for the scheduling system being down.
 
-**P2.** Design the voice channel of Case 2 for a 3,000-calls-per-hour peak with a 1.2 s p95 time-to-first-audio target. Acceptance criteria: latency table whose total meets the target with named overlaps; concurrency computed for audio, STT, TTS, and model streams; barge-in cancellation path described; a written rule stating which tool calls may use partial transcripts (expected: none that write).
+**P2.** (about 2 hours) Design the voice channel of Case 2 for a 3,000-calls-per-hour peak with a 1.2 s p95 time-to-first-audio target. Acceptance criteria: latency table whose total meets the target with named overlaps; concurrency computed for audio, STT, TTS, and model streams; barge-in cancellation path described; a written rule stating which tool calls may use partial transcripts (expected: none that write).
 
-**P3.** Design a contract-renewal alerting pipeline on top of Case 3: extract renewal dates and notice periods, then notify owners 60 days before notice deadlines. Acceptance criteria: field-level evaluation plan with critical-field weighting; idempotent notification design; an explicit decision, with numbers, on whether fine-tuning is justified for the two largest contract families.
+**P3.** (about 2 hours) Design a contract-renewal alerting pipeline on top of Case 3: extract renewal dates and notice periods, then notify owners 60 days before notice deadlines. Acceptance criteria: field-level evaluation plan with critical-field weighting; idempotent notification design; an explicit decision, with numbers, on whether fine-tuning is justified for the two largest contract families.
 
-**P4.** Extend Case 4 with a "fix the failing CI build" mode triggered by a CI failure webhook. Acceptance criteria: Definition of Done written as deterministic checks; the forbidden-path list; budget per task in steps, tokens, time, and cost; the evaluation suite's source of historical tasks and the clarification-or-stop cases it must include.
+**P4.** (about 90 min) Extend Case 4 with a "fix the failing CI build" mode triggered by a CI failure webhook. Acceptance criteria: Definition of Done written as deterministic checks; the forbidden-path list; budget per task in steps, tokens, time, and cost; the evaluation suite's source of historical tasks and the clarification-or-stop cases it must include.
 
 ### Debugging exercises
 
@@ -749,3 +927,12 @@ Each is a design exercise. Deliver the completed worksheet (all ten rows), one M
 - The dominant cost is often not the model: review hours in document processing, speech processing in voice, and the prefix cache hit rate in agent mode decide the budget.
 - Every design has degraded modes. Define them in order (drop rewrite, drop rerank, lexical-only retrieval, smaller model, no generation, human handoff) and detect each failure with a named telemetry signal.
 - Present designs in the order of the method: requirements and numbers first, architecture before tools, the deep dive on the hardest constraint, evaluation and rollout last.
+
+## Further reading
+
+- *A Proof for the Queuing Formula: L = λW* (Little, 1961): the result behind every in-flight estimate in step 9, and why it holds for any stable system regardless of arrival pattern.
+- *The Tail at Scale* (Dean and Barroso, 2013): why systems that fan out to several dependencies are judged by their tail, which is what the per-stage latency budgets in Cases 1 and 2 defend.
+- *Site Reliability Engineering* (Beyer, Jones, Petoff, and Murphy, 2016): SLOs and error budgets, the form step 1 uses for latency and availability requirements.
+- *Hidden Technical Debt in Machine Learning Systems* (Sculley et al., 2015): the short argument that the model is the small part of the system, which is this chapter's mental model.
+- *Designing Data-Intensive Applications* (Kleppmann, 2017): queues, idempotence, and delivery guarantees, the foundations of Case 3's pipeline and every idempotency key in these designs.
+- *SWE-bench: Can Language Models Resolve Real-World GitHub Issues?* (Jimenez et al., 2024): the benchmark framing behind Case 4's historical-task suite, and a reminder to build the suite from your own repositories.

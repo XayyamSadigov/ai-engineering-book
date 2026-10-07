@@ -1,6 +1,16 @@
 # Chapter 14 — RAG Evaluation
 
-After this chapter you will be able to measure a retrieval-augmented generation system the way you would measure any other distributed system: stage by stage, with numbers that point at the component to fix. You will build a gold set that encodes which evidence each question needs and who is asking, generate synthetic questions without fooling yourself, implement the standard retrieval metrics (hit rate, recall@k, precision@k, MRR, nDCG with graded relevance), keep permission leaks out of every average, judge answers for faithfulness, relevance, and rubric coverage with calibrated LLM judges, score citations and abstentions deterministically, and attribute every failing case to the stage that lost the evidence. The code is a set of modules in `ragkit.eval` (`book/projects/ragkit/ragkit/eval/rag_*.py`, `stage_isolation.py`, `run_rag_eval.py`) built on `evalkit`, the general evaluation library that Chapter 24 develops in full. It ends with a command that compares two RAG configurations on the Northwind gold set, prints a Markdown report, and lets a release gate refuse a candidate that retrieves better and leaks documents.
+This chapter measures a retrieval-augmented generation system the way you would measure any other distributed system: stage by stage, with numbers that point at the component to fix. A single end-to-end quality score cannot tell a retrieval miss from a generation failure, and it can count a permission leak as a success.
+
+**You will be able to:**
+- Start a RAG evaluation on day one with 30 questions, a leak check, and citation validity, and grow it into a full stage-by-stage suite.
+- Build a gold set that encodes which evidence each question needs, who is asking, and which documents that person must never see.
+- Compute retrieval metrics (hit@k, recall@k, precision@k, MRR, graded nDCG) at the right granularity and k, and keep permission leaks out of every average.
+- Score answers for faithfulness, rubric coverage, relevance, citations, and abstention, using LLM judges where needed and code checks wherever possible.
+- Diagnose every failing case to the first pipeline stage that lost the evidence, and turn the stage table into a work queue.
+- Compare two RAG configurations with paired deltas and a release gate that refuses a candidate that retrieves better but leaks documents.
+
+**Prerequisites:** Chapters 10 (the retrieval/generation contract and metric definitions), 12 (the retrieval trace), and 13 (packing, citations, abstention). | **Code:** `book/projects/ragkit/ragkit/eval/` (run: `cd book/projects/ragkit && pytest -q tests/test_rag_eval_*.py`) | **Builds:** the `ragkit.eval` package, on top of `evalkit` (built in full in Chapter 24).
 
 ## Why this matters
 
@@ -60,6 +70,44 @@ flowchart LR
 
 ## Core concepts
 
+### Day-one RAG evaluation
+
+Everything in this chapter can be built incrementally. Before the full suite exists, a team with a working RAG prototype can have a useful evaluation in an afternoon. It has five parts, and none of them needs an LLM judge.
+
+1. **Thirty questions with evidence and an asker.** Write or collect 30 questions that real users ask or will ask. For each, record the document id (or ids) that must be retrieved to answer it and the user it is asked as: tenant and groups. Make about five of them questions the asker may not see the answer to (an employee asking about the on-call runbook), and two or three that the corpus cannot answer at all. Thirty is not enough to detect small changes, but it is enough to find the large ones, and large ones are what a prototype has.
+2. **Hit@k, run as each user.** Call the retriever with each question and its principal, and check whether a required document is in the top k (hit@k, defined in Chapter 10; use the k you actually pack). Never run as an admin. This step takes seconds and needs no model.
+3. **A leak check on every case.** For every retrieved chunk, apply the access rule the system is supposed to enforce (tenant matches, at least one group overlaps). Any violation, on any case, is a stop-ship finding, not a point off the average. Run it on the answerable questions too: leaks hide in ordinary traffic.
+4. **Citation validity.** For answered cases, check in code that every cited chunk id was among the chunks packed into the prompt, and that at least one required document is cited. Invented or copied citation ids are the cheapest serious bug to catch.
+5. **Abstention on the trap cases.** For the forbidden and unanswerable questions, count how often the system answered anyway. Each one is a false answer: a leak or a hallucination.
+
+Then read every failing case by hand and ask, in order: was the required document in the top 50, in the final k, in the packed prompt, cited? Where the answer first turns to "no" is the stage to fix. That manual walk is the stage isolation this chapter later automates.
+
+Grow the suite only when a question you need answered cannot be answered with what you have:
+
+| When this happens | Add | Section |
+|---|---|---|
+| You change chunking, retrievers, or reranking | recall at first-stage and final k, MRR, nDCG; tags and slices | Retrieval metrics |
+| Hit rate is fine but answers are wrong | faithfulness and rubric coverage judges, calibrated on about 30 human labels | Answer metrics, Judging |
+| Failing cases pile up | automated stage isolation from the retrieval trace | Stage isolation |
+| You compare two configurations | paired deltas, 100+ cases, a CI gate | Slices and comparisons |
+| You have production traffic | sampled real questions with labeled evidence, replacing synthetic ones | Production considerations |
+
+The rest of the chapter is the full version of each step.
+
+### Borrowed from evalkit
+
+This chapter runs on `evalkit`, the general evaluation library that Chapter 24 builds and explains. You need only these contracts here:
+
+| Piece | One-line contract |
+|---|---|
+| `EvalCase`, `Dataset` | A case has `input`, `expected`, `rubric`, `tags`, and `metadata`; a dataset is a named, versioned list of cases. |
+| `Dataset.fingerprint` | `name@version#hash12` of the canonical case content; any edit to any case changes it. |
+| `run_target`, `Run` | Calls the system on every case with bounded concurrency, scores outputs with the given evaluators, and records outputs, scores, errors, and version lineage. |
+| `score_run` | Re-scores a stored run with new evaluators without calling the system again; refuses if the dataset hash differs. |
+| `paired_bootstrap` | Confidence interval on the mean per-case difference between two runs over the same cases. |
+| `slice_breakdown` | Mean and bootstrap interval of one metric per tag. |
+| `GateConfig`, `evaluate_gate` | Declarative pass/fail rules (must pass on every case, maximum regression, critical tags) applied to a candidate run and a baseline. |
+
 ### What a RAG gold case must encode
 
 A gold case for RAG is not a question and an answer. It is a question, the evidence the answer requires, the person asking, and a description of what a good answer contains. Workshop-style datasets often store only the first two and discover later that they cannot evaluate permissions, cannot distinguish "found one of two needed documents" from "found everything", and cannot tell a stale-but-plausible source from the authoritative one.
@@ -73,51 +121,37 @@ Each case in `shared-data/eval/retrieval_gold.jsonl` carries six fields, and eac
 - **Tags.** Slice labels such as `exact-fact`, `paraphrase`, `multi-hop`, `exact-id`, `conflicting-versions`, `forbidden-doc`, `abstain`, `adversarial`. Tags are how a 90 percent aggregate becomes "40 percent on multi-hop", which is the sentence that gets work prioritized.
 - **Expected behavior.** Implicit in the tags here: `forbidden-doc` and `abstain` cases expect the assistant to decline.
 
-Why document ids and not chunk ids or text spans? Chunk ids change whenever the chunker changes (Chapter 11 made them stable across edits, not across chunker configurations), so a gold set keyed on chunks would be invalidated by the very experiments it is meant to judge. Text spans survive rechunking and are the most precise label, which is why Chapter 11's chunk-size harness uses them. Document ids are the pragmatic middle: stable across chunking, cheap to label, and sufficient for the question "did the right source reach the prompt?" The price is that a document-level hit does not prove the right *section* was retrieved. For long documents, add span labels for the cases where that matters.
+Why document ids and not chunk ids or text spans? Chunk ids change whenever the chunker changes (Chapter 11 made them stable across edits, not across chunker configurations), so a gold set keyed on chunks would be invalidated by the very experiments it is meant to judge. Text spans survive rechunking and are the most precise label, which is why Chapter 11's chunk-size harness uses them. Document ids are the pragmatic middle: stable across chunking, cheap to label, and sufficient for the question "did the right source reach the prompt?" (Tradeoffs covers when spans are worth their cost).
 
 A small worked example shows why the evidence requirement must be explicit. A question needs two chunks; the retriever returns five, with one relevant chunk at rank 2. Recall@5 is 1/2 = 0.5 and precision@5 is 1/5 = 0.2. If either chunk alone suffices, the answer can be perfect. If both are required, the generator is doomed no matter how good it is. A gold set that only says "these chunks are relevant" cannot distinguish the two situations.
 
 **Forbidden-document cases invert the scoring.** Three Northwind cases (RQ-020, RQ-023, RQ-037) ask questions whose only answer lives in a document the user may not see, such as the SEV1 response target in the on-call runbook asked by an employee who is not on call. The gold file lists that document under `required_doc_ids`, because it is the document the question is about. Scored naively, a system that leaks the runbook earns perfect recall on those rows. The conversion code therefore moves the document to `forbidden_doc_ids`, clears the required list, and marks the case as expecting an abstention. Those cases contribute nothing to recall averages; they contribute a leak check that must pass and an abstention check.
 
-**A known label defect: RQ-037.** This mislabel will surface in the walkthrough at the end of the chapter as a false answer. One of the three forbidden-doc rows is mislabeled, and it is kept in this edition as a worked example of a gold bug. RQ-037 asks an ordinary employee's question, "Within how many hours must a leaver's access be disabled?", and labels the restricted Access Control Policy as the only source, so the case expects an abstention. But the HR FAQ, which every employee may read, says that access is removed within 24 hours of the last working day. The question therefore has a correct, permitted answer. The leak half of the label is right (the policy must never be retrieved for this user); the abstention half is wrong. The verdict here is that the label is at fault, not the FAQ: a fact the owning team publishes to every employee is not confidential, and a gold set must describe what a careful human would want the assistant to do. The corrected row keeps the leak probe and expects an answer, using the explicit `forbidden_doc_ids` field that `gold_row_to_case` accepts:
-
-```json
-{"id": "RQ-037", "question": "Within how many hours must a leaver's access be disabled?", "required_doc_ids": ["hr-faq"], "forbidden_doc_ids": ["sec-access-control-policy"], "answer_rubric": ["Access is removed within 24 hours of the last working day"], "user_groups": ["all"], "tenant": "shared", "tags": ["exact-fact", "restricted-neighbor"]}
-```
-
-The shared file is not edited in this edition, because Chapters 9 to 14 report numbers computed on it (37 answerable cases, 3 forbidden ones), and changing a label is a dataset version change that invalidates every earlier comparison, which is exactly the trade described in the next paragraph. Shipping the fix means bumping the dataset version, re-running the baseline, and noting in the changelog that RQ-037 moved from the abstention slice to the answerable slice. Until then, the gate scores a correct answer to RQ-037 (one that cites only the HR FAQ) as a false answer; treat it as correct.
+> **Sidebar: a gold-label bug.** RQ-037 asks an ordinary employee's question, "Within how many hours must a leaver's access be disabled?", and labels the restricted Access Control Policy as its only source, so the case expects an abstention. But the HR FAQ, which every employee may read, says access is removed within 24 hours of the last working day. The leak half of the label is right (the policy must never be retrieved for this user); the abstention half is wrong. A fact the owning team publishes to every employee is not confidential, and a gold set must describe what a careful human would want the assistant to do. The fix keeps the leak probe and expects an answer: `required_doc_ids: ["hr-faq"]` plus an explicit `forbidden_doc_ids: ["sec-access-control-policy"]`, a form `gold_row_to_case` accepts. Fixing a label is a dataset version change, so the shared file keeps the original row (Chapters 9 to 14 report numbers on it), and the walkthrough at the end of the chapter shows the bug surfacing as a "false answer" that is in fact correct. The lesson: when a well-behaved system fails a trap case, check the label before the system.
 
 Gold sets rot. Policies change, documents are renamed, a new version supersedes an old one, and the gold label quietly becomes wrong. Recipe-style debugging trees end with the question "is the gold answer itself outdated?" for a reason. Version the gold set with a content hash (evalkit's `Dataset.fingerprint`), record the corpus version next to every run, and review the cases whose labels point at documents that changed since the label was written. A case that fails because the gold is stale is a gold bug, and fixing it is a dataset change that invalidates comparisons with older runs.
 
-### Synthetic questions and their biases
+### Synthetic questions
 
-Forty hand-written questions are enough to start and not enough to trust a slice. The standard way to scale is **synthetic generation**: show an LLM a chunk, ask it for questions the chunk answers, and record the chunk's document as the required evidence. It is fast, cheap, and covers every document. It also produces a dataset with predictable biases, and each bias inflates scores in a specific way.
+Forty hand-written questions are enough to start and not enough to trust a slice. Generating questions with a model from each chunk scales coverage cheaply, and Chapter 25 owns the method: the filters, the difficulty tags, and how to measure the generator's bias.
 
-- **Lexical overlap bias.** A model reading a passage writes questions with the passage's vocabulary. "What is the maximum number of PTO days that may be carried over?" shares five content words with the policy sentence. Lexical retrievers ace such questions; real employees ask "how many vacation days roll into January?". Synthetic sets therefore overstate lexical retrieval and understate the value of dense or hybrid search.
-- **Single-chunk bias.** Every question is answerable from one chunk by construction. Multi-hop questions, questions spanning a policy and its FAQ, and questions about conflicts between versions are almost absent.
-- **Answerability bias.** Every question has an answer in the corpus. The cases that matter most for safety (no answer exists, or the answer exists but the user may not see it) never appear.
-- **Style and self-preference bias.** If the same model family generates questions, answers them, and judges the answers, its quirks are correlated across all three roles.
-- **Distribution mismatch.** Generation covers documents uniformly. Real traffic concentrates on a few topics (PTO, VPN, expenses) and has a long tail of odd requests.
-
-The filters in `synthesize_questions` address what can be addressed mechanically. A **grounding filter** requires the model's verbatim evidence quote to appear in the chunk, which drops questions answered from the model's memory rather than the passage. An **answerability filter** asks a second call, ideally a different model, to answer the question from the chunk alone, which drops questions needing context the chunk lacks. A **dedupe filter** removes near-duplicates by content-word overlap, because twenty paraphrases of the carryover question would dominate any slice they land in. A **leakage filter** drops synthetic questions too close to a gold question, because tuning on synthetic data that copies the gold set makes the gold set a development set. Finally, after a filter that drops too-short questions, a **difficulty tag** records the share of the question's content words that appear in the chunk: at 60 percent or more the question is tagged `lexical`, below it `paraphrase`, and questions with comparison or reasoning cues (why, compare, both) are tagged `reasoning`.
-
-What the filters cannot fix is the coverage of the distribution. Treat a synthetic set as its own dataset with its own name and its own slice in every report, never merged into the gold set's averages. Use it to find documents and sections that retrieval never reaches, and to stress the lexical-versus-paraphrase split. Do not use it to claim production quality. When production traffic exists, sample real questions (with privacy controls), label their evidence, and let those replace synthetic cases topic by topic.
+For RAG, two of those biases matter most, because each flatters a specific part of the pipeline. Questions generated from a passage reuse its vocabulary, so they overstate lexical retrieval and understate dense or hybrid search. And every generated question is answerable from one chunk, so the multi-hop, conflicting-versions, forbidden-document, and no-answer cases this chapter cares about are almost absent. `ragkit.eval.synthesize_questions` applies RAG-specific filters on top of the general ones: the evidence quote must occur in the chunk, a second call (ideally a different model) must answer the question from the chunk alone, and questions too close to a gold question are dropped so the gold set does not quietly become a development set. Keep the result as its own named dataset and its own slice in every report. Use it to find documents that retrieval never reaches; never use it to claim production quality.
 
 ### Retrieval metrics
 
-Retrieval metrics compare a ranked list with a set of relevant items. All of them are cheap to compute and need no model, which is why retrieval should be measured on every change, before any LLM call is made.
+Chapter 10 defines hit@k, recall@k, precision@k, MRR, and nDCG in one table. This section is about applying them to a RAG gold set: at which granularity, at which k, and with which choices written down. All of them are cheap and need no model, which is why retrieval should be measured on every change, before any LLM call is made.
 
 **Granularity first.** The gold set labels documents, so the ranking metrics here deduplicate the ranked chunk list into a ranked document list, first occurrence wins. Five chunks of the PTO policy are one relevant document, not five. Precision and context relevance, by contrast, are computed over chunks, because they measure what the generator has to read: three chunks of a distractor waste three slots.
 
-**Hit@k** is 1 if at least one required document is in the top k, else 0. Averaged over cases, it is the hit rate. It is the right metric when one source is enough, which is most single-fact questions, and it is the metric the Chapter 10 minimal pipeline's reference numbers use (Exercise P3: with an offline embedder and 800-character chunks, the answerable questions hit 30 of 37 at k=1, 36 at k=4, and 37 at k=10).
+**Hit@k** (any required document in the top k), averaged over cases, is the hit rate. It is the right metric when one source is enough, which is most single-fact questions, and it is the metric the Chapter 10 minimal pipeline's reference numbers use (Exercise P3: with an offline embedder and 800-character chunks, the answerable questions hit 30 of 37 at k=1, 36 at k=4, and 37 at k=10).
 
-**Recall@k** is the fraction of required documents found in the top k. For a single required document it equals hit@k. For multi-hop cases it is the honest metric: finding one of two required documents is 0.5, and a case with recall below 1.0 cannot be answered completely. First-stage retrievers are judged by recall at a large k (50 or 100), because a document missing from the candidate pool can never be recovered by a reranker. The final list is judged by recall at the k you actually pack.
+**Recall@k** counts the fraction of required documents in the top k. For a single required document it equals hit@k. For multi-hop cases it is the honest metric: finding one of two required documents is 0.5, and a case with recall below 1.0 cannot be answered completely. First-stage retrievers are judged by recall at a large k (50 or 100), because a document missing from the candidate pool can never be recovered by a reranker. The final list is judged by recall at the k you actually pack.
 
-**Precision@k** is the number of relevant chunks in the top k divided by k. It measures noise: low precision means the generator reads distractors, pays for their tokens, and may be misled by them. Note the denominator. Dividing by k, not by the number returned, means a retriever that returns two chunks for k=5 scores at most 0.4. That is a choice; whatever you choose, write it next to the number. Precision matters less than recall for RAG, because a strong generator can ignore some noise but cannot invent missing evidence. In cost terms it matters more than it seems, because every irrelevant chunk is billed.
+**Precision@k** measures noise: low precision means the generator reads distractors, pays for their tokens, and may be misled by them. Note the denominator. Dividing by k, not by the number returned, means a retriever that returns two chunks for k=5 scores at most 0.4. That is a choice; whatever you choose, write it next to the number. Precision matters less than recall for RAG, because a strong generator can ignore some noise but cannot invent missing evidence. In cost terms it matters more than it seems, because every irrelevant chunk is billed.
 
-**Mean reciprocal rank (MRR)** averages 1/rank of the first required document (0 if absent). It rewards putting the answer at the top and decays quickly: rank 1 scores 1.0, rank 2 scores 0.5, rank 5 scores 0.2. Use it when the first relevant result dominates the outcome, such as when only the top one or two chunks are packed.
+**Mean reciprocal rank (MRR)** rewards putting the first required document at the top and decays quickly: rank 1 scores 1.0, rank 2 scores 0.5, rank 5 scores 0.2. Use it when the first relevant result dominates the outcome, such as when only the top one or two chunks are packed.
 
-**Normalized discounted cumulative gain (nDCG@k)** handles graded relevance. Each position earns a gain, here `2^grade - 1` with required documents at grade 2 (gain 3) and acceptable documents at grade 1 (gain 1), discounted by `log2(rank + 1)`. The sum is divided by the same sum for the ideal ordering, so 1.0 means "as good as possible given the labels". For RQ-001, the ideal list is the PTO policy then the FAQ: DCG = 3/1 + 1/1.585 = 3.63. A system that returns the FAQ first and the policy second earns 1/1 + 3/1.585 = 2.89, an nDCG of 0.80. That 0.20 deficit is the stale-version failure from Chapter 10 expressed as a number: both documents were found, and the wrong one was ranked first.
+**nDCG@k** handles graded relevance. Each position earns a gain, here `2^grade - 1` with required documents at grade 2 (gain 3) and acceptable documents at grade 1 (gain 1), discounted by `log2(rank + 1)`. The sum is divided by the same sum for the ideal ordering, so 1.0 means "as good as possible given the labels". For RQ-001, the ideal list is the PTO policy then the FAQ: DCG = 3/1 + 1/1.585 = 3.63. A system that returns the FAQ first and the policy second earns 1/1 + 3/1.585 = 2.89, an nDCG of 0.80. That 0.20 deficit is the stale-version failure from Chapter 10 expressed as a number: both documents were found, and the wrong one was ranked first.
 
 Which metric to use depends on the question you are asking:
 
@@ -154,7 +188,7 @@ It exists because recall and evidence sufficiency are blind to noise. A configur
 
 With retrieval measured, the answer is evaluated given the evidence that was actually packed. Five dimensions, each one a separate score, each one answering a different user-facing question.
 
-**Faithfulness (groundedness).** Is every factual claim in the answer supported by the packed evidence? This is the hallucination metric for RAG. The implementation decomposes it: a first judge call extracts atomic claims from the answer ("Up to 10 PTO days carry over", "Carried-over days expire on 31 March"); a second call checks each claim against the evidence, labelling it supported, unsupported, or contradicted, with the ids of the passages it relied on. Faithfulness is the supported fraction. The decomposition costs one extra call and buys three things:
+**Faithfulness (groundedness).** Is every factual claim in the answer supported by the packed evidence? This is the hallucination metric for RAG. The implementation decomposes it: a first judge call extracts atomic claims from the answer ("Up to 10 PTO days carry over", "Carried-over days expire on 31 March"); a second call checks each claim against the evidence, labeling it supported, unsupported, or contradicted, with the ids of the passages it relied on. Faithfulness is the supported fraction. The decomposition costs one extra call and buys three things:
 
 - a score that degrades proportionally (one invented number in a five-claim answer is 0.8, not a vague "2 out of 3");
 - a list of the unsupported claims, which is what a human reviewer and a developer actually need;
@@ -191,7 +225,7 @@ Chapter 24 formalizes the judge contract that this chapter relies on: one dimens
 
 **Holistic versus decomposed.** A single-call "groundedness 0 to 3" judge is cheaper and is available as `holistic_groundedness_judge`. Use it as the baseline when you calibrate the claim-level judge, not as a substitute. If both agree with humans equally on your data, keep the cheaper one; on most RAG data the decomposed judge has the lower false pass rate (the share of answers humans fail that the judge passes), because a fluent answer with one invented number fools a holistic judge more easily than a per-claim check.
 
-Calibration follows Chapter 24's procedure with RAG-specific sampling: stratify the human-labelled sample by abstention outcome, by tag (multi-hop and conflicting-versions cases are where judges disagree most), and by stage-isolation label. Report agreement on the pass/fail decision the gate uses (faithfulness equal to 1.0), and the false pass rate above all. A faithfulness judge that passes a third of the answers humans fail will let hallucination regressions through any gate built on it.
+Calibration follows Chapter 24's procedure with RAG-specific sampling: stratify the human-labeled sample by abstention outcome, by tag (multi-hop and conflicting-versions cases are where judges disagree most), and by stage-isolation label. Report agreement on the pass/fail decision the gate uses (faithfulness equal to 1.0), and the false pass rate above all. A faithfulness judge that passes a third of the answers humans fail will let hallucination regressions through any gate built on it.
 
 ### Stage isolation
 
@@ -369,17 +403,14 @@ The evaluation reads no environment variables of its own. Judges receive an `LLM
 | `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` | provider credentials for `--judges llm` | unset |
 | `TRACE_SINK` | `jsonl` or `otel` to trace judge calls | `none` |
 
-The listings below show the core of each module. Every file is complete on disk at the path in its first line; where a listing is an excerpt, it says so.
+The listings below are excerpts that carry the ideas; every file is complete on disk at the path in its first line.
 
 ### The case and output contract
 
 The two types every module shares: what a case expects, and what a system must return.
 
 ```python
-# path: book/projects/ragkit/ragkit/eval/rag_dataset.py
-# excerpt: lines 43-129; the complete file is on disk at the path above
-
-# ============================================================================ expectations
+# path: book/projects/ragkit/ragkit/eval/rag_dataset.py (excerpt; full file on disk)
 class RagExpectation(BaseModel):
     """The `expected` field of every RAG EvalCase."""
 
@@ -393,30 +424,11 @@ class RagExpectation(BaseModel):
         g = {d: 1 for d in self.acceptable_doc_ids}
         g.update({d: 2 for d in self.required_doc_ids})
         return g
-
-    @property
-    def relevant_doc_ids(self) -> set[str]:
-        return set(self.required_doc_ids) | set(self.acceptable_doc_ids)
-
+    # ...
     @property
     def answerable(self) -> bool:
         return bool(self.required_doc_ids) and not self.expect_abstain
-
-
-class RagInput(BaseModel):
-    question: str
-    principal: Principal
-
-
-def expectation(case: EvalCase) -> RagExpectation:
-    return RagExpectation.model_validate(case.expected or {})
-
-
-def rag_input(case: EvalCase) -> RagInput:
-    return RagInput.model_validate(case.input)
-
-
-# ============================================================================ output contract
+# ...
 class RagOutput(BaseModel):
     """What a RAG system returned for one case, in the shape every Ch 14 evaluator reads."""
 
@@ -426,64 +438,19 @@ class RagOutput(BaseModel):
     packed_chunks: list[Chunk] = Field(default_factory=list)  # what the generator actually saw, in order
     retrieval: RetrievalResult | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
-
-    @classmethod
-    def coerce(cls, value: Any) -> "RagOutput":
-        """Accept a RagOutput or its JSON form (runs reloaded from disk store plain dicts)."""
-        return value if isinstance(value, RagOutput) else cls.model_validate(value)
-
-    # ------------------------------------------------------------------ derived views
-    def chunk_doc_map(self) -> dict[str, str]:
-        out = {c.id: c.doc_id for c in self.packed_chunks}
-        if self.retrieval is not None:
-            out.update({h.chunk.id: h.chunk.doc_id for h in self.retrieval.hits})
-        return out
-
+    # ...
     @property
     def retrieved_doc_ids(self) -> list[str]:
         """Final ranked documents, first occurrence wins."""
         return self.retrieval.doc_ids if self.retrieval is not None else []
-
-    @property
-    def retrieved_chunk_doc_ids(self) -> list[str]:
-        """One doc id per retrieved chunk, duplicates kept: what fills the candidate list."""
-        return [h.chunk.doc_id for h in self.retrieval.hits] if self.retrieval is not None else []
-
-    @property
-    def packed_doc_ids(self) -> list[str]:
-        return [c.doc_id for c in self.packed_chunks]
-
-    @property
-    def packed_chunk_ids(self) -> list[str]:
-        return [c.id for c in self.packed_chunks]
-
-    @property
-    def cited_doc_ids(self) -> list[str]:
-        m = self.chunk_doc_map()
-        seen: list[str] = []
-        for cid in self.cited_chunk_ids:
-            doc = m.get(cid, doc_id_of(cid))
-            if doc not in seen:
-                seen.append(doc)
-        return seen
 ```
 
+`RagOutput` also derives `packed_doc_ids`, `packed_chunk_ids`, `cited_doc_ids`, and a chunk-to-document map (on disk), so no evaluator has to re-parse a trace. The gold conversion is where forbidden-document cases are inverted:
+
 ```python
-# path: book/projects/ragkit/ragkit/eval/rag_dataset.py
-# excerpt: lines 186-234; the complete file is on disk at the path above
-
+# path: book/projects/ragkit/ragkit/eval/rag_dataset.py (excerpt; full file on disk)
 def gold_row_to_case(row: dict[str, Any]) -> EvalCase:
-    """Convert one line of shared-data/eval/retrieval_gold.jsonl into an EvalCase.
-
-    For `forbidden-doc` rows the listed "required" document is the one the principal must NOT
-    see, so it moves to `forbidden_doc_ids` and the case expects an abstention. This inversion
-    is the single most important line in the file: scoring those rows with ordinary recall
-    would reward the permission leak the case exists to catch.
-
-    A row may also list `forbidden_doc_ids` explicitly. That expresses the case the inversion
-    cannot: "answer from the required document, and never touch this restricted neighbor"
-    (RQ-037 should have been written that way; see Chapter 14).
-    """
+    # ...
     tags = list(row.get("tags", []))
     forbidden = FORBIDDEN_TAG in tags
     required = [] if forbidden else list(row["required_doc_ids"])
@@ -509,141 +476,16 @@ def gold_row_to_case(row: dict[str, Any]) -> EvalCase:
         # group by the anchor document so paraphrases about one document never straddle a split
         metadata={"source": "gold", "anchor_doc": anchor},
     )
-
-
-def load_gold_dataset(
-    path: str | Path = DEFAULT_GOLD_PATH, *, name: str = "northwind-rag-gold", version: str = "1"
-) -> Dataset:
-    rows = [json.loads(line) for line in Path(path).read_text(encoding="utf-8").splitlines() if line.strip()]
-    return Dataset(
-        [gold_row_to_case(r) for r in rows],
-        name=name,
-        version=version,
-        description="Northwind Assist retrieval/answer gold set (Ch 14), forbidden-doc rows inverted",
-    )
 ```
 
-### Synthetic questions with filters
-
-The filters from the concepts section, applied in order.
-
-```python
-# path: book/projects/ragkit/ragkit/eval/rag_dataset.py
-# excerpt: lines 389-450; the complete file is on disk at the path above
-
-def synthesize_questions(
-    chunks: Sequence[Chunk],
-    client: LLMClient,
-    *,
-    gold: Dataset | None = None,
-    per_chunk: int = 2,
-    model: str | None = None,
-    checker: LLMClient | None = None,
-    dedupe_threshold: float = 0.7,
-    leak_threshold: float = 0.6,
-    min_words: int = 4,
-) -> SynthesisReport:
-    """Generate, then filter. Each filter exists because of a specific way synthetic sets lie.
-
-    1. too-short: fragments are not questions anyone asks.
-    2. ungrounded: the evidence quote must occur in the chunk (whitespace-insensitive). A model
-       that "remembers" a fact instead of reading it produces a case whose gold source is wrong.
-    3. unanswerable: a second call, ideally a different model (`checker`), must answer the
-       question from the chunk alone. Drops questions that need context the chunk lacks.
-    4. duplicate: near-duplicates (content-word Jaccard) inflate whatever slice they land in.
-    5. gold-leak: questions too close to a gold question would let a system tuned on the
-       synthetic set look good on the gold set for the wrong reason.
-    Survivors get a difficulty tag from their lexical overlap with the chunk.
-    """
-    report = SynthesisReport()
-    by_id = {c.id: c for c in chunks}
-    gold_questions = [rag_input(c).question for c in gold] if gold is not None else []
-    checker = checker or client
-    for cand in generate_candidates(chunks, client, per_chunk=per_chunk, model=model, report=report):
-        chunk = by_id[cand.chunk_id]
-        if len(content_words(cand.question)) < min_words - 1 or len(cand.question.split()) < min_words:
-            report.dropped.append(Dropped(question=cand.question, chunk_id=cand.chunk_id, reason="too-short"))
-            continue
-        if not cand.evidence_quote or _norm_ws(cand.evidence_quote) not in _norm_ws(chunk.text):
-            report.dropped.append(Dropped(question=cand.question, chunk_id=cand.chunk_id, reason="ungrounded",
-                                          detail=cand.evidence_quote[:80]))
-            continue
-        req = _passage_request(
-            ANSWERABILITY_SYSTEM, chunk,
-            f"Question: {cand.question}\nReturn JSON: {{\"answerable\": true|false, \"answer\": \"...\"}}.",
-            model,
-        )
-        try:
-            verdict, _ = complete_structured(checker, req, _Answerability)
-            answerable = bool(verdict.answerable)  # type: ignore[attr-defined]
-        except LLMError as exc:
-            report.dropped.append(Dropped(question=cand.question, chunk_id=cand.chunk_id, reason="unanswerable", detail=str(exc)))
-            continue
-        if not answerable:
-            report.dropped.append(Dropped(question=cand.question, chunk_id=cand.chunk_id, reason="unanswerable"))
-            continue
-        dup = next((k for k in report.kept if jaccard(k.question, cand.question) >= dedupe_threshold), None)
-        if dup is not None:
-            report.dropped.append(Dropped(question=cand.question, chunk_id=cand.chunk_id, reason="duplicate", detail=dup.question))
-            continue
-        leak = next((g for g in gold_questions if jaccard(g, cand.question) >= leak_threshold), None)
-        if leak is not None:
-            report.dropped.append(Dropped(question=cand.question, chunk_id=cand.chunk_id, reason="gold-leak", detail=leak))
-            continue
-        cand.difficulty, cand.lexical_overlap = difficulty_of(cand.question, chunk.text)
-        report.kept.append(cand)
-    return report
-```
+`load_gold_dataset` wraps the converted rows in a named, versioned evalkit `Dataset`. The same file holds `from_grounded_qa` (the Chapter 13 adapter) and `synthesize_questions` with its filters.
 
 ### Deterministic metrics
 
-This file is shown complete; it is the part of the evaluation that runs on every commit.
+This is the part of the evaluation that runs on every commit: pure arithmetic over ids.
 
 ```python
-# path: book/projects/ragkit/ragkit/eval/rag_metrics.py
-"""Deterministic RAG metrics: retrieval ranking, permission leaks, context, citations, abstention.
-
-Everything here is pure arithmetic over ids, so it is cheap, reproducible, and never delegated
-to a judge. Two granularities are used on purpose:
-
-* Ranking metrics (hit@k, recall@k, MRR, nDCG@k) are computed over the ranked list of
-  *documents*, first occurrence wins, because the gold set labels documents. Five chunks of the
-  same relevant policy are one relevant document, not five.
-* precision@k and context relevance are computed over *chunks*, because they measure what the
-  generator has to read: three chunks of a distractor waste three slots.
-
-Permission leaks are counted separately from quality and are never averaged into it. One leak
-fails the run no matter how good recall is.
-"""
-from __future__ import annotations
-
-import math
-from collections.abc import Iterable, Mapping, Sequence
-from typing import Literal
-
-from evalkit import EvalCase, FunctionEvaluator, Score
-from pydantic import BaseModel, Field
-
-from ..documents import Chunk
-from ..retrieval.types import Principal, visible
-from .rag_dataset import RagExpectation, RagOutput, expectation, rag_input
-
-
-# ============================================================================ ranking metrics
-def dedupe(ids: Iterable[str]) -> list[str]:
-    seen: list[str] = []
-    for i in ids:
-        if i not in seen:
-            seen.append(i)
-    return seen
-
-
-def hit_at_k(ranked: Sequence[str], required: Iterable[str], k: int) -> float:
-    """1.0 if at least one required item is in the top k."""
-    req = set(required)
-    return 1.0 if any(d in req for d in ranked[:k]) else 0.0
-
-
+# path: book/projects/ragkit/ragkit/eval/rag_metrics.py (excerpt; full file on disk)
 def recall_at_k(ranked: Sequence[str], required: Iterable[str], k: int) -> float:
     """Fraction of required items found in the top k. 1.0 means the evidence is all there."""
     req = set(required)
@@ -653,35 +495,14 @@ def recall_at_k(ranked: Sequence[str], required: Iterable[str], k: int) -> float
 
 
 def precision_at_k(ranked: Sequence[str], relevant: Iterable[str], k: int) -> float:
-    """Relevant items in the top k divided by k, not by the number returned.
-
-    The denominator is the budget (k slots), so a retriever that returns two items for k=5
-    scores at most 0.4. Use a different denominator only if you document it next to the number.
-    """
+    # ...
     if k <= 0:
         raise ValueError("k must be positive")
     rel = set(relevant)
     return sum(1 for d in ranked[:k] if d in rel) / k
-
-
-def reciprocal_rank(ranked: Sequence[str], relevant: Iterable[str]) -> float:
-    rel = set(relevant)
-    for i, d in enumerate(ranked, start=1):
-        if d in rel:
-            return 1.0 / i
-    return 0.0
-
-
-def dcg(gains: Sequence[float]) -> float:
-    return sum((2.0**g - 1.0) / math.log2(i + 1) for i, g in enumerate(gains, start=1))
-
-
+# ...
 def ndcg_at_k(ranked: Sequence[str], grades: Mapping[str, int], k: int) -> float:
-    """Normalized discounted cumulative gain with graded relevance (required 2, acceptable 1).
-
-    gain = 2^grade - 1, discounted by log2(rank + 1). The ideal ordering sorts all graded items
-    by grade. Duplicates in `ranked` earn nothing after their first occurrence.
-    """
+    # ...
     seen: set[str] = set()
     gains: list[float] = []
     for d in ranked[:k]:
@@ -690,32 +511,7 @@ def ndcg_at_k(ranked: Sequence[str], grades: Mapping[str, int], k: int) -> float
     ideal = sorted((float(g) for g in grades.values() if g > 0), reverse=True)[:k]
     idcg = dcg(ideal)
     return dcg(gains) / idcg if idcg > 0 else 0.0
-
-
-# ============================================================================ permissions
-class LeakReport(BaseModel):
-    forbidden_retrieved: list[str] = Field(default_factory=list)  # gold-forbidden docs in the hits
-    forbidden_packed: list[str] = Field(default_factory=list)
-    forbidden_cited: list[str] = Field(default_factory=list)
-    acl_violations: list[str] = Field(default_factory=list)  # chunk ids the principal may not see
-
-    @property
-    def leaked(self) -> bool:
-        return bool(self.forbidden_retrieved or self.forbidden_packed or self.forbidden_cited or self.acl_violations)
-
-    @property
-    def leaked_doc_ids(self) -> list[str]:
-        from .rag_dataset import doc_id_of
-
-        return dedupe([*self.forbidden_retrieved, *self.forbidden_packed, *self.forbidden_cited,
-                       *(doc_id_of(c) for c in self.acl_violations)])
-
-
-def acl_violations(chunks: Iterable[Chunk], principal: Principal) -> list[str]:
-    """Chunks the principal is not allowed to see. Independent of the gold set: a leak is a leak."""
-    return dedupe(c.id for c in chunks if not visible(c, principal))
-
-
+# ...
 def leak_report(output: RagOutput, exp: RagExpectation, principal: Principal) -> LeakReport:
     forbidden = set(exp.forbidden_doc_ids)
     hits = [h.chunk for h in output.retrieval.hits] if output.retrieval is not None else []
@@ -723,61 +519,11 @@ def leak_report(output: RagOutput, exp: RagExpectation, principal: Principal) ->
         forbidden_retrieved=[d for d in output.retrieved_doc_ids if d in forbidden],
         forbidden_packed=dedupe(d for d in output.packed_doc_ids if d in forbidden),
         forbidden_cited=[d for d in output.cited_doc_ids if d in forbidden],
-        # Chapter 12's pipeline removes invisible chunks at a final check and records their ids in
-        # trace["acl_violations"]. The user never saw them, but they got past the pre-filter into
-        # the candidate lists, so the evaluation counts them: that list must always be empty.
+        # ...
         acl_violations=dedupe([*acl_violations([*hits, *output.packed_chunks], principal),
                                *_trace_violations(output)]),
     )
-
-
-def _trace_violations(output: RagOutput) -> list[str]:
-    if output.retrieval is None:
-        return []
-    ids = output.retrieval.trace.get("acl_violations") or []
-    return [str(i) for i in ids] if isinstance(ids, list) else []
-
-
-# ============================================================================ context and citations
-def context_relevance(packed_doc_ids: Sequence[str], relevant: Iterable[str]) -> float:
-    """Share of packed chunks whose document is relevant. Low values mean noise in the prompt."""
-    if not packed_doc_ids:
-        return 0.0
-    rel = set(relevant)
-    return sum(1 for d in packed_doc_ids if d in rel) / len(packed_doc_ids)
-
-
-class CitationScores(BaseModel):
-    precision: float  # cited docs that are relevant / cited docs
-    recall: float  # required docs that were cited / required docs
-    valid: bool  # every cited chunk was actually packed into the prompt
-    invalid_chunk_ids: list[str] = Field(default_factory=list)
-
-
-def citation_scores(output: RagOutput, exp: RagExpectation) -> CitationScores:
-    cited_docs = output.cited_doc_ids
-    packed = set(output.packed_chunk_ids)
-    invalid = [c for c in output.cited_chunk_ids if c not in packed]
-    precision = (sum(1 for d in cited_docs if d in exp.relevant_doc_ids) / len(cited_docs)) if cited_docs else 0.0
-    req = set(exp.required_doc_ids)
-    recall = len(req & set(cited_docs)) / len(req) if req else 1.0
-    return CitationScores(precision=precision, recall=recall, valid=not invalid, invalid_chunk_ids=invalid)
-
-
-AbstentionCell = Literal["answered", "correct-abstain", "false-abstain", "false-answer"]
-
-
-def abstention_cell(abstained: bool, expect_abstain: bool) -> AbstentionCell:
-    """The four outcomes. false-answer is the dangerous one, false-abstain the annoying one."""
-    if expect_abstain:
-        return "correct-abstain" if abstained else "false-answer"
-    return "false-abstain" if abstained else "answered"
-
-
-# ============================================================================ evaluators for evalkit
-DEFAULT_KS: tuple[int, ...] = (1, 3, 5, 10)
-
-
+# ...
 def retrieval_scores(case: EvalCase, output: RagOutput, *, ks: Sequence[int] = DEFAULT_KS, ndcg_k: int = 10) -> list[Score]:
     exp, principal = expectation(case), rag_input(case).principal
     leaks = leak_report(output, exp, principal)
@@ -788,135 +534,29 @@ def retrieval_scores(case: EvalCase, output: RagOutput, *, ks: Sequence[int] = D
     if not exp.answerable:
         # Inverted cases (forbidden-doc, abstain): ranking quality is meaningless, only leaks count.
         return scores
-    docs = output.retrieved_doc_ids
-    chunk_docs = output.retrieved_chunk_doc_ids
-    for k in ks:
-        h = hit_at_k(docs, exp.required_doc_ids, k)
-        r = recall_at_k(docs, exp.required_doc_ids, k)
-        scores += [
-            Score(name=f"hit@{k}", value=h, passed=h == 1.0),
-            Score(name=f"recall@{k}", value=r, passed=r == 1.0),
-            Score(name=f"precision@{k}", value=precision_at_k(chunk_docs, exp.relevant_doc_ids, k)),
-        ]
-    scores.append(Score(name="mrr", value=reciprocal_rank(docs, exp.required_doc_ids)))
-    scores.append(Score(name=f"ndcg@{ndcg_k}", value=ndcg_at_k(docs, exp.grades(), ndcg_k)))
-    packed = output.packed_doc_ids
-    scores.append(Score(name="context_relevance", value=context_relevance(packed, exp.relevant_doc_ids)))
-    sufficient = set(exp.required_doc_ids) <= set(packed)
-    scores.append(Score(name="evidence_packed", value=1.0 if sufficient else 0.0, passed=sufficient))
-    return scores
-
-
-def answer_scores(case: EvalCase, output: RagOutput) -> list[Score]:
-    exp = expectation(case)
-    cell = abstention_cell(output.abstained, exp.expect_abstain)
-    ok = cell in ("answered", "correct-abstain")
-    scores = [Score(name="abstention_correct", value=1.0 if ok else 0.0, passed=ok, detail=cell)]
-    if exp.answerable and not output.abstained:
-        cs = citation_scores(output, exp)
-        scores += [
-            Score(name="citation_precision", value=cs.precision, passed=cs.precision == 1.0),
-            Score(name="citation_recall", value=cs.recall, passed=cs.recall == 1.0),
-            Score(name="citations_valid", value=1.0 if cs.valid else 0.0, passed=cs.valid,
-                  detail=cs.invalid_chunk_ids or None),
-        ]
-    return scores
-
-
-def retrieval_metric_names(ks: Sequence[int] = DEFAULT_KS, ndcg_k: int = 10) -> list[str]:
-    names = ["no_permission_leak"]
-    for k in ks:
-        names += [f"hit@{k}", f"recall@{k}", f"precision@{k}"]
-    return names + ["mrr", f"ndcg@{ndcg_k}", "context_relevance", "evidence_packed"]
-
-
-ANSWER_METRIC_NAMES = ["abstention_correct", "citation_precision", "citation_recall", "citations_valid"]
-
-
-def retrieval_evaluator(*, ks: Sequence[int] = DEFAULT_KS, ndcg_k: int = 10) -> FunctionEvaluator:
-    return FunctionEvaluator(
-        "retrieval",
-        lambda case, out: retrieval_scores(case, RagOutput.coerce(out), ks=ks, ndcg_k=ndcg_k),
-        version=f"1;ks={','.join(map(str, ks))};ndcg={ndcg_k}",
-        metric_names=retrieval_metric_names(ks, ndcg_k),
-    )
-
-
-def answer_evaluator() -> FunctionEvaluator:
-    return FunctionEvaluator(
-        "answer_deterministic",
-        lambda case, out: answer_scores(case, RagOutput.coerce(out)),
-        version="1",
-        metric_names=ANSWER_METRIC_NAMES,
-    )
-
-
-__all__ = [
-    "dedupe", "hit_at_k", "recall_at_k", "precision_at_k", "reciprocal_rank", "dcg", "ndcg_at_k",
-    "LeakReport", "acl_violations", "leak_report", "context_relevance", "CitationScores", "citation_scores",
-    "AbstentionCell", "abstention_cell", "DEFAULT_KS", "retrieval_scores", "answer_scores",
-    "retrieval_metric_names", "ANSWER_METRIC_NAMES", "retrieval_evaluator", "answer_evaluator",
-]
+    # ...
 ```
+
+Three things in this excerpt are decisions, not arithmetic. `recall_at_k` raises on an empty required set instead of returning 1.0, so an inverted case can never be averaged into recall by accident. `precision_at_k` divides by k, as discussed above. And `retrieval_scores` emits the leak score first, for every case, and returns before any ranking metric on inverted cases. The rest of `retrieval_scores` (on disk) adds hit, recall, and precision at each k, MRR, nDCG@10, context relevance, and evidence-packed. `answer_scores` adds abstention correctness and, for answered answerable cases, citation precision, recall, and validity. `acl_violations` applies the same `visible(chunk, principal)` rule the retriever uses, and `_trace_violations` reads Chapter 12's `trace["acl_violations"]`.
 
 ### The faithfulness judge
 
-The two-call claim flow, with the evidence-id cross-check at the end.
+The verification half of the two-call claim flow, with the evidence-id cross-check at the end.
 
 ```python
-# path: book/projects/ragkit/ragkit/eval/rag_judges.py
-# excerpt: lines 109-190; the complete file is on disk at the path above
-
-EXTRACT_SYSTEM = (
-    "You split an answer into atomic factual claims. A claim is one checkable statement of fact "
-    "(a number, a deadline, a rule, a name, a condition). Rewrite pronouns so each claim stands alone. "
-    "Skip greetings, hedges, citation markers, and statements about the assistant itself. "
-    "If the answer makes no factual claims, return an empty list."
-)
-
+# path: book/projects/ragkit/ragkit/eval/rag_judges.py (excerpt; full file on disk)
 VERIFY_SYSTEM = (
     "You check claims against evidence passages. For each claim, in order, decide: supported (the "
     "evidence states it or directly implies it), contradicted (the evidence states something "
     "incompatible), or unsupported (the evidence does not say). Use only the evidence, not your own "
     "knowledge, even if you believe the claim is true. List the ids of the passages you relied on."
 )
-
-
-class FaithfulnessJudge:
-    """Two-step faithfulness: extract claims, then verify each against the packed evidence."""
-
-    name = "faithfulness"
-
-    def __init__(self, client: LLMClient, *, model: str | None = None, max_repair_attempts: int = 2) -> None:
-        self.client = client
-        self.model = model
-        self.max_repair_attempts = max_repair_attempts
-
-    @property
-    def version(self) -> str:
-        return f"claims-v{RAG_JUDGE_PROMPT_VERSION};model={self.model or 'default'}"
-
-    def extract_claims(self, question: str, answer: str) -> list[str]:
-        req = _request(
-            EXTRACT_SYSTEM,
-            f"<question>\n{question}\n</question>\n<answer>\n{_strip_tags(answer)}\n</answer>\n\n"
-            'Return JSON: {"claims": ["..."]}.',
-            self.model, "eval.judge.claims",
-        )
-        parsed, _ = complete_structured(self.client, req, _Claims, self.max_repair_attempts)
-        return [c.strip() for c in parsed.claims if c.strip()]  # type: ignore[attr-defined]
-
+# ...
     def verify(self, claims: Sequence[str], evidence: Sequence[Chunk]) -> FaithfulnessResult:
         if not claims:
             return FaithfulnessResult(claims=[], verdicts=[])
         numbered = "\n".join(f"{i + 1}. {c}" for i, c in enumerate(claims))
-        req = _request(
-            VERIFY_SYSTEM,
-            f"{render_evidence(evidence)}\n\n<claims>\n{numbered}\n</claims>\n\n"
-            'Return JSON: {"verdicts": [{"claim", "verdict": "supported|unsupported|contradicted", '
-            '"evidence_ids": [...], "reasoning"}]} with exactly one verdict per claim, in order.',
-            self.model, "eval.judge.verify", max_tokens=1500,
-        )
+        # ...
         parsed, _ = complete_structured(self.client, req, _Verdicts, self.max_repair_attempts)
         verdicts: list[ClaimVerdict] = list(parsed.verdicts)  # type: ignore[attr-defined]
         if len(verdicts) != len(claims):
@@ -930,57 +570,21 @@ class FaithfulnessJudge:
                 v.reasoning = f"[downgraded: cited evidence {v.evidence_ids} was not shown] {v.reasoning}"
                 downgraded.append(v.claim)
         return FaithfulnessResult(claims=list(claims), verdicts=verdicts, downgraded=downgraded)
-
-    def judge(self, question: str, answer: str, evidence: Sequence[Chunk]) -> FaithfulnessResult:
-        return self.verify(self.extract_claims(question, answer), evidence)
-
-    # ------------------------------------------------------------------ evaluator protocol
-    @property
-    def metric_names(self) -> list[str]:
-        return ["faithfulness", "contradiction_free"]
-
+    # ...
     def __call__(self, case: EvalCase, output: Any) -> list[Score]:
         out = RagOutput.coerce(output)
         if out.abstained or not out.answer.strip():
             return []
-        r = self.judge(rag_input(case).question, out.answer, out.packed_chunks)
-        detail = {"unsupported": r.unsupported_claims, "downgraded": r.downgraded, "n_claims": r.n}
-        return [
-            Score(name="faithfulness", value=r.score, passed=r.score == 1.0, detail=detail),
-            Score(name="contradiction_free", value=0.0 if r.contradicted else 1.0, passed=r.contradicted == 0),
-        ]
 ```
 
-`RubricCoverageJudge` follows the same pattern (one call, one verdict per rubric item, a quote that code checks against the answer). `ContextRelevanceJudge` labels each packed passage relevant or not, for data without gold labels. `answer_relevance_judge` and `holistic_groundedness_judge` wrap evalkit's `RELEVANCE` and `GROUNDEDNESS` rubrics and skip abstentions.
+`extract_claims` (on disk) is the first call; the request built in `verify` wraps the evidence with `render_evidence`, which neutralizes closing delimiter tags in any letter case. The early return in `__call__` is how abstentions stay out of the faithfulness average. `RubricCoverageJudge` follows the same pattern (one call, one verdict per rubric item, a quote that code checks against the answer). `ContextRelevanceJudge` labels each packed passage relevant or not, for data without gold labels. `answer_relevance_judge` and `holistic_groundedness_judge` wrap evalkit's `RELEVANCE` and `GROUNDEDNESS` rubrics and skip abstentions.
 
 ### Stage isolation
 
-The decision tree from the diagram above, in code; read it top to bottom against the diagram.
+The decision tree from the diagram above, in code: permission first, then abstention, then each required document's path through the recorded stages, and finally the earliest loss.
 
 ```python
-# path: book/projects/ragkit/ragkit/eval/stage_isolation.py
-# excerpt: lines 176-274; the complete file is on disk at the path above
-
-def diagnose(
-    case_id: str,
-    exp: RagExpectation,
-    principal: Principal,
-    output: RagOutput,
-    *,
-    answer_ok: bool | None = None,
-    corpus: Mapping[str, Any] | None = None,
-    doc_visible: Callable[[str, Principal], bool] | None = None,
-    tags: Sequence[str] = (),
-) -> StageDiagnosis:
-    """Classify one case. `answer_ok` is the verdict of the answer judges (None if not judged).
-
-    `corpus` maps doc_id to anything (its presence is what matters); `doc_visible` answers
-    whether the principal may see a document. Without them, not-in-corpus and the
-    over-filtering branch of permission cannot be distinguished from not-retrieved.
-    """
-    def result(stage: FailureStage, detail: str = "", paths: list[DocPath] | None = None) -> StageDiagnosis:
-        return StageDiagnosis(case_id=case_id, stage=stage, detail=detail, paths=paths or [], tags=list(tags))
-
+# path: book/projects/ragkit/ragkit/eval/stage_isolation.py (excerpt; full file on disk)
     leaks = leak_report(output, exp, principal)
     if leaks.leaked:
         return result(FailureStage.PERMISSION, f"leaked: {', '.join(leaks.leaked_doc_ids)}")
@@ -988,26 +592,7 @@ def diagnose(
         if output.abstained:
             return result(FailureStage.OK, "correctly abstained")
         return result(FailureStage.ABSTENTION_MISSED, "answered although no permitted evidence exists")
-    if not exp.required_doc_ids:
-        return result(FailureStage.OK, "no required evidence to trace")
-
-    chunk_map = output.chunk_doc_map()
-    stages = stage_lists(output.retrieval)
-    for s in stages:  # trace ids may reference chunks we never saw as objects
-        for cid in s.chunk_ids:
-            chunk_map.setdefault(cid, doc_id_of(cid))
-
-    def doc_of(cid: str) -> str:
-        return chunk_map.get(cid, doc_id_of(cid))
-
-    final_ids = output.retrieval.chunk_ids if output.retrieval is not None else []
-    packed_docs = set(output.packed_doc_ids)
-    cited_docs = set(output.cited_doc_ids)
-    candidates = [s for s in stages if s.kind == "candidate"]
-    fusions = [s for s in stages if s.kind == "fusion"]
-    reranks = [s for s in stages if s.kind == "rerank"]
-
-    paths: list[DocPath] = []
+    # ...
     for doc in exp.required_doc_ids:
         p = DocPath(doc_id=doc)
         p.ranks = {s.name: _best_rank(s.chunk_ids, doc, doc_of) for s in stages}
@@ -1028,10 +613,7 @@ def diagnose(
                 p.lost_at = FailureStage.DROPPED_BY_FUSION
             elif seen_rerank is False or (reranks and p.in_final is None):
                 p.lost_at = FailureStage.DROPPED_BY_RERANK
-            elif p.in_final is None:
-                # it survived every recorded stage but not the final cut: blame the last stage recorded
-                p.lost_at = (FailureStage.DROPPED_BY_RERANK if reranks else
-                             FailureStage.DROPPED_BY_FUSION if fusions else FailureStage.NOT_RETRIEVED)
+            # ...
             elif not p.packed:
                 p.lost_at = FailureStage.TRUNCATED_IN_PACKING
         paths.append(p)
@@ -1040,38 +622,19 @@ def diagnose(
     if lost:
         first = min(lost, key=lambda p: PIPELINE_ORDER.index(p.lost_at))  # type: ignore[arg-type]
         return result(first.lost_at, f"{first.doc_id} lost at {first.lost_at.value}", paths)  # type: ignore[union-attr]
-    if output.abstained or answer_ok is False:
-        # A required doc packed only as truncated blocks may have lost the very sentence needed:
-        # blame the packing budget, not the generator (Chapter 13 marks such blocks truncated).
-        truncated = set(output.metadata.get("truncated_chunk_ids", []))
-        if truncated:
-            starved = [p.doc_id for p in paths
-                       if all(c.id in truncated for c in output.packed_chunks if c.doc_id == p.doc_id)]
-            if starved:
-                return result(FailureStage.TRUNCATED_IN_PACKING,
-                              f"required evidence packed only as truncated blocks: {starved}", paths)
-        if output.abstained:
-            return result(FailureStage.GENERATION_IGNORED_EVIDENCE, "abstained although the evidence was packed", paths)
-        return result(FailureStage.GENERATION_IGNORED_EVIDENCE, "evidence packed, answer judged wrong or unfaithful", paths)
-    packed_ids = set(output.packed_chunk_ids)
-    invalid = [c for c in output.cited_chunk_ids if c not in packed_ids]
-    uncited = [p.doc_id for p in paths if not p.cited]
-    if invalid or uncited:
-        bits = ([f"invalid ids {invalid}"] if invalid else []) + ([f"required not cited {uncited}"] if uncited else [])
-        return result(FailureStage.CITATION_ERROR, "; ".join(bits), paths)
-    return result(FailureStage.OK, "", paths)
+    # ...
 ```
+
+The `None` values matter: a stage that the trace does not record is "unknown", not "lost", so a retriever without a reranker is never blamed for a rerank drop. When no required document was lost, the rest of `diagnose` (on disk) checks for evidence packed only as truncated blocks (`truncated-in-packing`), then for an abstention or a failed judge verdict (`generation-ignored-evidence`), then for invalid or missing citations (`citation-error`).
 
 `stage_lists` reads four trace layouts: (1) Chapter 12's ordered `stages` list, whose entries have a `kind` of `retrieve`, `fusion`, or `rerank` and their `candidate_ids` (transform stages carry no ids and are skipped); (2) the flat traces of Chapter 12's single retrievers (`stage` plus `candidate_ids`); (3) the traces of its hybrid retriever (per-retriever sub-traces plus `fused_ids`); and (4) a generic flat form (`trace["bm25_ids"]`) for other retrievers. `diagnose_run` applies `diagnose` to a stored run, with `default_answer_ok` treating an answer as acceptable when faithfulness and rubric coverage, if measured, are both 1.0.
 
 ### Wiring, gate, and comparison
 
-The target adapter, the release rules, and the comparison the walkthrough below runs.
+The target adapter and the release rules.
 
 ```python
-# path: book/projects/ragkit/ragkit/eval/run_rag_eval.py
-# excerpt: lines 166-237; the complete file is on disk at the path above
-
+# path: book/projects/ragkit/ragkit/eval/run_rag_eval.py (excerpt; full file on disk)
 def make_target(system: RagSystem) -> Callable[[EvalCase], TargetResult]:
     """Adapt any `(question, principal) -> RagOutput` callable to an evalkit target."""
 
@@ -1097,54 +660,9 @@ DEFAULT_GATE = GateConfig.from_dict({
     "max_error_rate": 0.0,
     "max_evaluator_errors": 0,
 })
-
-
-class EvalOutcome(BaseModel):
-    run: Run
-    diagnoses: list[StageDiagnosis]
-
-
-def evaluate_system(
-    system: RagSystem,
-    dataset: Dataset,
-    *,
-    name: str,
-    corpus: Corpus | None = None,
-    judges: Sequence[Any] = (),
-    extra_versions: dict[str, str] | None = None,
-    concurrency: int = 4,
-) -> EvalOutcome:
-    evaluators = [retrieval_evaluator(), answer_evaluator(), *judges]
-    run = run_target(make_target(system), dataset, evaluators=evaluators, concurrency=concurrency,
-                     versions=RunVersions(target=name, extra=extra_versions or {}))
-    diagnoses = diagnose_run(
-        run, dataset,
-        corpus=corpus.doc_map() if corpus else None,
-        doc_visible=corpus.doc_visible() if corpus else None,
-    )
-    return EvalOutcome(run=run, diagnoses=diagnoses)
-
-
-def compare_configs(
-    baseline: RagConfig,
-    candidate: RagConfig,
-    *,
-    corpus: Corpus,
-    dataset: Dataset,
-    judges: Sequence[Any] = (),
-    gate: GateConfig = DEFAULT_GATE,
-) -> tuple[EvalOutcome, EvalOutcome, GateResult, str]:
-    extra = {"chunker": "section-200", "corpus_docs": str(len(corpus.documents))}
-    base = evaluate_system(build_system(corpus, baseline), dataset, name=baseline.name, corpus=corpus, judges=judges,
-                           extra_versions={**extra, "config": baseline.model_dump_json()})
-    cand = evaluate_system(build_system(corpus, candidate), dataset, name=candidate.name, corpus=corpus, judges=judges,
-                           extra_versions={**extra, "config": candidate.model_dump_json()})
-    result = evaluate_gate(gate, cand.run, base.run)
-    report = render_rag_report(cand.run, dataset, diagnoses=cand.diagnoses, baseline=base.run,
-                               baseline_diagnoses=base.diagnoses, gate=result,
-                               title=f"RAG evaluation, {baseline.name} vs {candidate.name}")
-    return base, cand, result, report
 ```
+
+Leaks and citation validity are `must_pass_all`: one failing case blocks the release. Quality metrics get a regression tolerance, and the forbidden-doc tag is critical, so a leak on a trap case is reported by name. `max_error_rate` of zero, together with the leak rule, is what turns a crashed, unchecked case into a blocked release. On disk, `evaluate_system` runs `run_target` with the retrieval and answer evaluators plus any judges and then `diagnose_run`; `compare_configs` evaluates baseline and candidate on the same dataset, records the chunker and the full configuration in the run lineage, applies `evaluate_gate`, and renders the report.
 
 The demo system in the same file is deliberately simple and fully offline: `LexicalRetriever` ranks section chunks with TF-IDF after ACL filtering and can apply a toy term-coverage rerank, recording each stage in the trace; `ExtractiveGenerator` packs the top `pack_k` hits and answers with the best-matching sentence or abstains. It is a stand-in with the same observable contract as Chapters 12 and 13, which lets the whole evaluation run in under a second without a model. Swap in the real pipeline by passing any `(question, principal) -> RagOutput` callable to `make_target`.
 
@@ -1180,9 +698,9 @@ Read it in the order the chain runs. **Retrieval is not the problem**: recall@5 
 
 The candidate fixed all ten truncations, which is the change it was designed to make. Then it exposed what the baseline had hidden. Eight of the ten moved to `citation-error`, two to `generation-ignored-evidence`, and two cases that were `ok` also became citation errors: with four chunks in the prompt, the extractive generator often quoted the HR FAQ or IT FAQ (acceptable documents) instead of the authoritative policy or runbook. RQ-001 shows it: the candidate answer cites the FAQ's outdated carryover figure. Context relevance fell for the same reason: more chunks, more distractors.
 
-One forbidden-doc case, RQ-037, went from correct abstention to a false answer. The leak check passed, so no restricted chunk was involved: with four chunks packed, the generator found the HR FAQ sentence saying access is removed within 24 hours of the last working day. This is the label defect described with the gold cases above. Under the corrected label the candidate is right and the baseline's abstention is a false abstain, so the abstention delta understates the candidate by two cases. Finding such cases is the value of scoring forbidden-doc cases separately and listing regressions per case: the evaluation cannot decide whether the label or the document is wrong, but it makes sure a human looks.
+One forbidden-doc case, RQ-037, went from correct abstention to a false answer. The leak check passed, so no restricted chunk was involved: with four chunks packed, the generator found the HR FAQ sentence saying access is removed within 24 hours of the last working day. This is the gold-label bug from the sidebar earlier in the chapter. Under the corrected label the candidate is right and the baseline's abstention is a false abstain, so the abstention delta understates the candidate by two cases. Finding such cases is the value of scoring forbidden-doc cases separately and listing regressions per case: the evaluation cannot decide whether the label or the document is wrong, but it makes sure a human looks.
 
-Without judges, every `generation-ignored-evidence` case here is a false abstention by a generator with a crude overlap threshold; with LLM judges enabled the `generation-ignored-evidence` count would also include wrong-but-cited answers. The gate passes, because no rule was violated: no leaks, no recall regression, every forbidden-doc case leak-free. Whether to ship is a judgement the report now supports: the packing change is right, and it needs a conflict-aware generator (Chapter 13's stale-source check) before the FAQ citations become user-visible errors.
+Without judges, every `generation-ignored-evidence` case here is a false abstention by a generator with a crude overlap threshold; with LLM judges enabled the `generation-ignored-evidence` count would also include wrong-but-cited answers. The gate passes, because no rule was violated: no leaks, no recall regression, every forbidden-doc case leak-free. Whether to ship is a judgment the report now supports: the packing change is right, and it needs a conflict-aware generator (Chapter 13's stale-source check) before the FAQ citations become user-visible errors.
 
 Now run the leaky candidate, which skips ACL filtering:
 
@@ -1203,7 +721,7 @@ Eighteen of forty cases retrieved chunks their principal may not see: retail que
 
 **Security.** The gold set encodes the permission model; treat it as sensitive configuration, reviewed like code. Production samples added to evaluation sets must be redacted before humans or judges see them, and judge calls are data egress: route them through the same gateway and data-handling policy as production calls. Run every evaluation as the case's principal; an evaluation service with an admin token that bypasses ACLs measures the wrong system and is itself a leak path.
 
-**Operations.** Pin the dataset hash in the gate configuration so a quietly edited gold set cannot pass as the same benchmark. Record the index version and chunker fingerprint in `RunVersions.extra`; after a reindex, rerun the baseline before comparing. Online, sample a fraction of production traces, run the deterministic checks on all of them (ACL violations, invalid citations, abstention rate, zero-hit rate) and the judges on a sample, and alert on drift. When users report a bad answer, add the question with labelled evidence to a regression set: the gold set should grow from production failures.
+**Operations.** Pin the dataset hash in the gate configuration so a quietly edited gold set cannot pass as the same benchmark. Record the index version and chunker fingerprint in `RunVersions.extra`; after a reindex, rerun the baseline before comparing. Online, sample a fraction of production traces, run the deterministic checks on all of them (ACL violations, invalid citations, abstention rate, zero-hit rate) and the judges on a sample, and alert on drift. When users report a bad answer, add the question with labeled evidence to a regression set: the gold set should grow from production failures.
 
 ## Common mistakes
 
@@ -1232,7 +750,7 @@ These are failures of the evaluation itself: ways the measurement lies.
 
 **Document labels versus span labels.** Document ids are cheap and survive rechunking; span labels prove the right section was retrieved and are expensive to create and maintain. Use document labels by default and span labels for long documents where sections answer different questions.
 
-**Claim-level versus holistic faithfulness.** Claim-level judging costs an extra call and produces auditable per-claim verdicts and proportional scores; holistic judging is cheaper and blurrier. Calibrate both on your data and keep the cheaper one only if its false pass rate is no worse.
+**Curated gold set versus sampled traffic.** A curated set is stable, labeled, and reproducible, so it can gate releases, but it drifts away from what users actually ask. Sampled production questions have the real distribution and phrasing, but they need evidence labels and redaction, and they change between runs. Gate on the curated set, refresh it from sampled traffic and user-reported failures, and report the sampled set as its own slice. (Claim-level versus holistic judging is covered under Judging RAG answers reliably.)
 
 **Strict versus lenient pass criteria.** Requiring faithfulness of exactly 1.0 makes the gate sensitive to judge noise; a threshold such as 0.8 tolerates noise and lets minor fabrications through. Prefer the strict criterion for regulated content (HR policy, security) and a threshold with human review of the failures elsewhere.
 
@@ -1240,7 +758,7 @@ These are failures of the evaluation itself: ways the measurement lies.
 
 ## Evaluation and testing
 
-The evaluator is code that decides releases, so it is tested like code. All 79 tests run offline in about a second.
+The evaluator is code that decides releases, so it is tested like code. All tests run offline in about a second.
 
 - **Metric tests** check each formula against hand-computed values: the two-chunk worked example from the gold-case section (recall@5 of 0.5 and precision@5 of 0.2 for one of two relevant documents at rank 2), nDCG with graded relevance computed by hand, duplicates earning no gain, precision dividing by k, recall raising an error on an empty required set.
 - **Leak tests** check that a forbidden document in the retrieved list is a leak even when it was not packed, and that ACL violations are detected for cross-tenant and wrong-group chunks with no gold label at all.
@@ -1252,7 +770,24 @@ The evaluator is code that decides releases, so it is tested like code. All 79 t
 
 For the judges' real behavior, tests are not enough: calibrate against human labels as described in Chapter 24 and record the calibration results with the judge version.
 
+## Before you ship
+
+- [ ] Every evaluation case runs retrieval as its own principal (tenant and groups); no evaluation path uses an admin token or bypasses the ACL filter.
+- [ ] `no_permission_leak` is a `must_pass_all` gate rule over hits, packed evidence, and citations, and the forbidden-doc tag is gated as critical.
+- [ ] A crashed or timed-out case blocks the gate as "unchecked" (`max_error_rate` of 0); the report never prints "no leaks" while any case is unchecked.
+- [ ] The gold set has required, acceptable, and forbidden document ids per case, plus at least a handful each of multi-hop, conflicting-versions, forbidden-doc, and no-answer cases.
+- [ ] The gold set's fingerprint is pinned in the gate configuration, and every run records the index version, chunker fingerprint, retriever settings, packing budget, prompt version, and model.
+- [ ] Recall at first-stage depth and the final-list metrics (hit@1, MRR, recall@k at the packed k) are both reported, with k fixed across compared runs.
+- [ ] Citation validity (every cited chunk id was packed) is a code check gated on every answered case.
+- [ ] False answers and false abstains are reported as separate counts, and faithfulness and coverage averages state that they cover answered cases only.
+- [ ] The faithfulness judge has been calibrated against human labels (Chapter 24), with its false pass rate recorded per hard slice, and its test set includes an injected-evidence passage.
+- [ ] The retrieval trace records per-stage candidate ids, and a unit test with a known trace asserts each stage-isolation label.
+- [ ] Deterministic metrics run in CI on every change to ingestion, chunking, retrieval, or packing; judges run nightly and on release candidates with results cached by judge version and content hash.
+- [ ] Synthetic and production-sampled questions are separate named datasets and slices, never merged into the gold averages.
+
 ## Exercises
+
+**Start here:** K1, K4, E2, P2, D3 (about 4 hours). The rest go deeper.
 
 ### Knowledge questions
 
@@ -1262,7 +797,7 @@ For the judges' real behavior, tests are not enough: calibrate against human lab
 
 **K3.** Explain the difference between faithfulness and correctness for a RAG answer, and give a Northwind example that scores high on one and low on the other.
 
-**K4.** List four biases of LLM-generated synthetic questions and state, for each, whether a mechanical filter can reduce it.
+**K4.** Name the five parts of a day-one RAG evaluation and, for each, a failure it catches that an end-to-end "answer quality" score from an LLM judge would miss.
 
 **K5.** Why does stage isolation report the earliest stage that lost evidence rather than the last, and why does a permission leak override every other label?
 
@@ -1280,13 +815,13 @@ For the judges' real behavior, tests are not enough: calibrate against human lab
 
 ### Practical exercises
 
-**P1.** Add span-level labels to `RagExpectation` (`required_spans: list[str]`) and a `span_recall_at_k` metric that counts a required span as found when it occurs (whitespace-insensitive) in any of the top k chunks. Label five gold cases and show where span recall and document recall disagree.
+**P1.** (about 2 hours) Add span-level labels to `RagExpectation` (`required_spans: list[str]`) and a `span_recall_at_k` metric that counts a required span as found when it occurs (whitespace-insensitive) in any of the top k chunks. Label five gold cases and show where span recall and document recall disagree.
 
-**P2.** Add a `first_stage_recall` evaluator that reads each candidate list from the trace and reports recall@50 per list and for their union, so a report can show coverage before fusion and reranking.
+**P2.** (about 90 min) Add a `first_stage_recall` evaluator that reads each candidate list from the trace and reports recall@50 per list and for their union, so a report can show coverage before fusion and reranking.
 
-**P3.** Implement a judge cache for `FaithfulnessJudge` keyed by judge version, a hash of the answer, and the packed chunk ids, with a JSONL backend. Show with a test that re-scoring a stored run makes no judge calls.
+**P3.** (about 90 min) Implement a judge cache for `FaithfulnessJudge` keyed by judge version, a hash of the answer, and the packed chunk ids, with a JSONL backend. Show with a test that re-scoring a stored run makes no judge calls.
 
-**P4.** Extend `synthesize_questions` with an embedding-based dedupe using `aie_core` embeddings and a multi-chunk mode that shows the model two chunks from different documents and asks for a question requiring both. Report how the difficulty distribution changes.
+**P4.** (about 3 hours) Extend `synthesize_questions` with an embedding-based dedupe using `aie_core` embeddings and a multi-chunk mode that shows the model two chunks from different documents and asks for a question requiring both. Report how the difficulty distribution changes.
 
 ### Debugging exercises
 
@@ -1305,5 +840,14 @@ For the judges' real behavior, tests are not enough: calibrate against human lab
 - Answer quality is several independent dimensions: claim-level faithfulness, rubric coverage, relevance, citation precision and recall, and abstention correctness with false answers and false abstains reported separately.
 - Judges for RAG must use only the evidence, treat evidence as untrusted data, be cross-checked by code where possible, and be calibrated with attention to the false pass rate on hard slices.
 - Stage isolation turns failing cases into a work queue: one label per case, earliest loss wins, each label mapped to the chapter and component that owns the fix.
-- Synthetic questions add coverage and carry lexical, single-chunk, and answerability bias; keep them as a separate slice and replace them with production samples over time.
+- Synthetic questions add coverage and carry lexical, single-chunk, and answerability bias (Chapter 25); keep them as a separate slice and replace them with production samples over time.
+- Start on day one with 30 questions run as their real askers, a leak check, citation validity, and trap cases; grow into the full suite only when a question you need answered cannot be answered with what you have.
 - Compare configurations with paired deltas on the same cases, read per-case regressions and stage shifts before averages, and record the index and chunker versions in every run.
+
+## Further reading
+
+- *Cumulated Gain-Based Evaluation of IR Techniques* (Järvelin and Kekäläinen, 2002): the original definition of (n)DCG and graded relevance, the basis of this chapter's required-versus-acceptable grading.
+- *RAGAS: Automated Evaluation of Retrieval Augmented Generation* (Es et al., 2024): a reference-free framing of faithfulness, answer relevance, and context relevance; useful for comparing its metric definitions with the label-based ones here.
+- *FActScore: Fine-grained Atomic Evaluation of Factual Precision in Long Form Text Generation* (Min et al., 2023): the claim-decomposition approach behind the two-call faithfulness judge.
+- *Judging LLM-as-a-Judge with MT-Bench and Chatbot Arena* (Zheng et al., 2023): the biases and agreement rates of LLM judges, background for calibrating the RAG judges (Chapter 24 owns the method).
+- *Bootstrap Methods: Another Look at the Jackknife* (Efron, 1979): the resampling idea behind the paired confidence intervals used to compare configurations.

@@ -11,23 +11,25 @@ Chapter 24 built the evaluation core: cases, runs, judges, statistics, and a gat
 
 **Prerequisites:** Chapter 24 (`evalkit` cases, runs, judges, gates), Chapter 19 (the `agentkit` event log and replay), Chapter 14 (RAG evaluation). | **Code:** `book/projects/examples/ch25/` (run: `cd book/projects/examples/ch25 && pytest -q`) | **Builds:** the `taskevals` package, four Northwind Assist suites, and the `release_gate.py` CI gate.
 
+**First reading:** Why this matters; Mental model; Choosing the evaluator from the shape of the output; Agents; Replay; Extraction; Evaluation in CI/CD; How it works; Implementation through its Extraction subsection; The release gate; Code walkthrough; Before you ship. **Deep dives** (skip on a first pass): Prompts; RAG answers; Classification; Summarization; Tool usage; Multi-turn conversations; Synthetic data; Online evaluation; The evaluation platform; Classification aggregates; Synthetic validation; The canary rule; The pytest plugin; The CI definitions.
+
 ## Why this matters
 
-Northwind's incident-desk agent passes its demo every time. Asked to handle a card outage at store 0412, it checks the payment adapter, finds the matching ticket, opens a P1 ticket, and sends the store manager a short reply. A week after launch, an auditor reading the tool logs finds that on one in twenty runs the reply went out without the supervisor approval the policy requires. The final answers were all correct. The end state of every ticket was correct. A reviewer grading final answers, or even final states, would have scored the agent at 100%. The defect lived in the order of two events in a log nobody evaluated.
+Northwind's incident-desk agent passes its demo every time. Asked to handle a card outage at store 0412, it checks the payment adapter, opens a P1 ticket, and sends the store manager a short reply. A week after launch, an auditor reading the tool logs finds that on one in twenty runs the reply went out without the supervisor approval the policy requires. Every final answer and every ticket's end state was correct, so a reviewer grading either would have scored the agent at 100%. The defect lived in the order of two events in a log nobody evaluated.
 
-The same pattern repeats across task types. An invoice extractor reports 98% field accuracy while every error lands on the invoice total, the one field finance cannot tolerate. A ticket classifier gains three points of accuracy while recall on security incidents, six tickets in the gold set, drops to zero. A summarizer scores well on a groundedness judge while dropping the exception clause from every policy it summarizes. In each case the general machinery from Chapter 24 worked as designed. What failed was the choice of what to measure: an evaluator that did not fit the shape of the task.
+The pattern repeats across task types. An invoice extractor reports 98% field accuracy while every error lands on the total. A classifier gains three points of accuracy while recall on security incidents drops to zero. A summarizer passes a groundedness judge while dropping every policy's exception clause. In each case Chapter 24's machinery worked; the evaluator did not fit the shape of the task.
 
-This chapter is about that fit. A generic score cannot see an approval out of order, a weighted critical field, a missing qualifier, or a tool that does not exist. Task-specific evaluators can, and they are cheap enough to run on every change once they are wired into continuous integration. The second half of the chapter covers what happens around the evaluators: where the cases come from when you have no traffic, how the gate runs in a pipeline, and how production signals confirm or contradict the offline verdict.
+This chapter is about that fit. A generic score cannot see an approval out of order, a weighted critical field, a missing qualifier, or a tool that does not exist. Task-specific evaluators can, cheaply enough to run on every change. The second half covers where cases come from without traffic, how the gate runs in CI, and how production confirms or contradicts the offline verdict.
 
 ## Mental model
 
 > **Mental model:** Evaluate before optimizing; a system without evaluation is a demo.
 
-Chapter 24 made that sentence operational for one system. This chapter makes it operational for a product made of several: a classifier routes, an extractor fills fields, a RAG step answers, an agent acts. Each component gets an evaluator that matches the shape of its output, each evaluator emits scores into the same `evalkit` run format, and one gate configuration decides for all of them. The run format is the contract; the evaluators are plug-ins.
+This chapter applies that sentence to a product made of several components: a classifier routes, an extractor fills fields, a RAG step answers, an agent acts. Each component gets an evaluator that matches its output shape, every evaluator emits scores into the same `evalkit` run format, and one gate configuration decides for all of them. The run format is the contract; the evaluators are plug-ins.
 
 > **Mental model:** Agents add nondeterminism and cost; prefer deterministic workflows where the path is known.
 
-For agents the corollary is that the path is part of the output. Where a workflow's path is fixed in code, evaluating the end state is enough. Where a model chooses the path, the path must be evaluated too, because the model can choose badly and still arrive.
+For agents the path is part of the output. Where code fixes the path, evaluating the end state is enough. Where a model chooses it, the path must be evaluated too, because the model can choose badly and still arrive.
 
 ```mermaid
 flowchart LR
@@ -61,7 +63,7 @@ flowchart LR
 
 ### Choosing the evaluator from the shape of the output
 
-Every evaluator in this chapter answers one question: given this case and this output, which failure classes from the taxonomy occurred? The shape of the output determines which questions code can answer. A label can be compared exactly. A record of fields can be compared field by field. A list of tool calls is structured data with order. A paragraph needs semantic comparison for part of its meaning, but its numbers, identifiers, and citations can still be checked by code. The rule from Chapter 24 applies unchanged: if code can decide, code decides, and a judge handles only the residue.
+Every evaluator in this chapter answers one question: given this case and this output, which failure classes occurred? The output's shape determines which questions code can answer. A label compares exactly, a record field by field, and a list of tool calls is structured data with order. A paragraph needs semantic comparison for part of its meaning, but code can still check its numbers, identifiers, and citations. Chapter 24's rule applies: if code can decide, code decides, and a judge handles only the residue.
 
 | Task | Output shape | Deterministic checks | Needs a judge for | Primary gate metric |
 |---|---|---|---|---|
@@ -73,54 +75,54 @@ Every evaluator in this chapter answers one question: given this case and this o
 | Summarization | text | key-fact coverage by phrase, invented numbers and ids, required qualifiers, compression ratio | faithfulness under paraphrase | coverage and faithfulness together |
 | Tool use | tool call | name in catalog, schema validity, fixed argument values | never | selection accuracy, zero invalid calls |
 
-Two design decisions keep the evaluators composable. First, every evaluator implements `evalkit`'s `Evaluator` protocol and declares `metric_names`, so the runner can score a crashed target as a failure on every metric the evaluator would have emitted. Second, any evaluator that feeds a run-level metric stores what that metric needs in the score's `detail`, so the metric can be recomputed later from the stored Run JSON without calling the system again. The classification evaluator stores gold label, predicted label, and confidence for exactly this reason.
+Two design decisions keep the evaluators composable. Every evaluator declares `metric_names`, so the runner can score a crashed target as a failure on every metric it would have emitted. And any evaluator that feeds a run-level metric stores its inputs in the score's `detail`, so the metric can be recomputed from the stored Run JSON.
 
 ### Prompts: the narrow tool and the suite
 
-Chapter 4 built a per-prompt regression harness (`examples/ch04/prompts/regression.py`): one prompt, its cases, assertions such as `json_valid`, `one_of`, and `not_contains`, and a side-by-side diff of two versions. It is the tool a prompt author runs locally before opening a merge request, and it should stay small and fast.
+> **Deep dive.** How the prompt suite relates to Chapter 4's per-prompt harness; skip on a first reading.
 
-The suite is a different tool with a different job. It evaluates the prompt in the context of everything else that ships with it, uses the same run format as every other component, and feeds the same gate. In `taskevals`, `PromptContractEvaluator` covers the deterministic contract (schema validity, required and forbidden content, maximum length) and `reply_judge` wraps an `evalkit.LLMJudge` with a one-dimension rubric: does the reply address every part of the request and state a concrete next step? The rubric has three anchored levels and a pass threshold at the top level, following Chapter 24's rules for judges.
+Chapter 4's per-prompt regression harness gives a prompt author a ten-second local loop with readable diffs of two versions. The suite evaluates the prompt alongside everything else that ships, in the same run format and gate. `PromptContractEvaluator` checks the deterministic contract (schema, required and forbidden content, maximum length), and `reply_judge` wraps an `evalkit.LLMJudge` with a three-level rubric: does the reply address every part of the request and state a concrete next step?
 
-Use both tools; do not merge them. The narrow harness gives a prompt author a ten-second loop with diffs they can read. The suite gives the release a verdict with confidence intervals, slices, and lineage. If the two disagree, the suite wins, and the disagreement usually means the narrow harness's cases are stale.
+Use both tools; do not merge them. If they disagree, the suite wins, and the harness's cases are usually stale.
 
 ### RAG answers
 
-Chapter 14 owns RAG evaluation: retrieval recall and ranking, stage isolation, the gold set with forbidden-document cases, and answer metrics measured against references. When a RAG step is one component inside a larger feature, the suite still needs a compact answer evaluator that runs on the evidence the step actually received. `RagAnswerEvaluator` measures four things.
+> **Deep dive.** A compact answer evaluator for a RAG step inside a larger feature; skip on a first reading.
 
-**Groundedness**, as Chapter 24 defines it, is checked sentence by sentence, with each sentence standing in for a claim. The evaluator reports it as `rag_groundedness`. The answer is split into sentences, citation markers are stripped, and each sentence is matched to the evidence passage that covers the largest share of its content words. A sentence counts as supported only if that share passes a threshold and every number and identifier in the sentence appears in the same passage. The rule is a lexical proxy. It catches invented deadlines, changed amounts, ticket ids that exist nowhere in the evidence, and claims with no lexical support at all. It cannot recognize a paraphrase that reverses meaning. The module's `judge_evaluators` adds `evalkit`'s calibrated `GROUNDEDNESS` and `RELEVANCE` judges for that, with the evidence wrapped in delimiters.
+Chapter 14 owns RAG evaluation. When a RAG step is one component of a larger feature, `RagAnswerEvaluator` scores the answer against the evidence the step actually received, on four metrics.
 
-**Answer relevance** is the share of the question's content words the answer engages with, a cheap floor that catches answers about the wrong topic. **Citation validity** requires every cited id to be among the retrieved passages and, when the case names required sources, those sources to be cited. **Abstention correctness** requires the system to abstain exactly when the case marks the evidence as insufficient, mirroring the inverted scoring that Chapter 14 applies to forbidden-document questions.
+**Groundedness** (`rag_groundedness`) is checked sentence by sentence. A sentence is supported only if one evidence passage covers enough of its content words and contains every number and identifier in it. This lexical proxy catches invented deadlines, changed amounts, and unknown ticket ids, but not a paraphrase that reverses meaning; `judge_evaluators` adds `evalkit`'s calibrated `GROUNDEDNESS` and `RELEVANCE` judges for that.
 
-The lexical checks run on every commit at no cost; the judges run nightly or on release candidates. When the lexical groundedness score and the groundedness judge disagree on a case, a human should look: either the lexical rule misfired on a paraphrase, or the judge was fooled by a fluent unsupported claim. Chapter 24's "Which groundedness evaluator when" compares this check with Chapter 14's claim-level judge and evalkit's rubric judge.
+**Answer relevance** is a cheap word-overlap floor against off-topic answers, **citation validity** requires cited ids to be among the retrieved passages, and **abstention correctness** requires abstaining exactly when the evidence is insufficient.
+
+The lexical checks run on every commit and the judges nightly. When they disagree on a case, a human should look. Chapter 24's "Which groundedness evaluator when" compares the options.
 
 ### Agents: evaluate the trajectory, not just the answer
 
-A **trajectory** is the ordered event log of one agent run: the goal, every model decision, every tool call with arguments, every approval decision, every tool result, the final answer, and the end state of the world the agent acted on. Chapter 19's `agentkit` runtime already records every run as immutable events (`GoalSet`, `ModelDecision`, `ToolCallRequested`, `ToolCallApproved`, `ToolCallDenied`, `ToolResult`, `FinalAnswer`, `Stopped`) in an event store such as `JsonlEventStore`, and `RunResult.trajectory()` returns the executed tool names. Those logs are the source of truth; the evaluator does not invent a second recording.
+A **trajectory** is the ordered event log of one agent run: the goal, model decisions, tool calls with arguments, approval decisions, tool results, the final answer, and the end state of the world the agent acted on. Chapter 19's `agentkit` runtime already records every run as immutable events, and those logs are the source of truth. `trajectory_from_events` exports a log to a thin JSON view of typed steps plus a `final_state` projected from successful write-tool results.
 
-`trajectory_from_events` exports a log to a thin JSON view the assertions read. Each step has a type (`user_goal`, `model_decision`, `tool_call`, `approval`, `tool_result`, `final_answer`), tool calls, approvals, and results share a `call_id` (agentkit's `request_id`, such as `5.0`, not the raw event's `call_id`, such as `c5`), only `approver` or `human` approvals count as sign-off (agentkit also emits routine `policy` approvals for every allowed call), and a `final_state` of collections such as `tickets`, `drafts`, and `sent_replies` is projected from the successful write-tool results.
+A final answer can be correct while the trajectory is unacceptable: a forbidden tool, a message sent without approval, six retries of one failing call, or success by accident after a wrong turn. The evaluator runs deterministic assertions over the log, each tied to a failure class:
 
-A final answer can be correct while the trajectory is unacceptable: the agent leaked data to a tool it should not have used, sent a message without approval, retried the same failing call six times, or succeeded by accident after a wrong turn. The evaluator therefore runs a set of deterministic assertions over the log, each tied to a failure class:
-
-- **Allowed tools only.** Every tool call names a tool offered for this task and user. A call to anything else is a safety violation even if the runtime denied it, because the attempt shows the planner reaching beyond its mandate.
-- **Approval before side effects.** For every executed call to an approval-gated tool, an `approved` decision for that `call_id` appears before its successful result. An approval recorded after execution is a violation, and so is a gated call whose `call_id` is reused, since a second call could otherwise borrow the first one's approval; a denied call that never executed needs no approval.
-- **No repeated-action loops.** No identical action (same tool, same canonical arguments) more than a threshold number of times, and no short cycle such as search, status, search, status repeated three or more times. Cycles matter because a planner alternating between two calls never repeats a single call often enough to trip the first rule.
-- **Step efficiency.** The ratio of reference tool calls (what an expert solution needs) to actual calls, plus a pass/fail budget. Efficiency is a cost and latency signal; it is not a safety signal, and it should be gated as a regression tolerance rather than a hard floor.
+- **Allowed tools only.** Every call names a tool offered for this task and user. Anything else is a safety violation even if the runtime denied it, because the attempt shows the planner reaching beyond its mandate.
+- **Approval before side effects.** Every executed call to an approval-gated tool has an `approved` decision for its `call_id` before its result. A late approval is a violation, and so is a reused `call_id`, which could borrow another call's approval.
+- **No repeated-action loops.** No identical action (same tool, same canonical arguments) beyond a threshold, and no short cycle such as search, status, search, status, which never trips the identical-action rule.
+- **Step efficiency.** Reference tool calls (what an expert solution needs) divided by actual calls, plus a budget. It is a cost signal, not a safety signal; gate it as a regression tolerance.
 - **Tool argument correctness.** Every call's arguments validate against the tool's JSON Schema, and the values the task fixes (priority P1, category `pos_payments`) match.
-- **Task completion by final state.** Predicates over the end state: at least one ticket with category `pos_payments`, priority P1, tenant `retail`; a sent reply on ticket TCK-2026-0001; and forbidden predicates such as "no reply was sent" for tasks where a human must reply. The text of the final answer is not the evidence of completion; the state is.
+- **Task completion by final state.** Predicates over the end state (a ticket with category `pos_payments`, priority P1, tenant `retail`) and forbidden predicates ("no reply was sent" where a human must reply). The final answer's text is not evidence of completion; the state is.
 
-Two composites sit on top. `traj_safe` is true when no safety assertion failed (allowed tools and approvals). `traj_success` is true only when the task completed and the run was safe and loop-free. The release gate treats `traj_safe` as a must-pass-all metric and `traj_success` on critical tasks as a critical rule, so an agent that ends correctly after an unauthorized action fails the gate regardless of its average score.
+Two composites sit on top. `traj_safe` is true when no safety assertion (allowed tools, approvals) failed. `traj_success` requires completion, safety, and no loops. The gate treats `traj_safe` as must-pass-all and `traj_success` on critical tasks as a critical rule, so an agent that ends correctly after an unauthorized action fails regardless of its average.
 
-Agents are stochastic even at low temperature, because a small difference in one step compounds across the next ten. Run each task several times and report two numbers. **pass@k** is the share of tasks with at least one success among k trials: what a user who retries until it works experiences. **pass^k** (pass-all-k) is the share of tasks where every trial succeeds: the reliability an unattended agent needs. A gap between them is flakiness, and for an agent that sends replies without a human watching, pass^k is the number that matters.
+Agents are stochastic even at low temperature, so run each task several times and report two numbers. **pass@k** is the share of tasks with at least one success among k trials: what a user who retries experiences. **pass^k** (pass-all-k) is the share where every trial succeeds: the reliability an unattended agent needs. The gap between them is flakiness.
 
 ### Replay: hold the world fixed, change the planner
 
-Running a new agent version against live tools to evaluate it has three problems: side effects (it creates real tickets and sends real replies), nondeterministic observations (today's service status differs from yesterday's), and cost. **Replay** removes all three for the most common question, "did the planner change make decisions better or worse?". A recorded run supplies the observations, and the new planner consumes them instead of calling real tools.
+Evaluating a new agent version against live tools brings side effects, nondeterministic observations, and cost. **Replay** removes all three for the most common question, "did the planner change make decisions better or worse?" A recorded run supplies the observations, and the new planner consumes them instead of calling real tools.
 
-`agentkit.replay(events, llm=new_client, system_prompt=...)` does the mechanics (Chapter 19 explains them). Every tool is replaced by a stand-in that serves the recorded `ToolResult` for the same action key, a hash of tool name and canonical arguments, so nothing executes. A call the recording never saw is a **replay miss**: it returns a failure and is listed in the replay report, together with the first step at which the new planner's decisions diverged from the original's. The runtime's own guards still apply during replay, so a planner that repeats an identical call is stopped with `repeated_action` exactly as it would be in production.
+`agentkit.replay(events, llm=new_client, system_prompt=...)` does the mechanics (Chapter 19). Every tool becomes a stand-in that serves the recorded `ToolResult` for the same **action key**, a hash of tool name and canonical arguments, so nothing executes. A call the recording never saw is a **replay miss**: it returns a failure and appears in the replay report. The runtime's guards still apply, so a repeated identical call is stopped with `repeated_action` as in production.
 
-Two details matter for evaluation. First, agentkit does not re-request approvals during replay, because nothing real executes. The export therefore counts a replayed call to an approval-gated tool as approved only when the original run had a human approval for the identical action key; any other send is a visible violation, including one that misses during replay (status `unrecorded`), because in a real run it would have executed. Second, the end state is projected from the successful write results, so a new planner that files the ticket with different arguments gets a miss instead of a ticket, and the completion predicate fails. Replay fails closed.
+Two details matter for evaluation. First, agentkit does not re-request approvals during replay, so the export counts a replayed gated call as approved only when the original run had a human approval for the identical action key. Any other gated call is a violation, even one that missed (status `unrecorded`), because in a real run it would have executed. Second, the end state is projected from successful writes, so a planner that files the ticket with different arguments gets a miss instead of a ticket, and completion fails. Replay fails closed.
 
-Replay isolates the planner: since observations are fixed, any change in the trajectory is caused by the prompt, model, or policy under test. That is the counterfactual question an agent change needs answered: given the same observations, does the new planner decide differently, and better? Its limit is **divergence**. When the new planner asks a question the old one never asked, there is no recorded answer. The export marks those results `unrecorded`, and `replay_fidelity` reports the share of tool results served from the recording. A replay with low fidelity measures little except that the planner went somewhere new; those cases need a live run against sandboxed or mocked tools. The gate in this chapter requires mean fidelity of at least 0.9 for the replay result to count.
+Because observations are fixed, any change in the trajectory comes from the prompt, model, or policy under test. Replay's limit is **divergence**: a question the old planner never asked has no recorded answer. `replay_fidelity` reports the share of tool results served from the recording. A low-fidelity replay says little except that the planner went somewhere new; those cases need a live run against sandboxed tools. This chapter's gate requires mean fidelity of at least 0.9.
 
 ```mermaid
 sequenceDiagram
@@ -148,128 +150,149 @@ sequenceDiagram
 
 ### Extraction: fields, weights, and evidence
 
-Extraction outputs feed finance and legal systems, where a silently wrong field costs more than a missing one, because a missing field goes to review and a wrong field gets paid. Chapter 6 owns the extraction pipeline; Chapter 24's `field_prf` supplies the counting rules: a correct non-null value is a true positive, a value where the gold is null is a false positive, a missing value is a false negative, and a wrong value counts as both.
+In extraction a wrong field costs more than a missing one: a missing field goes to review and a wrong field gets paid. Chapter 6 owns the extraction pipeline; Chapter 24's `field_prf` supplies the counting rules: a correct non-null value is a true positive, a value where the gold is null is a false positive, a missing value is a false negative, and a wrong value counts as both.
 
-Three refinements make field metrics useful for a release decision. **Weighting** multiplies each field's counts by a business weight before computing precision and recall. With weight 3 on the total and 1 on the PO number, missing the total on one invoice lowers weighted recall far more than missing a PO number. The weights are illustrative in this chapter and in practice belong to the business owner, not the engineer. **Critical fields** (invoice number, total, currency, vendor in the Northwind suite) get their own pass/fail metric that requires every one of them to be exactly right; the gate requires it on every case. Weighting tells you how bad the average is; the critical metric tells you whether any single invoice would have paid the wrong amount. **Line items** are matched one to one on amount within a tolerance and a normalized description prefix, and reported as their own precision and recall.
+Three refinements make field metrics useful for a release decision. **Weighting** multiplies each field's counts by a business weight: with weight 3 on the total and 1 on the PO number, missing one total lowers weighted recall far more than missing a PO number. The weights here are illustrative; the business owner sets the real ones. **Critical fields** (invoice number, total, currency, vendor) get their own pass/fail metric that requires all of them exactly right, on every case. The critical metric tells you whether any single invoice would have paid the wrong amount. **Line items** are matched one to one on amount and description, with their own precision and recall.
 
-**Evidence-location correctness** is the metric that makes human review fast. The extractor returns, for every field, a verbatim quote from the document. The evaluator classifies each quote as `correct` (the quote is in the document and contains the gold value as a whole token in one of its usual renderings, such as `3,327.48` or `3327.48`; `1,488.00` is not found inside `11,488.00`), `wrong_location` (the quote exists but does not support the value), `not_found` (the quote is fabricated or paraphrased and cannot be verified), or `missing`. Wrong-location evidence is worse than none: it makes a wrong value look checked. The check has a known blind spot that the walkthrough below runs into: when two lines contain the same number, such as a subtotal equal to the total on an untaxed statement, a quote of the wrong line still contains the right value and passes.
+**Evidence-location correctness** makes human review fast. The extractor returns a verbatim quote for every field, and the evaluator classifies each quote:
+
+- `correct`: the quote is in the document and contains the gold value as a whole token in one of its usual renderings (`3,327.48` or `3327.48`; `1,488.00` is not found inside `11,488.00`).
+- `wrong_location`: the quote exists but does not support the value. This is worse than no evidence, because it makes a wrong value look checked.
+- `not_found`: the quote is fabricated or paraphrased and cannot be verified.
+- `missing`: no quote.
+
+The check has a known blind spot, which the walkthrough runs into: when two lines contain the same number, such as a subtotal equal to the total on an untaxed statement, a quote of the wrong line still passes.
 
 ### Classification: macro-F1, per-class recall, calibration
 
-Chapter 24 explained why accuracy hides rare classes and why thresholds are product decisions. In practice, a classification suite needs three run-level numbers beyond per-case correctness. **Macro-F1** averages F1 over classes so that a six-ticket class counts as much as a sixty-ticket one. **Per-class recall** for the classes whose misses are costly (security incidents at Northwind) gets its own floor in the gate. **Calibration** (expected calibration error and Brier score; Chapter 6 owns calibration and Chapter 24 adds the Brier score) matters whenever confidence drives routing or escalation; if the classifier says 0.9 and is right 60% of the time, an escalation threshold at 0.7 is meaningless.
+> **Deep dive.** Run-level metrics for classifiers and the cascade comparison; skip on a first reading.
 
-These are properties of the run, not of a case, so `evalkit`'s per-case metric rules cannot express them. `taskevals.classification_aggregates` rebuilds the confusion matrix from the gold, predicted, and confidence values stored in each case's score detail, maps out-of-enum predictions to an `__invalid__` column so they count as wrong instead of crashing the matrix, and returns macro-F1, per-class recall and support, ECE, Brier, the most-confused pairs, and reliability bins. The release gate evaluates rules such as `macro_f1 >= 0.85` and `recall:security_report >= 0.65` against those aggregates.
+Chapter 24 explained why accuracy hides rare classes. A classification suite needs three run-level numbers beyond per-case correctness. **Macro-F1** averages F1 over classes, so a six-ticket class counts as much as a sixty-ticket one. **Per-class recall** on classes whose misses are costly (security incidents at Northwind) gets its own floor. **Calibration** (expected calibration error, or ECE, and Brier score; see Chapters 6 and 24) matters whenever confidence drives routing: if the classifier says 0.9 and is right 60% of the time, an escalation threshold at 0.7 is meaningless.
 
-The same numbers feed a bigger decision that every classification team eventually faces: whether a smaller, cheaper classifier (prompted or fine-tuned, Chapter 33) can replace a strong general model on a 40-category ticket taxonomy. The experimental design transfers directly. Freeze a stratified test set that includes rare and ambiguous categories. Establish three baselines: keyword rules, a small model with a prompt, and a strong model. Measure macro-F1, per-class recall, calibration, latency, and cost for each. Tune any escalation threshold on validation data, never the test set.
+These are properties of the run, so `evalkit`'s per-case rules cannot express them; the gate checks aggregate rules such as `macro_f1 >= 0.85` and `recall:security_report >= 0.65`.
 
-When uncertain predictions escalate to the strong model, evaluate the cascade as one system: every case pays for the small model, escalated cases also pay for the large one, and accuracy is computed on the routed outputs. `evaluate_cascade` does exactly that over a list of thresholds, so the choice becomes a table of accuracy, escalation rate, and cost per case instead of an argument. A cheaper model is not a win if a rare critical category regresses, however good the average looks.
+The same numbers decide whether a smaller classifier (Chapter 33) can replace a strong general model. Compare keyword rules, a small prompted model, and a strong model on a frozen stratified test set, and tune any escalation threshold on validation data only. When uncertain predictions escalate, evaluate the cascade as one system: `evaluate_cascade` reports accuracy, escalation rate, and cost per case for each threshold. A cheaper model is not a win if a rare critical category regresses.
 
 ### Summarization: coverage, faithfulness, compression
 
-A summary can fail in three independent directions, and each needs its own metric because they trade against each other. **Coverage** asks whether the summary kept what matters. The case lists key facts, each as a set of acceptable phrasings ("expired TLS certificate" or "expired certificate"), and coverage is the share of facts present after normalization. Phrase matching is brittle for free paraphrase, so the phrasings should be written by someone who has read real summaries, and a judge should check coverage on a sample.
+> **Deep dive.** Three summary metrics that must be gated together; skip on a first reading.
 
-**Faithfulness** asks whether the summary distorted anything, and for a summary the same check also covers groundedness, because the source is the evidence: anything the summary added is unsupported. The deterministic part (`lexical_faithfulness`) flags sentences that introduce numbers or identifiers absent from the source, or that have little lexical support in it. The semantic part is a judge with the `FAITHFULNESS` rubric: contradiction or changed number (0), dropped qualifier or added claim (1), accurate (2). Dropped qualifiers deserve a separate deterministic check where they are known in advance: "except for internal test environments" either survives or it does not. **Compression ratio** is summary tokens divided by source tokens, gated to a band.
+A summary can fail in three directions that trade against each other. **Coverage** is the share of the case's key facts present, each fact a set of acceptable phrasings ("expired TLS certificate" or "expired certificate"). Phrase matching is brittle, so spot-check coverage with a judge.
 
-The trade-off is the reason all three are gated together. The source document itself has perfect coverage and perfect faithfulness and a compression ratio of 1.0; a one-sentence summary is perfectly faithful and nearly useless. A suite that gates only faithfulness will approve the first, and a suite that gates only compression will approve the second.
+**Faithfulness** asks whether the summary distorted anything. `lexical_faithfulness` flags sentences with numbers or identifiers absent from the source, and a judge with the `FAITHFULNESS` rubric scores the rest: contradiction or changed number (0), dropped qualifier or added claim (1), accurate (2). Check known qualifiers deterministically: "except for internal test environments" either survives or it does not. **Compression ratio** is summary tokens divided by source tokens, gated to a band.
+
+Gate all three together: the source itself has perfect coverage and faithfulness, and a one-sentence summary is perfectly faithful and nearly useless.
 
 ### Tool usage
 
-Single-decision tool use (given a request and a set of offered tools, pick one or none and fill its arguments) is a classification problem with structured outputs. `ToolUseEvaluator` emits four metrics. **Selection accuracy** compares the chosen tool, or "no tool", with the expected one; the confusion matrix across tools shows systematic swaps such as `search_tickets` chosen where `get_service_status` was needed. **Tool known** fails when the model names a tool that is not in the catalog or was not offered for this request, which is the tool-use form of hallucination and should be zero. **Argument validity** checks the arguments against the tool's JSON Schema, including enums. **Argument correctness** compares the values the case fixes, with normalization for strings. Chapter 16 owns the tool registry and the policy engine that enforce these at runtime; the evaluator measures how often the model makes the runtime's job necessary.
+> **Deep dive.** Single-decision tool selection as structured classification; skip on a first reading.
+
+Single-decision tool use (pick one offered tool or none, and fill its arguments) is classification with structured outputs. `ToolUseEvaluator` emits **selection accuracy** (with a confusion matrix across tools), **tool known** (fails on a tool not offered, the tool-use form of hallucination), **argument validity** against the JSON Schema, and **argument correctness** for the values the case fixes. Chapter 16's runtime enforces these; the evaluator measures how often the model makes that enforcement necessary.
 
 ### Multi-turn conversations
 
-Most of Northwind Assist is conversational, and a conversation fails in ways no single turn shows: the assistant forgets a constraint stated three turns earlier ("I am a contractor"), contradicts its own earlier answer, asks again for information it already has, or drifts off the task. Two evaluation designs cover this, and they answer different questions.
+> **Deep dive.** Replayed transcripts versus simulated users; skip on a first reading.
 
-**Replayed transcripts** take a recorded conversation, feed the user turns up to turn k to the new system, and evaluate only its reply at turn k against that turn's expectation. Every case has a fixed history, so scores are comparable across versions and every per-turn evaluator in this chapter applies unchanged. The weakness is the same as agent replay: once the new system answers differently at turn 2, the recorded user turn 3 may no longer make sense, so turn-level replay is valid for the first divergent turn and loses meaning after it.
+A conversation fails in ways no single turn shows: the assistant forgets a constraint stated three turns earlier ("I am a contractor"), contradicts itself, or drifts off task. Two designs cover this.
 
-**Simulated users** replace the recorded user with a model prompted with a persona, a goal, and private facts it reveals only when asked ("you are a retail store manager; your register declines cards; you know the store number but only say it if asked"). The simulator and the system talk until the goal is met, the simulator gives up, or a turn budget runs out, and the evaluation scores the whole dialogue: task completion by end state, turns to completion, constraint retention (did the answer respect every fact the user stated), and safety assertions over any tool calls, exactly as for agent trajectories.
+**Replayed transcripts** feed a recorded conversation up to turn k to the new system and evaluate only its reply at turn k, so scores are comparable across versions. As with agent replay, the result is valid only up to the first divergent turn.
 
-Simulated users find multi-turn failures before traffic does, and they cost two model calls per turn. They are also biased in a known way: simulators are more cooperative, more consistent, and better at stating their goal than real people. Calibrate a sample against human-played or production conversations, use a different model family for the simulator than for the system, seed the simulator so runs are reproducible, and report simulated dialogues as their own slice.
+**Simulated users** replace the recorded user with a model given a persona, a goal, and private facts it reveals only when asked ("you are a store manager; give the store number only if asked"). The evaluation scores the whole dialogue: completion by end state, turns to completion, constraint retention, and safety assertions over tool calls.
 
-For both designs, the conversation is the group key. Turns from one conversation are correlated, so per-turn metrics need the cluster bootstrap from Chapter 24, and splits must keep every turn of a conversation on the same side.
+Simulators are more cooperative and consistent than real people: calibrate a sample against real conversations, use a different model family, seed for reproducibility, and report them as their own slice. In both designs the conversation is the group key for Chapter 24's cluster bootstrap and for splits.
 
 ### Synthetic data: generate, validate, and measure the bias
 
-This chapter owns synthetic evaluation data; Chapters 14 and 24 use it and point here. **Synthetic data** means evaluation cases written by a model instead of collected from users or written by experts. Before launch there is no traffic to sample, and even after launch rare slices have too few cases to measure. A model can generate cases quickly: give it a document and ask for questions an employee might ask that the document answers, with a short answer and a verbatim supporting quote. The pipeline in `taskevals.synthetic` makes one structured call per document through `complete_structured`, at a nonzero temperature because diversity is the point, and wraps the document in delimiters because source documents can contain injected instructions (Northwind's vendor newsletter from Chapters 11 and 13 does).
+> **Deep dive.** Generating, filtering, and measuring model-written cases; skip on a first reading.
+
+This chapter owns synthetic evaluation data; Chapters 14 and 24 point here. **Synthetic data** means evaluation cases written by a model, used where traffic is absent (before launch) or too thin (rare slices). `taskevals.synthetic` gives a model one document at a time and asks for questions an employee might ask that it answers, each with a short answer and a verbatim supporting quote. The document goes inside delimiters, because source documents can contain injected instructions.
 
 Generated cases are drafts. The validation filters, in order:
 
-1. **Schema.** Malformed items never reach the filters; `complete_structured` repairs or rejects them.
-2. **Answerability.** The quote must appear verbatim in the source (after whitespace normalization), every number in the answer must appear in the quote, and the answer's content words must be supported by the quote. Generators fabricate quotes more often than people expect; this filter alone removes most hallucinated cases.
-3. **Duplicates in the batch.** Normalized exact matches and near-copies by content-word Jaccard similarity. A threshold of 0.8 catches rewordings that insert or drop a word, at the price of occasionally merging two questions that differ only in a stopword such as "not"; an embedding check (Chapter 8) is the stronger second pass.
-4. **Duplicates against existing datasets.** A synthetic question that copies a golden or holdout question is leakage, and is rejected for that reason.
-5. **Difficulty tags.** Questions whose content words mostly appear in the supporting quote are tagged `difficulty:easy-lexical`; low overlap is `difficulty:hard-paraphrase`. The tag is a heuristic, but it lets reports show whether the synthetic slice is mostly easy.
+1. **Schema.** `complete_structured` repairs or rejects malformed items.
+2. **Answerability.** The quote must appear verbatim in the source (after whitespace normalization), every number in the answer must appear in the quote, and the quote must support the answer's content words. This filter alone removes most hallucinated cases.
+3. **Duplicates in the batch.** Normalized exact matches and near-copies by content-word Jaccard similarity. A threshold of 0.8 catches one-word rewordings but can merge questions that differ only by "not".
+4. **Duplicates against existing datasets.** A copy of a golden or holdout question is leakage and is rejected.
+5. **Difficulty tags.** High word overlap with the quote gets `difficulty:easy-lexical`, low overlap `difficulty:hard-paraphrase`, so reports show whether the slice is mostly easy.
 
-Each surviving case is tagged `origin:synthetic`, grouped by its source document so that sibling questions never straddle a dev/holdout split, and marked `review: pending` until a human has looked at a sample.
+Survivors are tagged `origin:synthetic`, grouped by source document so siblings never straddle a dev/holdout split, and marked `review: pending`.
 
-The bias is measurable, and you should measure it rather than assert it. `bias_report` computes, for synthetic and reference questions alike, the share of each question's content words that appear in its source document. On Northwind's data, two synthetic questions that echo the PTO policy score an overlap of 1.0 against 0.74 for the 40 expert-written retrieval questions in the shared gold set. That gap is the mechanism by which synthetic sets flatter lexical retrieval (Chapter 12): the question carries the document's own words. Generators also cluster on explicit facts in tables and bold text, under-produce multi-document questions, and share blind spots with the system when one model family plays both roles. The mitigations are prompts that ask for employee wording, a different model family for generation than for the system under test, human-written seeds for hard slices, and above all reporting the synthetic slice separately so its score never stands in for real traffic.
+Measure the bias rather than assert it. `bias_report` computes, for synthetic and reference questions alike, the share of each question's content words that appear in its source document. On Northwind's data, two synthetic PTO questions score 1.0 against 0.74 for the 40 expert-written questions in the shared gold set: the question carries the document's own words, which flatters lexical retrieval (Chapter 12). Generators also cluster on explicit facts in tables and bold text, under-produce multi-document questions, and share blind spots with the system when one model family plays both roles. Mitigate with employee-wording prompts, a different generator family, human-written seeds for hard slices, and above all a separately reported slice.
 
-**Beyond retrieval questions.** Document-grounded questions are the easiest case because the source supplies the answer. Other task shapes need other generators, each with its own validation:
+**Beyond retrieval questions.** Other task shapes need other generators:
 
-- **Perturbations of real cases.** Take a labeled ticket or invoice and change one thing: reword it, swap the language, move the total to a different line, add a distracting second number, insert an injected instruction. The gold label is inherited or changed by rule, so validation is cheap, and the variants probe robustness on exactly the inputs you already understand. This is the best source for classification and extraction slices.
-- **Rare-class and edge-case generation.** Ask for tickets of a class that has six gold examples, seeded with those examples. A human must confirm the label on every one, because the generator's idea of "security incident" is the thing being tested.
-- **Adversarial cases.** Injection attempts, policy-boundary requests, and malformed inputs, generated from a catalog of attack patterns. Chapter 26 builds the attack corpus and Chapter 27 runs it as an end-to-end red team; synthetic generation widens it, and every case keeps the `critical` tag so one failure blocks.
-- **Agent tasks.** A goal, the allowed tools, and end-state predicates, generated from the tool catalog and then run once against sandboxed tools. Keep a generated task only if a reference planner can complete it and the predicates are checkable; a task nobody can solve measures nothing.
-- **Simulated users** for multi-turn evaluation, described above, are synthetic data generated live.
+- **Perturbations of real cases.** Change one thing in a labeled ticket or invoice (reword it, move the total, add a distracting number, insert an injected instruction) and inherit or adjust the gold by rule. This is the best source for classification and extraction slices.
+- **Rare-class generation.** Seed the generator with a rare class's few gold examples. A human must confirm every label, because the generator's idea of "security incident" is what is being tested.
+- **Adversarial cases.** Injection attempts, policy-boundary requests, and malformed inputs from a catalog of attack patterns (Chapters 26 and 27). Every case keeps the `critical` tag so one failure blocks.
+- **Agent tasks.** A goal, allowed tools, and end-state predicates from the tool catalog. Keep a task only if a reference planner completes it against sandboxed tools.
 
-Diversity comes from structure, not from temperature. Enumerate the axes you care about (persona, tenant, intent, difficulty, language, document) and generate per cell, so the set covers the grid instead of piling up on the generator's favorite question.
+Diversity comes from structure, not temperature: enumerate the axes (persona, tenant, intent, difficulty, language, document) and generate per cell.
 
-**When not to use it.** Synthetic cases do not replace a frozen holdout of real or expert-written cases, they do not estimate the production score, and they are a poor fit where the generator and the system share a model family and therefore share blind spots. Use them to find failures and fill slices, not to certify a release.
+**When not to use it.** Synthetic cases do not replace a frozen holdout of real cases and do not estimate the production score. Use them to find failures and fill slices, not to certify a release.
 
-**Lifecycle.** Record the generator model, prompt version, seed, and source document hash in each case's metadata, so a case can be traced and regenerated when its source changes. Review a random sample of every batch (for example 10 to 20 percent, illustrative) and the whole of any slice that gates a release. Reviewed cases can join the regression or golden datasets with their `origin:synthetic` tag intact; they never enter the holdout, and a generator never sees holdout cases as seeds.
+**Lifecycle.** Record the generator model, prompt version, seed, and source document hash in each case so it can be regenerated when its source changes. Review a sample of every batch (for example 10 to 20 percent, illustrative) and all of any slice that gates a release. Reviewed cases may join regression or golden datasets with their tag; they never enter the holdout, and a generator never sees holdout cases as seeds.
 
 ### Evaluation in CI/CD
 
-Evaluation that runs only when someone remembers to run it cannot stop a regression from merging. The release-engineering view from Chapter 24 becomes concrete in a pipeline with three tiers:
+Evaluation that runs only when someone remembers cannot stop a regression from merging. The pipeline has three tiers:
 
-- **Unit tests** for the evaluators and the harness: every merge request, seconds, no model calls. They pin counting conventions, assertion logic, and gate behavior.
-- **The fast eval suite**: every merge request, minutes, deterministic checks and cheap stand-ins or small samples, including every critical and adversarial case. Its job is to catch contract breaks and critical regressions before review.
-- **The full suite**: nightly and on release candidates, with judges, repeated trials for agents, larger samples, and concurrency that reflects production. Its job is the quality verdict with confidence intervals.
+- **Unit tests** for the evaluators, harness, and gate: every merge request, seconds, no model calls.
+- **The fast eval suite**: every merge request, minutes. Deterministic checks, small samples, and every critical and adversarial case.
+- **The full suite**: nightly and on release candidates, with judges, repeated agent trials, and larger samples, for the quality verdict with confidence intervals.
 
-**pytest as the entry point.** Engineers already run pytest, so evaluation suites become pytest tests with markers: `eval_fast` and `eval_full`. A small plugin adds `--eval-suite {none,fast,full}`; by default eval tests are skipped, so a plain `pytest` stays fast. With `--eval-suite fast`, the eval tests run each suite, assert only that the harness is healthy (every case ran, no target errors, no evaluator errors), and write one Run JSON per suite to `--eval-out`. The tests deliberately do not assert quality thresholds. Thresholds live in one reviewed configuration file read by the gate, not scattered across assert statements where they drift apart and get edited to make a build green.
+**pytest as the entry point.** Suites become pytest tests marked `eval_fast` or `eval_full`, selected with `--eval-suite {none,fast,full}` and skipped by default. The tests assert only harness health (every case ran, no target or evaluator errors) and write one Run JSON per suite. Quality thresholds live in one reviewed file read by the gate, not in assert statements where they drift and get loosened to make a build green.
 
-**The release gate.** `release_gate.py` reads the Run JSON files, the committed baseline runs, and `gates.toml`, which holds one `evalkit` `GateConfig` per suite (pinned dataset hash, minimum cases, error rates, metric floors, regression tolerances, slice rules, critical tags) plus run-level aggregate rules. It writes a Markdown summary (also appended to the CI job summary when the runner provides one, such as GitHub Actions' `GITHUB_STEP_SUMMARY`), a machine-readable `gate.json`, and a full `evalkit` report per suite, then exits 0 when every suite passed, 1 when any check failed, and 2 when the gate could not be evaluated because a run is missing or unreadable, a baseline is unreadable, an aggregator fails, or the configuration is invalid.
+**The release gate.** `release_gate.py` reads the Run JSON files, the baseline runs, and `gates.toml`, which holds one `evalkit` `GateConfig` per suite (pinned dataset hash, minimum cases, error rates, metric floors, regression tolerances, slice rules, critical tags) plus run-level aggregate rules. It writes a Markdown summary, `gate.json`, and a report per suite, and exits 0 when every suite passed, 1 when any check failed, and 2 when the gate could not be evaluated (a missing or unreadable run or baseline, a failed aggregator, an invalid configuration). Both nonzero codes block the merge; the difference tells the on-call person whether to read the report or fix the pipeline.
 
-Both nonzero codes block the merge; the difference tells the on-call person whether to read the report or fix the pipeline. A missing run must never pass silently: a gate that passes when the eval job crashed is worse than no gate.
+**Baselines and pins.** Baselines are the last release's runs on the same dataset hash; `evalkit` refuses deltas across hashes. A pinned dataset hash per suite means editing a frozen dataset fails the gate until a reviewed change updates the pin, which keeps the holdout from quietly becoming a dev set. Every suite also sets `require_baseline = true`; without it, a baseline that failed to download silently skips every regression and slice rule. Here a missing baseline fails a `baseline present` check (exit 1). Both CI definitions read `gates.toml` and the baselines from the default branch, so a change cannot relax the gate or regenerate the baseline it is judged against.
 
-**Baselines and pins.** The baseline runs are artifacts of the last release, committed or fetched from artifact storage, and they must have been produced on the same dataset hash as the candidate; `evalkit` refuses deltas across hashes. Pinning each suite's dataset hash in the gate configuration means that editing a frozen dataset fails the gate until someone deliberately updates the pin in a reviewed change. That is the mechanism that keeps the holdout from quietly turning into a dev set. Every suite also sets `require_baseline = true`. Without it, a baseline that failed to download (an expired artifact, a renamed file) makes every regression and slice rule skip silently, and the gate then checks only absolute floors: in this chapter's suites the regressed extractor's field-F1 regression and receipt-slice rules would simply not run. A missing baseline must block just as a missing run does; here it fails a `baseline present` check (exit 1), and `test_missing_baselines_block_instead_of_skipping_regression_rules` pins it. Both CI definitions take `gates.toml` and the baselines from the default branch rather than from the merge request under test, so a change cannot relax the gate or regenerate the baseline it is judged against.
+**Artifacts.** The pipeline uploads the whole `eval-out` folder on every run, pass or fail, so a reviewer reads regressions without rerunning the job. Keep artifacts long enough to audit and release artifacts permanently. Chapter 32 owns the broader CI/CD design.
 
-**Artifacts.** The pipeline uploads the whole `eval-out` folder on every run, pass or fail: summary, gate results, per-suite reports, and the Run JSON with per-case outputs and trace ids, so a reviewer reads the regressions in the browser instead of rerunning the job. Keep artifacts long enough to audit (the chapter's workflows keep them 90 days) and store release artifacts permanently next to the versions they evaluated. Chapter 32 owns the broader CI/CD design; this chapter owns the evaluation job inside it.
-
-**Safety suites in the same pipeline.** Quality suites are not the only gate. The adversarial cases of Chapter 24 (the `critical` injection tickets here) gate quality under attack, and Chapter 27's end-to-end red team gates the effect controls: `guardrails-measure --max-effect-bypass 0.0` belongs in the same job, as a step after the eval suites, and fails the pipeline if any attack scenario produces a harmful effect. Keep the two kinds of gate separate in the summary. A quality regression is negotiable with tolerances; a safety effect is not, and averaging the two would let a quality gain buy back a security hole.
+**Safety suites in the same pipeline.** Chapter 27's red-team gate (`guardrails-measure --max-effect-bypass 0.0`) runs in the same job and fails the pipeline if any attack produces a harmful effect. Report it on its own line: a quality regression is negotiable with tolerances, a safety effect is not.
 
 ### Online evaluation: feedback, corrections, canaries
 
-Offline evaluation gates the release; production tells you whether the gate was right. Online signals include task completion, corrections, escalations, explicit feedback, abandonment, citation clicks, tool failures, latency, and cost, and all are imperfect: explicit feedback is sparse and comes from a biased subset of users, engagement is ambiguous (a long conversation can mean usefulness or failure), and corrections, the strongest signal, arrive only where someone bothered to fix the output.
+> **Deep dive.** Feedback attribution, sampled scoring, and a canary rule that survives repeated looks; skip on a first reading.
 
-The first engineering requirement is attribution. Every feedback event must carry the trace id of the request that produced the output, and every trace must carry the versions of prompt, model, index, and agent that served it (Chapter 31 owns the trace schema). `join_feedback` attaches events to traces within an attribution window, keeps the latest event of each kind, records delayed ground-truth labels (for example, the category a human agent finally assigned), and reports what it could not attach: **orphan events** whose trace was not found, which signal broken trace propagation or sampling, and **late events** outside the window, which are dropped rather than silently mixed into a later version's numbers. `outcome_metrics` then computes, per version, feedback coverage, negative rate among rated traces, correction rate over all traces, escalation rate, and accuracy against delayed labels. Coverage is reported first because every other rate depends on which traces received feedback at all.
+Offline evaluation gates the release; production tells you whether the gate was right. Online signals are all imperfect: explicit feedback is sparse and biased, and corrections, the strongest signal, arrive only where someone fixed the output.
 
-Feedback covers a minority of traces, so the stronger online signal is **sampled scoring**: run the reference-free evaluators of this chapter on a random sample of production traces, with no user action needed. The lexical groundedness and summary checks, citation validity, schema validity, trajectory safety assertions, and the PII and canary detectors of Chapter 27 are cheap enough to run on every trace; a calibrated groundedness judge runs on a sample, for example 1 to 5 percent stratified by tenant and route (illustrative). The scores go into the same metrics store as latency and cost, keyed by version, so a dashboard can show groundedness by prompt version next to p95 latency.
+The first requirement is attribution: feedback events carry trace ids, and traces carry prompt, model, index, and agent versions (Chapter 31). `join_feedback` attaches events and delayed ground-truth labels to traces within an attribution window. It reports what it could not attach: **orphan events** whose trace was not found, which signal broken trace propagation or sampling, and **late events** outside the window, which are dropped rather than mixed into a later version's numbers. `outcome_metrics` then computes per-version coverage, negative, correction, and escalation rates, and accuracy against delayed labels.
 
-Alert on three kinds of change: a safety assertion failing on any production trace (page, because it is an incident, not a statistic), a sustained drop in a quality rate beyond the run-to-run noise measured offline (for example, a daily groundedness rate more than three standard errors below its trailing four-week mean), and a shift in the input distribution, such as a new intent cluster or language share, which means the offline datasets no longer describe traffic. Sampled scoring needs the same privacy discipline as datasets: score inside the production trust boundary, store scores and ids rather than text, and send a trace to a third-party judge only if the data policy allows it.
+Feedback covers a minority of traces, so the stronger signal is **sampled scoring**: run this chapter's reference-free evaluators on production traces. The deterministic checks are cheap enough for every trace; a calibrated judge runs on a sample, for example 1 to 5 percent stratified by tenant (illustrative). Score inside the production trust boundary.
 
-The second requirement is closing the loop. `corrections_to_cases` turns every correction or delayed label that disagrees with the output into a candidate regression case, carrying the trace id and versions in metadata and tagged `origin:production-correction`. The function requires a `redact` callable and applies it to the production input, so personal data does not land in an eval set by default. After review, those cases join the regression dataset from Chapter 24, so a failure that reached a user once is tested on every future change.
+Alert on a safety assertion failing on any trace (page; it is an incident), a sustained quality drop beyond offline noise, and an input distribution shift.
 
-The third requirement is the canary decision. A canary serves the new version to a small share of traffic and compares its online failure rate with control. The trap is peeking: computing a standard 5% significance test every hour and rolling back the first time it fires. Each look is another chance for noise to cross the line, and the false-alarm rate grows with the number of looks. In the chapter's A/A simulation (both arms identical, 10% failure rate, ten looks of 300 requests per arm), naive peeking rolls back 16% of perfectly good releases.
+The second requirement is closing the loop. `corrections_to_cases` turns every correction or delayed label that disagrees with the output into a candidate regression case tagged `origin:production-correction`. It requires a `redact` callable, so personal data does not land in an eval set by default. After review, a failure that reached a user once is tested on every future change.
 
-`CanaryMonitor` uses a simple rule that accounts for repeated looks. The number of looks is planned in advance, and each look uses a significance level of alpha divided by the number of looks (a Bonferroni correction), which is conservative but needs no special tables. The rule has four outcomes. Any critical event in the canary (a permission violation, a cross-tenant leak, an unapproved side effect) rolls back immediately, without statistics. Before a minimum sample per arm, it continues. At every look, it rolls back if the canary's failure rate is significantly higher, using a one-sided test at the corrected level. At the final look, it promotes only when the upper confidence bound on the difference (canary minus control) is below a non-inferiority margin chosen in advance; otherwise it holds for a human decision, because "not significantly worse" on a small sample is not evidence of "not worse". In the same simulation the rule's false-alarm rate is 1.5%. Group-sequential designs with alpha-spending and always-valid sequential tests use the error budget more efficiently, and an experimentation platform should use them; the requirement is a planned number of looks or a method built for continuous monitoring, and a fixed-level test checked repeatedly is neither.
+The third requirement is the canary decision. A canary serves the new version to a small share of traffic and compares its failure rate with control. The trap is peeking: running a 5% significance test every hour and rolling back the first time it fires, so each look is another chance for noise to cross the line. In the chapter's A/A simulation (identical arms, 10% failure rate, ten looks of 300 requests per arm), naive peeking rolls back 16% of perfectly good releases.
+
+`CanaryMonitor` plans the number of looks in advance and tests each at alpha divided by that number (a Bonferroni correction). It has four outcomes:
+
+- Any critical event in the canary (a permission violation, a cross-tenant leak, an unapproved side effect) rolls back immediately, without statistics.
+- Below a minimum sample per arm, it continues.
+- At any look, it rolls back if the canary's failure rate is significantly higher (one-sided test at the corrected level).
+- At the final look, it promotes only if the upper confidence bound on canary minus control is below a non-inferiority margin chosen in advance; otherwise it holds for a human, because "not significantly worse" on a small sample is not evidence of "not worse".
+
+In the same simulation its false-alarm rate is 1.5%. Group-sequential designs with alpha-spending and always-valid tests use the error budget more efficiently, and an experimentation platform should use them; a fixed-level test checked repeatedly is never acceptable.
 
 ### The evaluation platform
 
-When several teams evaluate prompts, RAG systems, and agents, these pieces become a shared platform, the system designed as Case E (Evaluation platform) in Chapter 36. Its data model is versioned and immutable: cases carry inputs, environment fixtures, deterministic expectations, rubrics, tags, and permissions; runs record every version involved, seeds, outputs, trace spans, metrics, and evaluator versions. Execution runs stochastic and agentic systems in repeated trials, sandboxes or mocks side effects, and supports replay. The gate separates hard thresholds on critical metrics from tolerated deltas, blocks on security violations regardless of averages, and publishes per-slice regressions, and the release report answers what changed, which cases changed, why, and whether the canary agrees. Chapter 36 works through its design and failure modes; this chapter is the single-team version.
+> **Deep dive.** How these pieces become a shared multi-team platform; skip on a first reading.
+
+When several teams evaluate prompts, RAG systems, and agents, these pieces become a shared platform with versioned, immutable cases and runs. Chapter 36 designs it as Case E (Evaluation platform); this chapter is the single-team version.
 
 ## How it works
 
 A merge request that touches Northwind Assist goes through the evaluation path in a fixed order:
 
-1. **Unit tests.** `pytest` runs the evaluator and gate tests; eval-marked tests are skipped. A failure here means the measuring instrument is broken, and nothing downstream is trustworthy.
-2. **Build datasets deterministically.** Each suite builds its dataset from versioned files (the shared gold labels, the invoices, the agent tasks, the tool cases), so the content hash is stable across machines and matches the hash pinned in the gate.
-3. **Run the targets.** `run_target` calls the system for each case with bounded concurrency. For the agent suite, the target is `agentkit.replay` of the case's recorded run with the candidate planner, and the result is exported to a trajectory.
-4. **Score.** Each suite's evaluators run on every output. Target crashes become failures on every declared metric; evaluator crashes are recorded as evaluator errors, which the gate refuses.
-5. **Write Run JSON.** One file per suite, carrying outputs, scores, details, latency, tokens, cost, trace ids, and the lineage of every version involved.
-6. **Gate.** `release_gate.py` loads each run and its baseline, checks the pin, applies `evalkit`'s rules and the aggregate rules, writes the summary and reports, and sets the exit code.
-7. **Publish.** The CI job uploads the artifact folder whether the gate passed or not, and the job summary shows the verdict table on the merge request.
-8. **After merge.** The release goes to a canary; traces carry versions; feedback and labels join to traces; the canary rule promotes, holds, or rolls back; corrections flow back into the regression dataset.
+1. **Unit tests.** Eval-marked tests are skipped. A failure here means the measuring instrument is broken.
+2. **Build datasets deterministically.** Each suite builds its dataset from versioned files, so the content hash is stable across machines and matches the pin in the gate.
+3. **Run the targets.** `run_target` calls the system for each case. For the agent suite, the target replays the case's recorded run with the candidate planner.
+4. **Score.** Target crashes become failures on every declared metric; evaluator crashes are recorded as evaluator errors, which the gate refuses.
+5. **Write Run JSON.** One file per suite, with outputs, scores, details, cost, trace ids, and version lineage.
+6. **Gate.** `release_gate.py` checks each run against its baseline, the pin, and the rules, and sets the exit code.
+7. **Publish.** The CI job uploads the artifacts whether the gate passed or not.
+8. **After merge.** The release goes to a canary; feedback and labels join to versioned traces; the canary rule promotes, holds, or rolls back; corrections flow back into the regression dataset.
 
 ```mermaid
 sequenceDiagram
@@ -295,9 +318,9 @@ sequenceDiagram
 
 ## Architecture
 
-The package is layered like `evalkit` itself. The evaluators take a case and an output and return scores; they never call the system under test, and apart from the judge wrappers they never call a model either. The suites wire datasets, targets, and evaluators together. The CI layer reads stored runs and configuration and never calls a model at all, which means a gate decision can be recomputed from artifacts months later.
+Evaluators take a case and an output and return scores; they never call the system under test, and only the judge wrappers call a model. Suites wire datasets, targets, and evaluators together. The CI layer reads only stored runs and configuration, so a gate decision can be recomputed from artifacts months later.
 
-Replay is a trust boundary in the other direction. Inside it, the planner under test proposes tool calls, and none of them reach a real system: results come only from the recording, approvals only from recorded human decisions. A planner that has been prompt-injected through a recorded observation can attempt anything; the worst it can do is fail its own evaluation. The same boundary applies to judges, as in Chapter 24: candidate outputs and evidence are untrusted text inside delimiters, and the gate never executes anything a judge or a planner produced.
+Replay is also a trust boundary. The planner under test proposes tool calls, and none reach a real system: results come only from the recording, approvals only from recorded human decisions. A planner prompt-injected through a recorded observation can attempt anything; the worst it can do is fail its own evaluation. The gate never executes anything a judge or planner produced.
 
 ```mermaid
 flowchart TB
@@ -335,7 +358,7 @@ flowchart TB
 
 ## Implementation
 
-The code lives in `book/projects/examples/ch25/` and imports `aie_core`, `evalkit`, and `agentkit`; it reimplements none of them. The listings below are excerpts that carry the ideas: the approval assertion and the trajectory evaluator, the event-log export, evidence checking, the classification aggregates, the synthetic answerability filter, the canary rule, and the release gate. Every listing names its file; the full files, the remaining evaluators, and the tests are on disk.
+The code lives in `book/projects/examples/ch25/` and imports `aie_core`, `evalkit`, and `agentkit`; it reimplements none of them. The listings are excerpts; each names its file, and the full files, remaining evaluators, and tests are on disk.
 
 ```
 book/projects/examples/ch25/
@@ -364,7 +387,7 @@ book/projects/examples/ch25/
   tests/                unit tests (offline) and eval-marked suite tests
 ```
 
-`pyproject.toml` declares `aie-core`, `evalkit`, and `agentkit` as editable path dependencies plus `pydantic` and `numpy`, with `pytest` and `pyyaml` as dev extras. The suites run offline by default. When you replace a stand-in with a real model, the usual `aie_core` settings apply:
+The suites run offline by default. When you replace a stand-in with a real model, the usual `aie_core` settings apply:
 
 | Variable | Used by | Meaning |
 |---|---|---|
@@ -385,7 +408,7 @@ python ci/release_gate.py --config ci/gates.toml --runs eval-out/runs --baseline
 
 ### The trajectory format and assertions
 
-The agent fixtures are real agentkit runs, recorded by `data/build_agent_runs.py` with the baseline planner, canned read tools, sandboxed write tools, and an approver. Three events from `data/agent_runs/recorded/AG-001.jsonl`, trimmed:
+The agent fixtures are real agentkit runs, recorded by `data/build_agent_runs.py` with canned read tools, sandboxed write tools, and an approver. agentkit records events such as `ToolCallRequested`, `ToolCallApproved`, `ToolCallDenied`, and `ToolResult`. Three of them from `data/agent_runs/recorded/AG-001.jsonl`, trimmed:
 
 ```json
 {"run_id": "AG-001", "seq": 26, "step": 5, "type": "tool_call_requested", "request_id": "5.0", "call_id": "c5",
@@ -397,7 +420,7 @@ The agent fixtures are real agentkit runs, recorded by `data/build_agent_runs.py
  "key": "6829a3c320480262", "ok": true, "content": "{\"sent\": true}", "data": {"sent": true}}
 ```
 
-The export (`data/trajectories/recorded/AG-001.json`) is what the assertions read:
+The export (`data/trajectories/recorded/AG-001.json`) is what the assertions read. Tool calls, approvals, and results share a `call_id`, which is agentkit's `request_id` (`5.0` above), not the raw event's `call_id` (`c5`). Only `approver` or `human` approvals count as sign-off, because agentkit also emits a routine `policy` approval for every allowed call. The `final_state` collections (such as `tickets`, `drafts`, and `sent_replies`) are projected from successful write-tool results:
 
 ```json
 {"trajectory_id": "AG-001", "task_id": "AG-001", "agent_version": "incident-agent@1",
@@ -428,9 +451,9 @@ The task specification lives in the case's `expected` field, so tasks are data a
  "tags": ["tenant:logistics", "side-effects:none", "critical"]}
 ```
 
-The intended tool catalog, `NORTHWIND_TOOLS`, copies the real tool contracts of Project 4 (the support assistant): the same argument names, required fields, enums, and patterns (`create_ticket` takes `subject`, `body`, `category`, `priority`; both reply tools take `ticket_id`, `to`, `subject`, `body`), and a test compares the two catalogs whenever Project 4 is installed. An evaluator that checks a different contract from the one the runtime enforces measures a system nobody ships. Note what is absent: no tool takes a `tenant` argument. The tenant comes from the authenticated request, the sandboxed `create_ticket` reports it in its result, and the projection takes it from there, so the end-state predicate `tenant: logistics` checks where the ticket really went rather than what the model claimed.
+The intended tool catalog, `NORTHWIND_TOOLS`, copies the tool contracts of Project 4 (the support assistant): the same argument names, required fields, enums, and patterns. A test compares the two catalogs, because an evaluator that checks a different contract from the runtime's measures a system nobody ships. No tool takes a `tenant` argument: the sandboxed `create_ticket` reports the tenant from the authenticated request, so the predicate `tenant: logistics` checks where the ticket really went, not what the model claimed.
 
-Two of the assertions and the evaluator that composes them, from `trajectory.py`. The other assertions (allowed tools, loops and cycles, step efficiency, tool arguments), the models, the tool catalog, and `pass_at_k` are on disk:
+Two of the assertions and the evaluator that composes them, from `trajectory.py`:
 
 ```python
 # path: book/projects/examples/ch25/taskevals/trajectory.py (excerpt; full file on disk)
@@ -491,7 +514,7 @@ class TrajectoryEvaluator:
 
 ### Exporting agentkit logs and replaying them
 
-The heart of the export is one pass over the events that keeps only what the assertions need: tool calls, human approvals (plus approvals carried over from the original recording during replay), results with their status, and end-state records projected from successful writes. The replay target on disk, `agentkit_replay_target`, is a short wrapper around this function: it runs `agentkit.replay(original, llm, system_prompt=...)` with the candidate planner and exports the replayed events with `carry_approvals_from=original`, so only recorded human approvals count. Usage accounting, `northwind_projection`, and `replay_fidelity_evaluator` are on disk too:
+The export is one pass over the events that keeps what the assertions need: tool calls, human approvals, results with their status, and end-state records projected from successful writes. The replay target, `agentkit_replay_target`, runs `agentkit.replay` with the candidate planner and exports the replayed events with `carry_approvals_from=original`, so only the original run's human approvals count:
 
 ```python
 # path: book/projects/examples/ch25/taskevals/replay.py (excerpt; full file on disk)
@@ -534,11 +557,11 @@ def trajectory_from_events(
     # ...
 ```
 
-A denied call keeps its `ToolCallRequested` event, so the export shows the attempt and the allowed-tools assertion fails on it. A runtime that silently dropped denied calls would hide exactly the behavior the evaluation exists to see; agentkit's event log does not.
+A denied call keeps its `ToolCallRequested` event, so the export shows the attempt and the allowed-tools assertion fails on it. A runtime that silently dropped denied calls would hide exactly the behavior the evaluation exists to see.
 
 ### Extraction
 
-The evaluator reuses Chapter 24's `field_prf` for the counting rules, reweights the per-field outcomes in `weighted_field_prf` (on disk), and checks evidence with a whole-token match so that a quote of `11,488.00` does not vouch for `1,488.00`:
+The evaluator reuses Chapter 24's `field_prf`, reweights the per-field outcomes, and checks evidence with a whole-token match:
 
 ```python
 # path: book/projects/examples/ch25/taskevals/extraction.py (excerpt; full file on disk)
@@ -574,9 +597,13 @@ class ExtractionEvaluator:
         # ... six Scores: weighted P/R/F1, critical_fields_exact, line_item_recall, evidence_correct
 ```
 
-Evidence is scored only for fields whose value was correct. A wrong value's evidence is already covered by the field failure, and scoring it again would double-count one error.
+Evidence is scored only for fields whose value was correct; scoring a wrong value's evidence would double-count one error.
 
 ### Classification aggregates
+
+> **Deep dive.** How run-level classification metrics are rebuilt from stored scores; skip on a first reading.
+
+`classification_aggregates` reads the gold label, prediction, and confidence stored in each case's score detail, so the gate can recompute the aggregates from the Run JSON alone. An out-of-set prediction maps to an `__invalid__` column, so it counts as wrong instead of crashing the matrix:
 
 ```python
 # path: book/projects/examples/ch25/taskevals/classification.py (excerpt; full file on disk)
@@ -602,6 +629,10 @@ def classification_aggregates(run: Run, labels: Sequence[str], *, n_bins: int = 
 
 ### Synthetic validation
 
+> **Deep dive.** The answerability filter that removes most hallucinated synthetic cases; skip on a first reading.
+
+The answerability filter is the second of the validation steps from Core concepts. Each check returns the rejection reason that the batch report counts:
+
 ```python
 # path: book/projects/examples/ch25/taskevals/synthetic.py (excerpt; full file on disk)
 def answerable(item: SyntheticItem, source: str) -> tuple[bool, str]:
@@ -619,9 +650,13 @@ def answerable(item: SyntheticItem, source: str) -> tuple[bool, str]:
     return True, ""
 ```
 
-`validate_candidates` applies the filters in the order described earlier, records every rejection under its reason, and returns `EvalCase`s with `origin:synthetic`, a difficulty tag, the source document as group key, and `review: pending`.
+`validate_candidates` applies all the filters in order and returns the survivors as tagged `EvalCase`s.
 
 ### The canary rule
+
+> **Deep dive.** The planned-looks canary rule in code; skip on a first reading.
+
+`observe` is called once per planned look with each arm's cumulative counts. The order of the branches is the order of the four outcomes: critical events first, then the minimum sample, then the harm test, and promotion only at the final look:
 
 ```python
 # path: book/projects/examples/ch25/taskevals/online.py (excerpt; full file on disk)
@@ -657,9 +692,11 @@ class CanaryMonitor:
         return CanaryDecision(decision="continue", reason="no significant harm yet", z=z, upper_bound=upper, **base)
 ```
 
-The counts passed to `observe` are cumulative per arm. The rule uses a normal approximation, which is adequate at the sample sizes a canary needs anyway; for failure rates near zero, use an exact or Wilson interval instead.
+The normal approximation is adequate at canary sample sizes; for failure rates near zero, use an exact or Wilson interval.
 
 ### The release gate
+
+`evaluate_suite` turns every way the inputs can be broken into an `error` verdict rather than a skipped check, and `main` maps any error to exit 2:
 
 ```python
 # path: book/projects/examples/ch25/ci/release_gate.py (excerpt; full file on disk)
@@ -710,7 +747,7 @@ def main(argv: list[str] | None = None) -> int:
     return EXIT_PASS if all(v.status == "pass" for v in verdicts) else EXIT_FAIL
 ```
 
-The gate configuration for the classification suite, and the two rules that make the agent suite safe to trust (the extraction and tools sections, and the rest of the agent section, are on disk):
+The gate configuration for the classification suite, and the two rules that make the agent suite trustworthy:
 
 ```toml
 # path: book/projects/examples/ch25/ci/gates.toml (excerpt; full file on disk)
@@ -762,6 +799,10 @@ min_mean = 0.9                       # below this the replay result says little
 
 ### The pytest plugin
 
+> **Deep dive.** How eval-marked tests are selected and kept out of the default run; skip on a first reading.
+
+The plugin skips any eval-marked test whose level was not selected, so a plain `pytest` never calls a suite:
+
 ```python
 # path: book/projects/examples/ch25/ci/pytest_evalplugin.py (excerpt; full file on disk)
 LEVELS = {"none": set(), "fast": {"eval_fast"}, "full": {"eval_fast", "eval_full"}}
@@ -778,7 +819,7 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
                 item.add_marker(pytest.mark.skip(reason=f"{marker} not selected (use --eval-suite)"))
 ```
 
-The project's `conftest.py` puts `ci/` on the path and declares `pytest_plugins = ["pytest_evalplugin"]`. The eval tests themselves are short, and assert harness health, never quality:
+The eval tests assert harness health, never quality:
 
 ```python
 # path: book/projects/examples/ch25/tests/test_eval_suites.py (excerpt; full file on disk)
@@ -794,7 +835,9 @@ def test_fast_suite_runs_cleanly(suite, eval_system, record_run) -> None:
 
 ### The CI definitions
 
-The repository carries the same evaluation job for two common CI systems: `ci/github/eval-gate.yml` for GitHub Actions and `ci/gitlab/.gitlab-ci.yml` for GitLab CI. The GitHub version installs the packages, runs the unit tests as one job, and runs the eval suite and the gate as a second. The eval step runs `pytest --eval-suite fast` on merge requests and `full` on the nightly schedule, with provider keys only in the nightly job. The part worth reading is the tail of the gate job: where the trusted configuration comes from, and the upload that runs whether the gate passed or not.
+> **Deep dive.** The same job for two CI systems, and where the trusted gate config comes from; skip on a first reading.
+
+The repository carries the same job for two common CI systems, as examples: `ci/github/eval-gate.yml` (GitHub Actions) and `ci/gitlab/.gitlab-ci.yml` (GitLab CI). The eval step runs `--eval-suite fast` on merge requests and `full` nightly, with provider keys only in the nightly job. The tail of the gate job shows where the trusted configuration comes from and the upload that runs whether the gate passed or not:
 
 ```yaml
 # path: book/projects/examples/ch25/ci/github/eval-gate.yml (excerpt; full file on disk)
@@ -823,27 +866,34 @@ The repository carries the same evaluation job for two common CI systems: `ci/gi
           retention-days: 90
 ```
 
-The two definitions are deliberately the same shape: install, unit tests, eval suite, gate, artifact. The gate script is the only place where pass or fail is decided, so the pipeline file contains no thresholds and the same gate runs locally, in GitHub Actions, in GitLab CI, or in any other runner that can execute Python and keep a folder.
+The pipeline file contains no thresholds, so the same gate runs locally or in any runner.
 
 ### Stand-ins and tests
 
-The four suites need systems to evaluate. `standins.py` provides deterministic `FakeLLM`-based stand-ins, each with baseline, candidate, and regressed behaviors that mirror realistic changes (the walkthrough below describes them as it uses them). They exercise the real code paths (`CompletionRequest`, `complete_structured`, tool calls), and replacing any of them with `aie_core.make_llm_client()` evaluates a real model on the same suites.
-
-A plain `python -m pytest -q` runs the unit tests offline in a few seconds and skips the eval-marked tests; `python -m pytest -q --eval-suite full -m "eval_fast or eval_full"` runs only the suites.
+`standins.py` provides deterministic `FakeLLM`-based stand-ins for the four suites, each with baseline, candidate, and regressed behaviors that mirror realistic changes. They exercise the real code paths, and replacing any of them with `aie_core.make_llm_client()` evaluates a real model on the same suites. `python -m pytest -q --eval-suite full -m "eval_fast or eval_full"` runs only the suites.
 
 ## Code walkthrough
 
-Run the suites for each stand-in system and read what each evaluator reports. Every number below comes from the code on disk; the systems are stand-ins, so the numbers illustrate the mechanics rather than any real model.
+Run the suites for each stand-in system and read what each evaluator reports. The numbers come from the code on disk and illustrate mechanics, not any real model.
 
-**Classification.** The candidate improves accuracy from 0.889 to 0.921 and macro-F1 from 0.896 to 0.922 on 63 cases, with a paired delta of +0.032 [+0.000, +0.079] and a win/loss/tie record of 2/0/61. The aggregate that matters moves much more: recall on `security_report`, six gold tickets, goes from 0.667 to 1.0, and the injection cases pass for both versions, because the candidate added specific security phrases rather than a rule that fires on the bare word "security", which an injected ticket can simply include. Calibration moves the other way, ECE from 0.096 to 0.121, because the stand-in's confidence formula did not change while its decisions did. The gate's ceiling of 0.15 passes it, and the reliability bins show where to look before an escalation threshold depends on that confidence.
+**Classification.** The candidate improves accuracy from 0.889 to 0.921 and macro-F1 from 0.896 to 0.922 on 63 cases. The aggregate that matters moves much more: recall on `security_report`, six gold tickets, goes from 0.667 to 1.0. The injection cases pass for both, because the candidate added specific security phrases rather than a rule on the bare word "security", which an injected ticket can include. Calibration error (ECE) worsens from 0.096 to 0.121, under the gate's ceiling of 0.15, because the stand-in's confidence formula did not change while its decisions did.
 
-**Extraction.** The baseline extractor scores weighted field recall 0.984 and precision 1.0. The per-case scores locate the misses exactly: the five letter-format invoices, where the PO number sits in a sentence rather than a labeled field. The evidence metric flags one invoice, INV-007, where the total's quote points at the subtotal line, although the stand-in cites the subtotal line on all five statement-format invoices. On the other four, with no tax and no discount, subtotal and total are the same number, so the wrong line still contains the right value; INV-007 is caught only because its stated total differs from its subtotal, a deliberate inconsistency in the shared data that its validation record flags. That is the blind spot described earlier, found by the walkthrough rather than invented for it, and it is why evidence checks should also compare the quote's position or label ("TOTAL", "Subtotal") when a document can repeat a value. The candidate fixes both defects and scores 1.0 on every extraction metric.
+**Extraction.** The baseline scores weighted field recall 0.984 and precision 1.0. The misses are the five letter-format invoices, where the PO number sits in a sentence rather than a labeled field. The stand-in quotes the subtotal line as the total's evidence on all five statement-format invoices, yet the evidence metric flags only INV-007. On the other four, with no tax or discount, subtotal equals total, so the wrong line still contains the right value. That is the blind spot from Core concepts, and why evidence checks should also compare the quote's label ("TOTAL", "Subtotal"). The candidate fixes both defects and scores 1.0 on every extraction metric.
 
-**Agent replay.** The baseline planner's replay reproduces every recorded decision ("identical: 6 decisions reproduced" on AG-001) and passes every assertion, with mean step efficiency 0.917: on the PTO task it searches past tickets before drafting, three calls where the reference needs two. The candidate drops the redundant search; agentkit reports a divergence at step 2 with zero misses, and efficiency reaches 1.0. The regressed planner fails two of four tasks. On AG-001 it files the ticket at P2: the call is a replay miss (fidelity 0.8 on that case), the argument check reports `create_ticket:3.0 priority='P2' want 'P1'`, and the end-state predicate for a P1 ticket fails. On AG-002 it retries an unchanged search: agentkit's own guard denies the third identical call and stops the run with `repeated_action`, the loop check reports `search_tickets repeated 3x with identical arguments`, and completion fails because no ticket was filed. The runtime guard and the evaluator agree because both read the same event log.
+**Agent replay.** The baseline planner's replay reproduces every recorded decision and passes every assertion, with mean step efficiency 0.917 (on the PTO task it makes three calls where the reference needs two). The candidate drops the redundant search (a divergence at step 2 with zero misses), and efficiency reaches 1.0. The regressed planner fails two of four tasks. On AG-001 it files the ticket at P2: the call is a replay miss (fidelity 0.8 on that case), the argument check reports `create_ticket:3.0 priority='P2' want 'P1'`, and the P1 end-state predicate fails. On AG-002 it retries an unchanged search: agentkit's guard stops the run with `repeated_action` at the third identical call, the loop check reports `search_tickets repeated 3x with identical arguments`, and completion fails.
 
-The four production runs show the evaluator auditing recorded logs, each recorded by agentkit under a realistic misconfiguration. Each defect is caught by the assertions aimed at it and by no others. P-101 registered `send_reply` as a reversible write without `requires_approval`, which defeats both of agentkit's approval triggers, so the reply went out with only a routine policy approval: `traj_approval` fails. P-102 raised `max_identical_calls` to 5, so the retry loop executed four searches: `traj_no_loops` and `traj_efficiency` fail. P-103 had no allow-list, so HR data was read through `query_metrics`: `traj_allowed_tools` fails. P-104 ran with a `create_ticket` schema whose enum had drifted away, so priority `urgent` passed runtime validation: `traj_tool_args` and `traj_task_completed` fail. In every case the runtime enforced the configuration it was given; evaluation compares what happened with the intended catalog. P-101 is the chapter's opening story: its end state is perfect, `traj_task_completed` passes, and `traj_success` still fails because `traj_safe` fails.
+Four production runs, recorded under realistic misconfigurations, show the evaluator auditing logs. Each defect is caught by the assertions aimed at it and no others:
 
-**Tool use.** Both baseline and candidate select the right tool on 11 of 12 cases. The miss is TU-001, "Is the vpn-gateway down right now?", which contains none of the stand-in's status keywords; the selector answers directly instead of calling `get_service_status`. The regressed selector picks the same tools but writes priority `high` on the three ticket-creation cases, so argument validity drops to 0.75 while selection accuracy is unchanged. A suite that measured only selection would have shipped it.
+| Run | Misconfiguration | Effect | Failing assertions |
+|---|---|---|---|
+| P-101 | `send_reply` registered without `requires_approval` | reply sent with only a routine policy approval | `traj_approval` |
+| P-102 | `max_identical_calls` raised to 5 | retry loop executed four searches | `traj_no_loops`, `traj_efficiency` |
+| P-103 | no allow-list | HR data read through `query_metrics` | `traj_allowed_tools` |
+| P-104 | `create_ticket` enum drifted | priority `urgent` passed runtime validation | `traj_tool_args`, `traj_task_completed` |
+
+Evaluation compares what happened with the intended catalog, not the runtime's configuration. P-101 is the opening story: `traj_task_completed` passes, yet `traj_success` fails because `traj_safe` fails.
+
+**Tool use.** Baseline and candidate both select the right tool on 11 of 12 cases. The miss is TU-001, "Is the vpn-gateway down right now?", which has none of the stand-in's status keywords. The regressed selector picks the same tools but writes priority `high` on the three ticket-creation cases, so argument validity drops to 0.75 while selection accuracy is unchanged. A suite that measured only selection would have shipped it.
 
 **The gate.** With the candidate's runs, every suite passes and `release_gate.py` exits 0. With the regressed runs, it exits 1 and the summary reads:
 
@@ -869,52 +919,48 @@ The four production runs show the evaluator auditing recorded logs, each recorde
 | tools | tool_args_valid all pass | 3 failing | 0 | TU-003, TU-004, TU-012 |
 ```
 
-Two details deserve attention. The extraction regression check fires on the point estimate while the paired interval, [-0.067, +0.002], still includes zero: on 20 invoices the statistics cannot prove the regression, and the gate does not need them to, because the critical-field rule names four invoices that would have been paid at the subtotal. And the extraction win/loss record of 5/4/11 is not a typo: the regressed extractor also inherits the candidate's PO fix on letter invoices, so it wins five cases while losing four critical ones. The mean moves only slightly; the critical-field rule still blocks the release.
+Two details deserve attention. The extraction regression check fires on the point estimate while the paired interval, [-0.067, +0.002], still includes zero. On 20 invoices the statistics cannot prove the regression, and the gate does not need them to: the critical-field rule names four invoices that would have been paid at the subtotal. And the win/loss record of 5/4/11 is not a typo. The regressed extractor also inherits the candidate's PO fix on letter invoices, so it wins five cases while losing four critical ones; the mean barely moves, and the critical-field rule still blocks.
 
-**Synthetic data.** The pipeline keeps 2 of 5 generated items on the PTO policy: a fabricated quote, an answer whose number the quote does not contain, and a near-duplicate are rejected, and the survivors are tagged easy-lexical and hard-paraphrase.
+**Synthetic data.** The pipeline keeps 2 of 5 generated PTO items, rejecting a fabricated quote, an answer whose number the quote lacks, and a near-duplicate.
 
 ## Production considerations
 
-**Latency and cadence.** The fast suite must finish in the time a reviewer is willing to wait, a few minutes. That budget decides its contents: every deterministic check, every critical and adversarial case, and samples rather than full sets for anything that calls a real model. Replay helps here, because it removes tool latency and lets agent cases run in parallel without contending for shared systems. Repeated trials, judges, and large samples go to the nightly tier.
+**Latency and cadence.** The fast suite must finish in the few minutes a reviewer will wait; replay helps by removing tool latency. Repeated trials, judges, and large samples go nightly.
 
-**Cost.** Evaluation spend scales with cases times trials times judged dimensions times systems compared. Replay cuts agent cost to the planner's own calls. Judge verdict caching (keyed by judge version, case id, and output hash, Chapter 24's exercise P1) means an unchanged output is never judged twice. Route evaluation calls through the same `aie_core` gateway as production so that cost accounting and rate limits apply, and give evaluation its own budget line so that an expensive nightly suite is a visible decision rather than a surprise.
+**Cost.** Evaluation spend scales with cases times trials times judged dimensions times systems compared. Replay cuts agent cost to the planner's own calls, and judge verdict caching (Chapter 24, exercise P1) avoids judging an unchanged output twice. Give evaluation its own budget line.
 
-**Security.** Recorded trajectories and production-sampled cases contain real requests, employee data, and tool outputs. Redact before they enter a dataset, keep tenant tags, and store them with the access controls of the systems they came from. CI jobs that call real providers need secrets from the CI secret store, scoped to the nightly job; merge-request pipelines from forks must never receive them. Replay and sandboxes exist partly for security: an evaluation run must not be able to send a message, write a ticket, or call a production API. Treat any evaluation job that can reach production tools as a production deployment and review it as one.
+**Security.** Recorded trajectories and sampled cases contain real requests and employee data: redact them and keep the source systems' access controls. Treat any evaluation job that can reach production tools as a production deployment.
 
-**Operations.** Every suite needs an owner who approves changes to its gate section, a dataset refresh cadence, and a baseline policy (written by the release job, never by hand in a feature branch). Route exit 2 to the pipeline owner and exit 1 to the change owner. Watch the gate's own health (the block rate and the share of blocks later overridden): a gate that blocks on noise teaches people to bypass it, and Chapter 24's tolerances and minimum slice sizes are the levers.
-
-**Online loop.** Review corrections weekly, promote them to regression cases after redaction, and compare each release's offline verdict with its canary outcome. Repeated disagreement means the offline datasets have drifted from traffic. The fix is to refresh them with a production sample rather than adjust thresholds.
+**Operations.** Every suite needs an owner who approves changes to its gate section. Route exit 2 to the pipeline owner and exit 1 to the change owner. Watch the gate's override rate: a gate that blocks on noise teaches people to bypass it. When offline verdicts and canary outcomes repeatedly disagree, refresh the datasets with a production sample rather than adjusting thresholds.
 
 ## Common mistakes
 
-These are design mistakes made before anything runs. Mistakes that surface as a symptom in production or CI (replay divergence, fooled evidence checks, biased synthetic slices, gates that pass on missing inputs, canary peeking) are under Failure modes with their telemetry.
-
-- **Grading agents on the final answer or its text.** It misses unauthorized calls, missing approvals, loops, and lucky recoveries, and "I have created the ticket" is a claim, not a ticket. Evaluate the trajectory and the end state, and define success to require safety.
-- **Unweighted field accuracy for extraction.** A 98% average can hide every error on the total. Weight fields, and require critical fields on every document.
-- **Accuracy as the classification headline.** Use macro-F1 and per-class recall on costly classes; measure calibration when confidence drives decisions.
-- **Gating summaries on one dimension.** Faithfulness alone approves copying the source; compression alone approves empty summaries.
-- **Thresholds in assert statements.** They drift, get loosened to make builds green, and cannot be reviewed as a set. Put them in one gate file with an owner.
-- **Gate config and baselines read from the branch under test.** A change can then relax the bar it is judged against. Read both from the default branch.
+- **Grading agents on the final answer.** "I have created the ticket" is a claim, not a ticket. Evaluate the trajectory and end state, and define success to require safety.
+- **Unweighted field accuracy for extraction.** A 98% average can hide every error on the total.
+- **Accuracy as the classification headline.** Use macro-F1 and recall on costly classes.
+- **Gating summaries on one dimension.** Each of coverage, faithfulness, and compression alone approves a bad summary.
+- **Thresholds in assert statements.** They drift and cannot be reviewed as a set; put them in one gate file with an owner.
+- **Gate config and baselines read from the branch under test.** A change can then relax the bar it is judged against.
 
 ## Failure modes
 
-**Unsafe success hidden by end-state grading.** The agent's end states are all correct, and an audit finds side effects without approval. Telemetry: in the trajectories, `send_reply` results with status ok and no preceding approval for the same call id; in production, approval-service logs with fewer approvals than sends. Test: `traj_approval` as a must-pass-all metric; a recorded production trajectory such as P-101 kept in the regression set.
+**Unsafe success hidden by end-state grading.** End states are all correct, and an audit finds side effects without approval. Telemetry: `send_reply` results with status ok and no preceding approval for the same call id; fewer approvals than sends in approval-service logs. Test: `traj_approval` as must-pass-all; production trajectories such as P-101 kept in the regression set.
 
-**Replay divergence masquerading as improvement.** A new planner takes a different path, every call is a replay miss, the projected end state is empty, and nothing fails loudly because "unrecorded" observations look like ordinary errors to the planner. Telemetry: `replay_fidelity` far below 1.0; spikes in tool results with status `unrecorded`. Test: gate on mean fidelity; route low-fidelity cases to a live sandbox run.
+**Replay divergence masquerading as improvement.** A new planner takes a different path, every call misses, and nothing fails loudly because "unrecorded" observations look like ordinary errors to the planner. Telemetry: `replay_fidelity` far below 1.0; spikes in `unrecorded` results. Test: gate on mean fidelity; route low-fidelity cases to a live sandbox run.
 
-**Loop detection blind to cycles.** The planner alternates between two calls (search, status, search, status), so no single call repeats often enough to trip the identical-action limit. Telemetry: tool-call counts per trajectory rising toward the budget while identical-action counts stay low; `stop_reason` equal to `max_steps` or `max_tool_calls`. Test: cycle detection over short cycle lengths (two and three calls), a step budget, and a case in the test suite with an A, B, A, B pattern.
+**Loop detection blind to cycles.** The planner alternates between two calls, so no single call trips the identical-action limit. Telemetry: tool-call counts rising toward the budget while identical-action counts stay low; `stop_reason` of `max_steps` or `max_tool_calls`. Test: cycle detection over two- and three-call cycles and an A, B, A, B test case.
 
-**Evidence check fooled by repeated values.** A quote of the wrong line passes because the line contains the same number, as with the untaxed statements in the walkthrough. Telemetry: evidence pass rate near 100% while reviewers report wrong highlights. Test: compare the quote's label or position as well as its value; add cases where two lines share a number.
+**Evidence check fooled by repeated values.** A quote of the wrong line passes because it contains the same number. Telemetry: evidence pass rate near 100% while reviewers report wrong highlights. Test: compare the quote's label as well as its value; add cases where two lines share a number.
 
-**Synthetic slice inflates retrieval scores.** Retrieval recall on the synthetic slice is far above the golden slice, and production retrieval looks like the golden slice. Telemetry: `bias_report` overlap gap well above zero; difficulty tags dominated by easy-lexical. Test: report slices separately; seed hard paraphrase questions written by people; generate with a different model family.
+**Synthetic slice inflates retrieval scores.** Recall on the synthetic slice is far above the golden slice, and production looks like the golden slice. Telemetry: a large `bias_report` overlap gap; mostly easy-lexical tags. Test: report slices separately; seed hard paraphrases written by people.
 
-**Gate passes with a missing suite.** The agent suite crashed before writing its run, and a gate that iterated over the files it found reported success. Telemetry: fewer run files than configured suites. Test: iterate over configured suites and exit 2 for any missing run, as `test_missing_run_is_an_error_not_a_pass` pins.
+**Gate passes with a missing suite.** The agent suite crashed before writing its run, and a gate that iterated over the files present reported success. Telemetry: fewer run files than configured suites. Test: iterate over configured suites and exit 2 for any missing run, as `test_missing_run_is_an_error_not_a_pass` pins.
 
-**Gate passes with a lost baseline.** The baseline artifact expired, the gate found no file, and regression rules were skipped while absolute floors passed. Telemetry: the gate summary lists no regression or slice checks for a suite that normally has them. Test: `require_baseline = true` per suite, and a test that runs the gate against an empty baselines folder.
+**Gate passes with a lost baseline.** The baseline artifact expired, and regression rules were skipped while absolute floors passed. Telemetry: no regression or slice checks in the summary for a suite that normally has them. Test: `require_baseline = true` and a gate run against an empty baselines folder.
 
-**Baseline drift.** A baseline refreshed from a feature branch lowers the bar for the next release. Telemetry: the baseline's lineage in the report does not match the last release tag. Test: only the release job writes baselines.
+**Baseline drift.** A baseline refreshed from a feature branch lowers the bar for the next release. Telemetry: the baseline's lineage does not match the last release tag. Test: only the release job writes baselines.
 
-**Canary false alarms or false comfort.** Releases roll back on noise, or a harmful release is promoted because the sample was too small to show the harm. Telemetry: rollbacks whose follow-up investigation finds no change; promotions whose upper bound was far above the margin. Test: the simulation in the test suite for false alarms; the hold outcome for inconclusive final looks.
+**Canary false alarms or false comfort.** Releases roll back on noise, or a harmful release is promoted on too small a sample. Telemetry: rollbacks whose investigation finds no change; promotions with an upper bound far above the margin. Test: the false-alarm simulation and the hold outcome.
 
 ## Tradeoffs
 
@@ -934,13 +980,13 @@ These are design mistakes made before anything runs. Mistakes that surface as a 
 
 ## Evaluation and testing
 
-Evaluators are code whose bugs look like model regressions, so their conventions need pinning. For each evaluator, one test shows that a perfect output scores 1.0 on every metric; then one test per failure class builds the smallest output that exhibits it and asserts the exact metric and detail: a wrong total fails the critical metric with detail `["total"]` and counts as both false positive and false negative; an invented PO number lowers precision but not recall; an approval recorded after execution is a violation; a two-call cycle trips the loop check. Tests of this shape double as documentation of the metric definitions.
+Evaluators are code whose bugs look like model regressions, so pin their conventions. For each evaluator, one test shows a perfect output scores 1.0 everywhere, then one test per failure class builds the smallest output that exhibits it and asserts the exact metric and detail (a wrong total fails the critical metric with detail `["total"]`; a two-call cycle trips the loop check).
 
-Test the harness on known stories. A parametrized test asserts that each recorded production trajectory is caught by exactly the expected assertions, and suite tests assert that the baseline extractor misses exactly the five letter invoices and that the regressed planner fails exactly AG-001 and AG-002. When an evaluator change alters those sets, someone has to explain why.
+Test the harness on known stories: each production trajectory is caught by exactly the expected assertions, and the regressed planner fails exactly AG-001 and AG-002. When an evaluator change alters those sets, someone has to explain why.
 
-Test the gate as a program. The tests run the real `run_suite.py` and `release_gate.py` entry points and assert exit codes: 0 for the candidate, 1 for the regressed system with the failing invoices named in the summary, 2 for a missing run and for an invalid configuration, 1 when a pinned hash does not match, 1 when the baselines folder is empty, and 1 when an aggregate floor is raised above the observed macro-F1. Another test parses both CI definitions as YAML and checks that they call the gate and the fast suite, which catches the most common CI breakage: a renamed script.
+Test the gate as a program, asserting the real entry points' exit codes: 0 for the candidate; 1 for the regressed system, a hash mismatch, an empty baselines folder, or an aggregate floor above the observed macro-F1; 2 for a missing run or an invalid configuration. Another test checks that both CI definitions call the gate and the fast suite, catching a renamed script.
 
-Test the online statistics by simulation. The A/A simulation asserts that naive peeking exceeds 10% false alarms and that the planned-looks rule stays at or below 6%; deterministic tests cover the critical-event rollback, the minimum-sample rule, promotion only at the final look, and the hold outcome. Finally, meta-evaluate the whole system the way Chapter 24 recommends: each quarter, compare offline verdicts with canary outcomes and correction rates for the same releases. Disagreement there outranks any single gate result.
+Test the canary rule by simulation: naive peeking must exceed 10% false alarms and the planned-looks rule stay at or below 6%. Finally, each quarter compare offline verdicts with canary outcomes for the same releases (Chapter 24's meta-evaluation); disagreement there outranks any single gate result.
 
 ## Before you ship
 

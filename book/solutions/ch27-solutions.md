@@ -153,7 +153,7 @@ which restores service while the effect controls keep holding. Durable: pin the 
 add the benign set as an FP gate that runs on any classifier change, and alert on block-rate step changes
 per check.
 
-**D3.** The leak is outside the guardrail pipeline: the `llm.call` spans are emitted by the model gateway in
+**D3.** The leak is outside the guardrail pipeline: the `llm.complete` spans are emitted by the model gateway in
 `aie_core` with a tracer that is not wrapped in `RedactingTracer` (for example `get_tracer()` was passed to
 the gateway directly while only the guardrail pipeline received the redacting wrapper), or the gateway
 records prompt content under an attribute name that `drop_keys` does not cover and `scrub` did not

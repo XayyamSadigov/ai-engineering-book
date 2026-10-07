@@ -849,7 +849,7 @@ The approval UI shows the same recipient and body. Diagnose the most likely root
 
 **D2.** The RAG assistant's input block rate jumped from 0.2 percent to 9 percent overnight with no code change. All blocks have `blocked_by=injection_classifier` and `error=false`, with confidence scores clustered near 0.91. What changed, how do you confirm it from telemetry, and what immediate and durable remediations do you apply?
 
-**D3.** A security review finds full customer email addresses in the trace store, in spans named `llm.call`, even though every guardrail span shows only hashes and sizes. The guardrail pipeline is configured with `RedactingTracer`. Where is the leak, and what test would have caught it?
+**D3.** A security review finds full customer email addresses in the trace store, in spans named `llm.complete`, even though every guardrail span shows only hashes and sizes. The guardrail pipeline is configured with `RedactingTracer`. Where is the leak, and what test would have caught it?
 
 ## Key takeaways
 

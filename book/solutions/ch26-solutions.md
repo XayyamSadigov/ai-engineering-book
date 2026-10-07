@@ -84,10 +84,10 @@ regex detector is acceptable only as an early-warning layer that raises a signal
 be authorization, least privilege, and egress control that block the effect regardless of wording.
 
 **E4.** Contract for `send_reply`:
-- **Schema:** `{to: string (email), subject: string, body: string, reply_to_ticket: string}`, all
+- **Schema:** `{ticket_id: string, to: string (email), subject: string, body: string}` (the argument names of Project 4's tool), all
   required, with length caps on subject and body.
 - **Authorization:** the gateway checks that the requesting end user is permitted to correspond on
-  `reply_to_ticket` and that `to` is on the recipient allowlist for that user and tenant. The check uses
+  `ticket_id` and that `to` is on the recipient allowlist for that user and tenant. The check uses
   the user's identity, never the agent's service identity.
 - **Approval:** required. The approval request shows the exact `to`, `subject`, and `body`, and the
   approval binds to those concrete arguments; changing any argument voids it.

@@ -323,7 +323,7 @@ The chapter's code is intentionally light; the heavy guardrail implementations l
 
 `attack_corpus.py` builds a small adversarial corpus for red-teaming your own Northwind test deployment. It produces sensitive documents, each stamped with a unique canary, and adversarial carrier documents, one per injection technique: plain, HTML comment, base64, fake tool output, and markdown-image exfiltration. It also provides effect detectors (canary-leak detection, URL extraction, image-URL extraction, an off-allowlist URL check) and a base64 decoder used to explain why keyword filtering fails. Destinations use reserved `.example` and `.invalid` domains so nothing can leave even by accident.
 
-`threat_model.py` provides the dataclasses, the consistency validator, the risk ordering, the control extractor, and a Markdown renderer, plus the two worked Northwind models rendered in the next section.
+`threat_model.py` provides the dataclasses, the consistency validator, the risk ordering, the control extractor, and a Markdown renderer, plus the two worked Northwind models rendered later in the chapter.
 
 The core of `threat_model.py` is two types. A `Threat` is one (entry point, effect) pair with its controls; a `ThreatModel` holds the inventory and enforces its own consistency:
 

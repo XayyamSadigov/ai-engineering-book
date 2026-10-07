@@ -147,6 +147,21 @@ Acceptance criteria:
 2. A planner that calls `create_ticket` before `search_docs` fails the ordering constraint.
 3. The aggregate numbers match a hand calculation for the ten runs.
 
+**P5.** Expected implementation:
+
+- `ModelDecision` gains `provider_items: list[dict[str, Any]] = []` and `items_origin: dict[str, str] = {}` (provider and model). Old logs still load, because both fields default to empty.
+- The provider adapter puts the items it receives into `Completion.raw` (for example under `"provider_items"`), and `_model_step` copies them into the event verbatim. Nothing in the harness parses or edits them.
+- The transport back to the adapter is a design choice that must be justified. Two workable options: extend the assistant `Message` with an optional field in a fork of the neutral type, or keep the items in `AgentState` keyed by the assistant message's position (or by the first tool call id of that turn) and pass them in `CompletionRequest.metadata`, where the adapter reattaches them next to the matching assistant turn. Either way, `apply` is the only place that builds the mapping, so resume and replay rebuild it from the log.
+- Compaction or any transcript rewrite keeps a turn's items, its tool calls, and their tool results together, or drops all of them.
+- `RecordedLLM` returns the recorded items in `raw`, so harness replay sends them back exactly as the original run did. `replay(..., llm=new_client)` strips items whose `items_origin` does not match the new client's provider and model.
+
+Acceptance criteria:
+
+1. A fake client that returns an opaque item with each tool call and raises a non-retryable `LLMError` when the next request lacks the item, or carries an altered one, completes a three-step run.
+2. Removing the field from `apply` (a deliberate regression) makes the same test stop with `MODEL_ERROR` on step 2, which is the failure the test exists to catch.
+3. `derive_state(events)` still equals the live state, and a run resumed after a crash at step 2 sends the step 1 item on its next call.
+4. Counterfactual replay with a fake client of a different provider sends no recorded items.
+
 ## Debugging exercises
 
 **D1.** Separate the two changes with replay, holding everything else fixed.

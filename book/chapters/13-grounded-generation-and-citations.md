@@ -117,7 +117,7 @@ The validator runs after every generation and before any display. Its checks go 
 
 **Support.** A cited block must actually support the claim. The deterministic check is lexical: the share of the claim's content words (stopwords removed, light stemming) that appear in the cited blocks, plus a strict rule for numbers. One number in the claim that the evidence never states makes the claim unsupported, whatever the word overlap, because invented figures are the most frequent and most damaging grounded-answer failure. The block's identity metadata (document id, title, version, date) counts as support text, so a claim like "the HR FAQ, version 1.4, says five days" can pass. Text inside flagged instruction-like spans does not count, which matters for injection, as the failure modes section shows.
 
-Lexical support is a cheap first filter, not a faithfulness judge. It catches invented numbers and claims that share little vocabulary with their sources. It misses paraphrases that reverse meaning ("may not carry over" against "may carry over"), and it can reject an honest paraphrase that uses different words. Set its threshold from labeled data (Chapter 14), and treat its verdicts as one signal.
+Lexical support is a cheap first filter, not a groundedness judge. It catches invented numbers and claims that share little vocabulary with their sources. It misses paraphrases that reverse meaning ("may not carry over" against "may carry over"), and it can reject an honest paraphrase that uses different words. Set its threshold from labeled data (Chapter 14), and treat its verdicts as one signal.
 
 **Quotes.** When a claim carries a quote, the quote must appear verbatim in a cited block, modulo whitespace, case, and Markdown emphasis. This check is exact and cheap, which is why quote-then-answer (below) is attractive.
 
@@ -958,7 +958,7 @@ Unit tests pin the mechanics: deduplication, merging, budgets, ordering, ids, no
 Scripted models test the code paths, not the model. To test the contract with a real model, run the gold set through `GroundedQA` and score four things separately (Chapter 14 builds the harness):
 
 1. **Citation validity**: the share of answers with zero `unknown_citation` errors. This should be close to 100 percent for any modern model with the contract; a drop is a regression.
-2. **Faithfulness**: the share of claims supported by their cited evidence, judged by a calibrated groundedness judge and spot-checked by humans. Report it before and after repair, so you know how much the validator is carrying.
+2. **Groundedness**: the share of claims supported by their cited evidence, judged by a calibrated groundedness judge and spot-checked by humans. Report it before and after repair, so you know how much the validator is carrying.
 3. **Abstention correctness**: on unanswerable and `forbidden-doc` questions, the share that abstain; on answerable questions, the share that do not. Report both, since optimizing one alone is trivial.
 4. **Conflict handling**: on `conflicting-versions` questions, the share that cite the newer source first and report the conflict.
 

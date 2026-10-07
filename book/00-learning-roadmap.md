@@ -263,7 +263,7 @@ secure them, and explain them. Not one of the four, all four.
 **You must be able to measure:**
 
 - recall@k, MRR, and nDCG on a gold set you built, and the stage that lost the evidence;
-- faithfulness and citation precision with a judge whose agreement with humans you checked;
+- groundedness and citation precision with a judge whose agreement with humans you checked;
 - task completion, tool correctness, and step efficiency for an agent from its event log;
 - p50/p95 time-to-first-token and completion latency per stage against a written budget;
 - cost per successful task including retries, reranking, tools, and human review;
@@ -326,8 +326,8 @@ and the README's "Acceptance checklist mapped to evidence" table names the test 
 
 **Evaluation and operations**
 
-- [ ] Faithfulness judge with its agreement against a human-labeled sample reported; a judge below your agreement bar is reported, not used for quality decisions.
-- [ ] Release gate thresholds for retrieval recall, faithfulness, citation precision, tool correctness, and injection block rate.
+- [ ] Groundedness judge with its agreement against a human-labeled sample reported; a judge below your agreement bar is reported, not used for quality decisions.
+- [ ] Release gate thresholds for retrieval recall, groundedness, citation precision, tool correctness, and injection block rate.
 - [ ] OpenTelemetry traces with spans for router, retrieval, rerank, model, tool, validator, and agent step, carrying prompt version, model, tokens, cost, cache hits, evidence IDs, and policy results.
 - [ ] Latency report: p50 and p95 time-to-first-token and completion per stage against the budget (illustrative targets: p95 TTFT under 2 s, p95 completion under 8 s).
 - [ ] Cost report: cost per successful answer and per tenant, with an alert threshold.

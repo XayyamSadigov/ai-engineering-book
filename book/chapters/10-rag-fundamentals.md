@@ -26,7 +26,7 @@ RAG also underlies a large share of applied AI systems: internal assistants, sup
 
 At request time the whole flow is short: question → embed → search the index for nearby chunks → paste the top chunks into the prompt as labeled evidence → the LLM answers with citations → code validates them. Everything else in Part IV refines one step of that flow.
 
-The second image to hold throughout Part IV is that **RAG is two systems joined by a contract**. The retrieval system answers one question: did we put the right evidence in front of the model? The generation system answers a different one: given that evidence, did the model produce a correct, faithful, cited answer, or abstain when it should? The two have different inputs, different metrics, different failure modes, and different owners in a mature team. The contract between them is the packed evidence block: a set of labeled chunks with stable identifiers, plus rules for how the model must use them (the grounding contract).
+The second image to hold throughout Part IV is that **RAG is two systems joined by a contract**. The retrieval system answers one question: did we put the right evidence in front of the model? The generation system answers a different one: given that evidence, did the model produce a correct, grounded, cited answer, or abstain when it should? The two have different inputs, different metrics, different failure modes, and different owners in a mature team. The contract between them is the packed evidence block: a set of labeled chunks with stable identifiers, plus rules for how the model must use them (the grounding contract).
 
 When an answer is wrong, the first diagnostic question is therefore not "what should the prompt say?" but "was the required evidence in the context?" If not, the bug is upstream of the model. If yes, it is in the generation contract, the evidence ordering, or the model choice. Making this fork routinely prevents most of the random prompt tweaking that characterizes struggling RAG projects.
 
@@ -75,7 +75,7 @@ The decision rule: use RAG when the problem is knowledge access over a corpus th
 
 The retrieval system is a search engine, with quality measured by recall (did the needed evidence come back?) and precision (how much of what came back is useful?). Its vocabulary is information retrieval: inverted indexes, embeddings, nearest neighbors, reranking, filters. It can be evaluated without any language model, by checking whether known-relevant chunks appear in the top results for gold questions (a fixed set of questions with known required evidence).
 
-The generation system is a constrained writer. Its input is the question and the packed evidence; its output is a cited answer or an abstention. Its quality is faithfulness (every claim supported by cited evidence), correctness against a rubric, citation precision (cited chunks actually support the claim) and citation recall (every claim that needs a citation has one), and abstention correctness. It can be evaluated with retrieval held fixed, by feeding it known evidence sets.
+The generation system is a constrained writer. Its input is the question and the packed evidence; its output is a cited answer or an abstention. Its quality is groundedness (every claim supported by cited evidence; Chapter 24 defines the terms), correctness against a rubric, citation precision (cited chunks actually support the claim) and citation recall (every claim that needs a citation has one), and abstention correctness. It can be evaluated with retrieval held fixed, by feeding it known evidence sets.
 
 Separating the two buys you diagnosis. Suppose evaluation shows 70 percent answer correctness. If retrieval recall on the same questions is 72 percent, the generator is nearly perfect and every hour spent on prompts is wasted; the work is in chunking, ranking, and coverage. If recall is 98 percent, the evidence is there and the generator is mishandling it. A single end-to-end number hides which of these worlds you are in. Chapter 14 builds the evaluation that reports the two separately, stage by stage.
 
@@ -490,7 +490,7 @@ The minimal pipeline is a correct skeleton with every production concern missing
 
 **Untrusted content is treated as such.** The vacation example retrieved an external vendor newsletter, which in the shared corpus contains an embedded instruction aimed at assistants. Production systems tag source trust at ingestion, exclude or quarantine unreviewed external content from sensitive flows, and keep the model's authority over tools separate from anything it reads (Chapters 26 and 27).
 
-**Evaluation gates every change.** A new chunker, embedding model, reranker, or prompt ships only after the gold set shows no regression in retrieval recall, faithfulness, citation precision, and abstention correctness (Chapters 14 and 25).
+**Evaluation gates every change.** A new chunker, embedding model, reranker, or prompt ships only after the gold set shows no regression in retrieval recall, groundedness, citation precision, and abstention correctness (Chapters 14 and 25).
 
 ## Common mistakes
 
@@ -606,7 +606,7 @@ The tests cover three layers. **Unit tests** check each stage's contract: exact 
 
 Beyond this chapter, evaluating a RAG system means evaluating its two systems separately and then together. For retrieval, the gold set in `shared-data/eval/retrieval_gold.jsonl` gives each question its required and acceptable document ids, the user groups and tenant to query under, and tags such as `paraphrase`, `conflicting-versions`, `forbidden-doc`, and `abstain`. Run every question through `index.search` with its groups and compute hit@k over the required documents (exercise P3). Gold sets must encode which evidence is required, not just which is relevant, because a question that needs two documents cannot be answered from one of them however good the generator is; Chapter 14 works the numbers and implements the metrics defined in Core concepts.
 
-For generation, hold retrieval fixed, feed known evidence sets including deliberately insufficient ones, and grade faithfulness, correctness, citations, and abstention. For the whole system, walk the debugging tree on every failing question and record which stage lost the evidence; aggregated, that tells you where to invest. Chapter 14 builds this into a report.
+For generation, hold retrieval fixed, feed known evidence sets including deliberately insufficient ones, and grade groundedness, correctness, citations, and abstention. For the whole system, walk the debugging tree on every failing question and record which stage lost the evidence; aggregated, that tells you where to invest. Chapter 14 builds this into a report.
 
 In production, the cheap deterministic checks from this chapter run on every request: invalid-citation rate, ACL-violation count (which must stay at zero), zero-hit rate, abstention rate, and the share of answers with unsupported numeric claims. Each one is a metric and an alert. None of them requires a model, which is why they belong in the request path rather than in a nightly batch.
 

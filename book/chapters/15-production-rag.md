@@ -1018,7 +1018,7 @@ The tests are grouped by the property they prove:
 - **Scoped caches and id lookups** (3): tenant invalidation removes the entries and their metadata (a later read is a miss, not a phantom hit); discard, per-entry TTL, and clear go through the public removal API; and `IndexSet.get_chunks` returns chunks in the order asked while omitting restricted and tombstoned ones.
 - **Evaluation and backends** (6): the gate passes with zero leaks, the gate fails on one injected leak, the CLI exit code is correct, the registry contract holds on memory and SQLite, and the full stack runs on the SQL registry, the Redis queue and the Redis embedding cache (fakeredis), with a separate "API replica" container.
 
-What the offline suite does not prove: real pgvector behavior, which needs the Compose stack (the HNSW DDL is Project 2's); real model faithfulness, for which Chapter 14's LLM judges run with `--judges llm`; and concurrency across worker processes. Mark integration tests that use `DATABASE_URL` and `REDIS_URL` with `@pytest.mark.integration`, and run them in a CI job that brings up the Compose stack.
+What the offline suite does not prove: real pgvector behavior, which needs the Compose stack (the HNSW DDL is Project 2's); real-model groundedness, for which Chapter 14's LLM judges run with `--judges llm`; and concurrency across worker processes. Mark integration tests that use `DATABASE_URL` and `REDIS_URL` with `@pytest.mark.integration`, and run them in a CI job that brings up the Compose stack.
 
 ## Before you ship
 

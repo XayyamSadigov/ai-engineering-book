@@ -859,7 +859,7 @@ Three readings are worth more than the numbers.
 
 **Some failures are label policy, not system behavior.** Four of the six missed abstentions are principal variants of RQ-019 and RQ-021, whose required document is invisible to the variant but whose question is answerable from another document the variant may read. The derivation rule "nothing required is visible, so abstain" is stricter than the truth. The fix belongs in the dataset (mark which questions have alternative sources), not in the system; until then the gate's abstention threshold has headroom for it. RQ-037 is the known label error from Chapter 14.
 
-The judge needs the same honesty. The offline lexical faithfulness check agrees with the 16-row human-labeled sample in 69 percent of rows, with Cohen's kappa 0.36. It passes "Alcohol is reimbursable during business travel" against evidence that says the opposite (negation is invisible to word overlap) and rejects a correct paraphrase ("roll ten leftover vacation days into next year"). On the demo model it scores 1.0 because the demo model only quotes, which makes it a smoke check and nothing more. The gate keeps a threshold on it to catch gross breakage; quality decisions need an LLM judge calibrated against humans as in Chapter 24, run on sampled production traffic (practical exercise P4).
+The judge needs the same honesty. The offline lexical groundedness check agrees with the 16-row human-labeled sample in 69 percent of rows, with Cohen's kappa 0.36. It passes "Alcohol is reimbursable during business travel" against evidence that says the opposite (negation is invisible to word overlap) and rejects a correct paraphrase ("roll ten leftover vacation days into next year"). On the demo model it scores 1.0 because the demo model only quotes, which makes it a smoke check and nothing more. The gate keeps a threshold on it to catch gross breakage; quality decisions need an LLM judge calibrated against humans as in Chapter 24, run on sampled production traffic (practical exercise P4).
 
 ### What changes with a real model
 
@@ -966,7 +966,7 @@ The trace-derived rules are code: `ops/alerts.yaml` uses Chapter 31's rule forma
 
 ## Known limitations and extension projects
 
-The limitations, in the order a production team would hit them: pending approvals and conversation windows live in process memory; no integration suite runs against a real provider; the offline faithfulness judge is weak; the Compose stack's Project 3 path against real Postgres and Redis is checked by hand, not in CI; and the dataset's abstention labels for principal variants are stricter than the truth. The practical exercises below turn the first four into projects with acceptance criteria.
+The limitations, in the order a production team would hit them: pending approvals and conversation windows live in process memory; no integration suite runs against a real provider; the offline groundedness judge is weak; the Compose stack's Project 3 path against real Postgres and Redis is checked by hand, not in CI; and the dataset's abstention labels for principal variants are stricter than the truth. The practical exercises below turn the first four into projects with acceptance criteria.
 
 ## The book in one page
 
@@ -1057,7 +1057,7 @@ P2. (about 3 hours, plus provider credentials) **Real-provider integration suite
 
 P3. (about 5 hours) **Intent classifier with a baseline.** Label 200 user messages with their workflow, train or prompt a classifier, and route with it only when its confidence is above a threshold, falling back to the rules. Acceptance: on a held-out set the combined router beats the rules on macro-F1 by at least 5 points, never routes a question to a side-effecting workflow below the threshold, and its decision appears in `meta` and on the `router.decide` span.
 
-P4. (about 4 hours) **Calibrated online judge.** Sample 1 percent of production answers into an evaluation job that runs ragkit's faithfulness judge with a separate model, writes scores as `eval.score` spans joined by `response.id`, and reports agreement with 50 human labels. Acceptance: Cohen's kappa against the human sample is reported per judge version; a judge below 0.6 cannot be used to gate; the dashboard shows faithfulness by version fingerprint.
+P4. (about 4 hours) **Calibrated online judge.** Sample 1 percent of production answers into an evaluation job that runs ragkit's `FaithfulnessJudge` (a groundedness judge in Chapter 24's terms) with a separate model, writes scores as `eval.score` spans joined by `response.id`, and reports agreement with 50 human labels. Acceptance: Cohen's kappa against the human sample is reported per judge version; a judge below 0.6 cannot be used to gate; the dashboard shows faithfulness by version fingerprint.
 
 P5. (about 4 hours) **Compose end to end.** Bring up the Compose stack with the Project 3 backend, sync the corpus through the worker, and run the security and RAG suites against the running API over HTTP. Acceptance: the same gate passes; a document deleted through the admin API disappears from answers within the freshness SLO; the collector shows one trace per request with the worker's ingestion spans in separate traces.
 

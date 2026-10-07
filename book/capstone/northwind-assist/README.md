@@ -204,7 +204,7 @@ to Chapter 25's release gate with `eval/gates.toml`.
 | security | 15 | effect_prevented | 1.000 | 0.667 |
 | gate | | exit code | 0 | 1 |
 
-The lexical faithfulness judge agrees with the 16-row human sample 69% of the time (kappa 0.36):
+The lexical groundedness judge agrees with the 16-row human sample 69% of the time (kappa 0.36):
 it misses negations and rejects paraphrases. It is a smoke check offline; online quality uses an
 LLM judge calibrated per Chapter 24 (`ragkit.eval.rag_judges`, `--judges llm` in Chapter 14).
 
@@ -279,8 +279,8 @@ owner; look first for a retry storm or a cache-hit collapse in `cache_hit_rate`.
 | Threat model with trust boundaries | `docs/threat-model.md` |
 | Adversarial suite (direct, indirect, image exfiltration, memory poisoning) | security suite, 15 cases, `effect_prevented` gated |
 | PII redaction before the model and in traces | `test_pii_is_redacted_before_the_model_and_in_traces` |
-| Calibrated faithfulness judge with agreement reported | `judge_calibration` in `summary.json` (lexical judge, kappa 0.36: reported, not trusted) |
-| Gate thresholds for recall, faithfulness, citation precision, tool correctness, injection block rate | `eval/gates.toml` |
+| Calibrated groundedness judge with agreement reported | `judge_calibration` in `summary.json` (lexical judge, kappa 0.36: reported, not trusted) |
+| Gate thresholds for recall, groundedness, citation precision, tool correctness, injection block rate | `eval/gates.toml` |
 | OTel spans for router, retrieval, rerank, model, tool, validator, agent step with lineage | `test_one_trace_per_request_with_stage_spans_and_lineage`, `test_agent_and_tool_spans_join_the_request_trace` |
 | Latency report p50/p95 | `summary.json` (in-process, fake model: meaningful only for harness overhead) |
 | Cost per successful answer and per tenant, alert threshold | `test_cost_is_accounted_per_tenant_and_reported_daily`, `test_threshold_alert_fires_once_when_spend_crosses_it` |

@@ -938,7 +938,7 @@ The deepest tradeoff is between coordination overhead and context quality. A sin
 
 **Measure quality deterministically first.** For each answer the scorer parses cited lines and computes document recall (did it cite every required document), fact recall (does it contain each required fact), citation validity (does every cited passage support its line under the deterministic check), the count of unsupported claims shipped, and whether a known conflict was surfaced. A four-point rubric aggregates these: coverage, key facts, faithfulness, conflicts handled.
 
-One caveat applies wherever these numbers appear: citation validity uses the same check as the verification guard, so configurations with the guard pass it by construction. It measures whether an unsupported claim reached the user under a strict number-and-term definition, not independent faithfulness. With a live model, add an LLM faithfulness judge from Chapter 24's evalkit as an independent measurement and calibrate it against human labels.
+One caveat applies wherever these numbers appear: citation validity uses the same check as the verification guard, so configurations with the guard pass it by construction. It measures whether an unsupported claim reached the user under a strict number-and-term definition, not independent groundedness. With a live model, add an LLM groundedness judge from Chapter 24's evalkit as an independent measurement and calibrate it against human labels.
 
 **Measure cost, latency, and coordination.** Tokens, illustrative cost, model calls, and wall time per question; plus team-specific metrics: agents per run, spawn refusals by reason, duplicate claims, verifier rejections, and degraded verifications.
 

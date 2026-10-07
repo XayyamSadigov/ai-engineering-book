@@ -33,20 +33,25 @@ One paragraph: what the reader will be able to do after this chapter, and which 
 ## Core concepts            (as many ### subsections as needed)
 ## How it works
 ## Architecture             (Mermaid diagram(s))
-## Implementation           (complete code, see section 4)
+## Implementation           (excerpts of the code on disk, see section 4)
 ## Code walkthrough
 ## Production considerations
 ## Common mistakes
 ## Failure modes
 ## Tradeoffs
 ## Evaluation and testing
-## Exercises
+## Before you ship          (chapters 3-34, 37, 38: 8-12 checkbox items)
+## Exercises                (open with a "Start here" line naming the core set)
 ### Knowledge questions     (K1, K2, ...)
 ### Engineering questions   (E1, E2, ...)
 ### Practical exercises     (P1, P2, ...)
 ### Debugging exercises     (D1, D2, ...)  - describe a broken system/trace; reader diagnoses
 ## Key takeaways            (6-10 bullets)
+## Further reading          (3-6 items from references.md)
 ```
+
+The opener under the H1 is one or two sentences, a "You will be able to" list of 4-6 bullets, and one
+line with prerequisites, code path and test command, and what the chapter builds.
 
 Adapt the template when another structure teaches better (system-design chapters use the 10-step
 method per case; the capstone uses a build log), but keep Why this matters, Exercises, and Key
@@ -74,10 +79,12 @@ two diagrams. Mark trust boundaries explicitly when relevant (`subgraph Untruste
   `pytest` for tests. FastAPI for services. PostgreSQL + pgvector where a database is needed, with an
   in-memory/NumPy fallback so tests run without infrastructure. Redis optional. No pseudocode except
   when explaining an algorithm, and then label the block `# pseudocode`.
-- Code is complete and executable: show whole files, not fragments, when the file is needed to run or
-  understand the concept. Start each code file block with a path comment on the first line, for example
-  `# path: book/projects/p3-rag-assistant/rag/retrieval/hybrid.py`. The same files must actually be
-  written to disk at that path by the author.
+- Code on disk is complete and executable; the chapter teaches from excerpts. Start each code block
+  with a path comment on the first line, for example
+  `# path: book/projects/p3-rag-assistant/rag/retrieval/hybrid.py`. A listing longer than about 80 lines
+  becomes an excerpt of the 20-80 lines that carry the idea, labeled
+  `# path: ... (excerpt; full file on disk)`, with elisions marked `# ...`. Every line in an excerpt must
+  exist verbatim in the file on disk. Short files may be shown whole.
 - Every project and every library module needs: directory tree, `pyproject.toml` with dependencies,
   configuration via environment variables (documented in a table and an `.env.example`),
   implementation, tests (runnable offline with fakes), and run instructions (`uv`/`pip` commands,

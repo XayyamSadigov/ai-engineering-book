@@ -87,23 +87,32 @@ agent, not in the abstract.
 Reading alone produces people who can name techniques and cannot ship them. Use this loop for every
 implementation chapter.
 
-1. **Read the chapter once without touching the keyboard.** Note the mental-model callouts and the
+1. **Read the chapter once without touching the keyboard.** Start with the "You will be able to" list
+   under the title, so you know what you are reading for. Note the mental-model callouts and the
    failure-modes section.
-2. **Type the code.** Do not paste. Type every file at the path on its first-line comment. The places
-   where you hesitate are the places you do not yet understand.
+2. **Read the code on disk, then type the core.** Listings in the chapters are excerpts of the parts
+   that carry the idea; the first-line comment names the full file. Open it, read it end to end, and
+   type the excerpted functions yourself instead of pasting. The places where you hesitate are the
+   places you do not yet understand.
 3. **Run the tests.** Every project passes `pytest` offline with `FakeLLM` and `FakeEmbeddings`. Fix
    failures before continuing. Then point `LLM_PROVIDER` at a real provider and run the
    `@pytest.mark.integration` tests once, so you see real behavior at least one time.
 4. **Break it.** Violate one invariant the chapter claims: remove the retry jitter, set the chunk size
    to 50 tokens, drop the ACL filter, lower the agent step budget to 2. Watch the telemetry. This is
    the fastest way to learn what each piece is for.
-5. **Do the debugging exercises.** Each chapter ends with D-exercises: a broken system or a trace that
-   you diagnose. They are the exercises that most resemble the job; do them before the knowledge
-   questions.
+5. **Do the core exercises first.** Each chapter's exercises open with a "Start here" line naming
+   four or five core exercises and the time they take; practical exercises carry their own time
+   estimate. Include the D-exercises: a broken system or a trace that you diagnose. They are the
+   exercises that most resemble the job.
 6. **Write the recall note.** Close the book and write from memory: five concepts, one mechanism (an
    equation, a data flow, or a state machine), one production trade-off, one failure mode, and one
    situation where you would not use the technique. If you cannot fill all five lines, reread. Keep the
    notes in one file; they become your interview preparation (Appendix C).
+
+Two parts of each chapter are built for later use rather than first reading. **Before you ship**
+(Chapters 3 to 34, 37 and 38) is a checklist to run against your own system before a launch, and
+**Further reading** points to the primary sources behind the chapter. Come back to both when you
+build the real thing.
 
 A recall note for Chapter 12, as an illustration of the expected length:
 

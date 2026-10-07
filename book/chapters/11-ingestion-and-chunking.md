@@ -12,19 +12,21 @@ This chapter turns a messy corpus of Markdown, HTML, PDF, transcripts, and JSON 
 
 **Prerequisites:** Chapter 10 (the RAG pipeline and its failure catalogue), Chapter 8 (embeddings and input limits), Chapter 2 (tokens). | **Code:** `book/projects/ragkit/` (run: `cd book/projects/ragkit && pytest -q`) | **Builds:** the ingestion half of the `ragkit` package (document model, five parsers with an OCR seam, normalization and MinHash deduplication, six chunkers, a corpus loader with an ACL gate, a chunk-size evaluation script), which Chapters 12 to 15 and Project 3 import.
 
+**First reading:** Why this matters, Mental model, Core concepts (except the five deep dives below), How it works, Architecture, Implementation (The document model; The chunker base; Section-aware chunking with intact code and tables; The corpus loader and chunk diffs), Code walkthrough, Common mistakes, Failure modes, Tradeoffs, Evaluation and testing, Before you ship. **Deep dives** (skip on a first pass): Cleaning and normalization, Metadata extraction, Contextual chunk headers, Structured versus unstructured sources, Deduplication, Tokenizers with spans, Parsers, Normalization and deduplication, Fixed, recursive, and sentence strategies, Semantic chunking, Parent-child chunking, Tests, Production considerations.
+
 ## Why this matters
 
-Chapter 10 ended with a catalogue of naive RAG failures. Two of them start here: the wrong chunk boundary and the missing evidence. A third, the permission leak, often starts here too, because a chunk that lost its ACL during ingestion cannot be filtered at retrieval time. When an answer is wrong, the debugging decision tree from Chapter 10 begins with one question: does the needed fact exist in the corpus as a retrievable unit? Ingestion and chunking decide the answer before any query arrives.
+Chapter 10 ended with a catalogue of naive RAG failures. Two start here: the wrong chunk boundary and the missing evidence. A third, the permission leak, often does too, because a chunk that lost its ACL during ingestion cannot be filtered at retrieval time. Chapter 10's debugging tree begins with one question: does the needed fact exist as a retrievable unit? Ingestion decides that before any query arrives.
 
-The failures at this stage are quiet. A PDF scan with no text layer parses "successfully" into an empty string and never shows up in results. A table split from its header row is indexed as a list of numbers with no labels. A wiki page copied into three spaces fills the top five results with the same paragraph. A hidden HTML element carrying "ignore your previous instructions" becomes indexed text. A chunk id derived from position changes every time someone adds a sentence near the top of a document, so the indexer re-embeds the whole document and leaves orphans behind. None of these raises an exception. They show up weeks later as a recall drop, a cost spike, or a security review finding.
+The failures here are quiet. A scanned PDF with no text layer parses "successfully" into an empty string. A table split from its header is indexed as unlabeled numbers. A wiki page copied into three spaces fills the top five results. A hidden HTML element carrying "ignore your previous instructions" becomes indexed text. A positional chunk id changes whenever someone edits near the top, so the whole document is re-embedded. None of these raises an exception; they surface weeks later as a recall drop, a cost spike, or a security finding.
 
-Chunking also sets the economics of everything downstream. Chunk size decides how many vectors you store, how many tokens each retrieved passage costs in the prompt, and how precisely an embedding represents what a passage is about. Overlap multiplies index size and embedding spend. Semantic chunking multiplies embedding calls at ingestion time. Each of these has measurable effects on retrieval, and this chapter measures them.
+Chunking also sets the economics downstream: chunk size decides how many vectors you store, what each passage costs in the prompt, and how precisely its embedding represents it. This chapter measures each effect.
 
 ## Mental model
 
 > **Mental model:** A chunk is the unit of retrieval, citation, permission, and cost. Design it for all four.
 
-Think of ingestion as a compiler. Sources are the input language, `Document` is the intermediate representation, and `Chunk` is the object code that the index executes. Like a compiler, the pipeline has a front end per format (parsers), a normalization pass that makes equivalent inputs identical, and a back end (chunkers) that targets a specific runtime: an embedding model with an input limit, a retriever with a k, and a generator with a context budget. Also like a compiler, the intermediate representation is where the leverage is. If the parser keeps headings, tables, code blocks, page numbers, and permissions as structure, every chunker can use them. If it flattens everything to a string, no chunker can recover them.
+Think of ingestion as a compiler. Sources are the input language, `Document` is the intermediate representation, and `Chunk` is the object code the index executes. Parsers are the per-format front end, normalization makes equivalent inputs identical, and chunkers are the back end for a runtime: an embedding model with an input limit, a retriever with a k, and a generator with a context budget. The leverage is in the intermediate representation. If the parser keeps headings, tables, code blocks, pages, and permissions as structure, every chunker can use them. If it flattens everything to a string, no chunker can recover them.
 
 The second half of the model is identity. Every chunk must answer three questions without a database join: which document and version did I come from, who may see me, and where exactly in the source am I? A chunk that cannot answer them cannot be cited, filtered, refreshed, or deleted correctly.
 
@@ -32,135 +34,129 @@ The second half of the model is identity. Every chunk must answer three question
 
 ### The document model and identity
 
-A document is one logical source after parsing: a policy file, a web page, a PDF, a single ticket from a JSONL export. `ragkit.Document` carries four groups of fields.
+A document is one logical source after parsing: a policy file, a web page, a PDF, one ticket from a JSONL export. `ragkit.Document` carries four groups of fields.
 
-**Identity.** `id` is a stable identifier chosen by the source owner when possible (Northwind's Markdown front matter has `id: hr-pto-policy`) and derived from the source URI otherwise. `version` is the declared version, or a prefix of the content hash when the source declares none. `content_hash` is the SHA-256 of the normalized text. The three answer different questions: `id` says "which logical thing", `version` says "which edition the owner meant", and `content_hash` says "which exact bytes". A document can change content without a version bump (an editor fixed a typo and forgot), and it can bump a version without changing content (a metadata-only release). Incremental ingestion keys on the hash; humans read the version.
+**Identity.** `id` is chosen by the source owner when possible (Northwind's front matter has `id: hr-pto-policy`) and derived from the source URI otherwise. `version` is the declared version, or a prefix of the content hash. `content_hash` is the SHA-256 of the normalized text. They answer which logical thing, which edition the owner meant, and which exact bytes. A typo fix changes content without a version bump; a metadata-only release bumps the version without changing content. Incremental ingestion keys on the hash; humans read the version.
 
-Why not use the file path as the id? Because paths change when someone reorganizes a wiki, and a path-derived id turns a rename into a delete plus an insert, which loses any feedback or evaluation labels attached to the old id. Derived ids are a fallback, and the fallback should hash a URI that is stable across machines (a repository-relative path or a canonical URL), never an absolute path on the ingestion host.
+Avoid file paths as ids: a wiki reorganization turns a rename into a delete plus an insert, orphaning labels on the old id. A derived id should hash a machine-independent URI (a repository-relative path or a canonical URL).
 
-**Provenance.** `source_uri`, `source_type`, and `parser` (a name and version such as `markdown/1`) record how the document was produced. The parser version matters because a parser fix changes the text, and you need to know which documents were produced by the buggy version so you can re-ingest exactly those.
+**Provenance.** `source_uri`, `source_type`, and `parser` (a name and version such as `markdown/1`), so you can re-ingest exactly the documents a buggy parser produced.
 
-**Permissions.** `tenant` and `acl_groups`. An empty `acl_groups` means nobody may see the document: ingestion fails closed. The alternative, defaulting to `["all"]`, turns every missing front-matter line into a company-wide disclosure. The loader in this chapter goes further and rejects documents without a tenant and ACL by default, reporting them instead of silently indexing them.
+**Permissions.** `tenant` and `acl_groups`. An empty `acl_groups` means nobody may see the document: ingestion fails closed, because defaulting to `["all"]` would turn every missing front-matter line into a company-wide disclosure. By default the loader rejects and reports documents without a tenant and ACL.
 
-**Structure.** `text` is the normalized full text, and `blocks` is the same text cut into typed units: heading, paragraph, list, code, table, quote. Each block knows its `section_path` (the heading breadcrumb, for example `["Retail Returns API v2 Reference", "Rate limits"]`), its page for paginated sources, and its character offsets into `text`. The invariant `doc.text[b.char_start:b.char_end] == b.text` holds for every block and is tested for every parser. Offsets are what make citations precise later: Chapter 13 can highlight the exact span a claim relies on.
+**Structure.** `text` is the normalized full text, and `blocks` cuts it into typed units: heading, paragraph, list, code, table, quote. Each block knows its `section_path` (the heading breadcrumb, such as `["Retail Returns API v2 Reference", "Rate limits"]`), its page, and its character offsets. The invariant `doc.text[b.char_start:b.char_end] == b.text` is tested for every parser, and it lets Chapter 13 highlight the exact span a claim relies on.
 
-A `Chunk` inherits identity and permissions from its document and adds its own: `id`, `content_hash`, `section_path`, `char_start` and `char_end`, `page_start` and `page_end`, `token_count`, `kind` (text, table, code, or mixed), `role` (leaf, parent, or child), `parent_id`, `position`, and `chunker`, a fingerprint (a hash) of the chunking strategy and its configuration. Copying `tenant` and `acl_groups` onto every chunk is deliberate denormalization: the retriever filters on them inside the index query (Chapter 15) and must never need a join that could be skipped.
+A `Chunk` inherits identity and permissions from its document and adds its own: `id`, `content_hash`, `section_path`, `char_start` and `char_end`, `page_start` and `page_end`, `token_count`, `kind` (text, table, code, or mixed), `role` (leaf, parent, or child), `parent_id`, `position`, and `chunker`, a fingerprint (a hash) of the chunking strategy and its configuration. Copying `tenant` and `acl_groups` onto every chunk is deliberate denormalization: the retriever filters on them inside the index query (Chapter 15), with no join that could be skipped.
 
 ### Chunk identity that survives edits
 
-Chapter 10 used "document id plus position" as the chunk id and called it fragile. Here is why, and the alternative. Suppose a 40-chunk policy gets a new paragraph at the top. With positional ids, every chunk after the insertion gets a new id. The incremental indexer sees 40 new chunks and 39 deleted ones, re-embeds everything, and any cached answer or feedback keyed on the old ids is orphaned.
-
-`ragkit` derives the chunk id from content and location instead:
+Chapter 10 used "document id plus position" as the chunk id and called it fragile. Suppose a 40-chunk policy gets a new paragraph at the top. With positional ids, every chunk after the insertion gets a new id. The indexer sees 40 new chunks and 39 deleted ones, re-embeds everything, and orphans any cached answer or feedback keyed on the old ids. `ragkit` derives the chunk id from content and location instead:
 
 ```
 chunk_id = doc_id + ":" + hash(chunker_fingerprint, section_path, content_hash, occurrence, parent_id)
 ```
 
-Position is excluded, so inserting text elsewhere does not change the id of an unchanged chunk. The document version is excluded, so a version bump that leaves a section untouched leaves that section's chunk ids untouched. The section path is included, so the same sentence under two different headings yields two ids. The occurrence counter distinguishes identical text appearing twice in the same section. The chunker fingerprint is included, so two configurations can be indexed side by side for an A/B comparison without colliding. A test in the suite edits a policy (new opening paragraph, version bump) and asserts that the three untouched sections keep their ids.
+Position is excluded, so an insertion elsewhere leaves the ids of unchanged chunks alone. Version is excluded, so a version bump leaves the ids of untouched sections alone. The section path is included, so the same sentence under two headings gets two ids, and the occurrence counter separates repeats within one section. The chunker fingerprint is included, so two configurations can share an index for an A/B comparison. A test inserts an opening paragraph, bumps the version, and asserts that the three untouched sections keep their ids.
 
-This works best with structure-aware chunkers, whose boundaries are anchored to headings. A fixed-size window chunker shifts every boundary after an insertion, so its chunk contents, and therefore its ids, change anyway. That is a real argument for structure-aware chunking that has nothing to do with retrieval quality: it makes incremental updates cheap.
+This works best with structure-aware chunkers, whose boundaries are anchored to headings. A fixed-size window shifts every boundary after an insertion, so its ids change anyway: structure-aware chunking makes incremental updates cheap, independent of retrieval quality.
 
 ### Parsing by format
 
-A parser's job is to recover what a human reader of the rendered source would treat as content and structure, and nothing else. Every format has its own way of hiding content, inventing content, or destroying structure.
+A parser recovers what a human reader of the rendered source would treat as content and structure, and nothing else. Each format hides content, invents it, or destroys structure in its own way.
 
-**Markdown** is the friendliest format and still has traps. Front matter carries identity and ACLs, so a front-matter reader that silently skips a line it does not understand is a permission bug. `ragkit`'s reader handles the flat subset Northwind uses (scalars, quoted strings, inline lists) and raises `ParseError` on anything nested rather than guessing. Fenced code blocks must be recognized before headings, or a `# comment` inside a Python block becomes a heading and corrupts the section tree. Pipe tables must be recognized as tables, or each row becomes a paragraph. HTML comments are invisible in rendered Markdown but present in the source; the parser strips them outside top-level code fences and records how many it removed. Northwind's vendor newsletter, kept in the corpus as a security fixture, hides an injection attempt in exactly such a comment.
+| Format | Trap | How `ragkit` handles it | Upgrade path |
+|---|---|---|---|
+| Markdown | Front matter carries identity and ACLs; a `# comment` in a code fence read as a heading; tables read as paragraphs; HTML comments invisible when rendered | Flat front matter only, `ParseError` on anything nested; fences before headings, tables before paragraphs; HTML comments outside fences stripped and counted | A full front-matter reader that still fails closed |
+| HTML | Mostly chrome (navigation, footers, banners, scripts); hidden elements carry text no reader sees | Drops chrome tags; maps headings, paragraphs, list items, `pre`, and tables; drops elements marked `hidden`, `aria-hidden="true"`, `display:none`, or `visibility:hidden` | Site-specific selectors (exercise P1) or a content-density heuristic, checked on a sample of pages |
+| PDF | Drawing instructions, not a document: scans lack a text layer, glyphs arrive out of reading order, columns interleave, running headers repeat, words split at hyphens, tables arrive as spaced text | pypdf text layer; a `PageInfo` per page, `needs_ocr` below 20 characters; repeated edge lines removed; hyphenation joined; a page number on every block | Coordinate-aware extraction, table detectors, model-based parsing (below) |
+| Scans (OCR) | Slow; confused characters (`0` and `O`, `1` and `l`), lost tables, broken reading order | An `OcrEngine` protocol, `ocr_page(pdf_bytes, page_number) -> OcrResult(text, confidence)`, with no engine shipped; pages marked `ocr_applied` with confidence, otherwise reported as `needs_ocr` | An engine behind the protocol, with a per-engine confidence floor |
+| Office documents | Zipped XML with styles, slides, notes, sheets | Not implemented | The same `Parser` protocol: heading styles to headings, speaker notes as note blocks, sheets as structured sources |
+| Transcripts | Merged speakers lose who committed to what | Detects `[00:12:03] Dana: ...` lines; one block per turn; `speakers` and `start_time` on chunks for filtering | Semantic chunking for topic boundaries (below) |
+| Source code | A function cut in half retrieves badly and cannot be cited | Fenced code never split; the recursive chunker accepts custom separators (exercise P2) | Syntax-tree chunking that adds file path, enclosing class, and imports as context |
 
-**HTML** is mostly chrome. Navigation, headers, footers, cookie banners, scripts, styles, and forms surround a small amount of content. A parser built on the standard library's `html.parser` can drop known chrome tags, map `h1` to `h6` to headings, `p` and `li` to paragraphs and list items, `pre` to code (taking the language from a `language-*` class), and `table` to a table whose first row is the header when it uses `th`. The security-relevant step is dropping content a human never sees: elements with the `hidden` attribute, `aria-hidden="true"`, or inline `display:none` or `visibility:hidden`. Hidden text is a standard carrier for indirect prompt injection (Chapter 26). Removing it at ingestion is cheap defense in depth; the retrieval-time contract that retrieved text is data, not instructions, is still required. Boilerplate detection by tag is crude. Sites that wrap content in generic `div`s need either site-specific selectors or a content-density heuristic, and both should be evaluated on a sample of your pages rather than trusted.
+**Hidden text is an attack carrier** for indirect prompt injection (Chapter 26). Northwind's vendor newsletter, kept as a security fixture, hides an injection attempt in a Markdown comment. Stripping hidden content is cheap defense in depth, not a substitute for treating retrieved text as data.
 
-**PDF** is a page-description format, not a document format. A PDF contains drawing instructions that place glyphs at coordinates. Whether there is extractable text at all depends on how the file was produced: an export from a word processor has a text layer, a scan does not, and a "print to PDF" from some tools has a text layer with glyphs in drawing order rather than reading order. The extracted text of a two-column page often interleaves the columns line by line. Running headers and footers repeat on every page and pollute every chunk. Words hyphenated at line ends arrive split ("manage-" and "ment"). Tables arrive as lines of space-separated cells with no boundaries.
+**PDF upgrades trade cost for fidelity.** *Coordinate-aware extraction* clusters glyphs into columns by position and fixes most interleaving at text-extraction speed. *Table detectors* emit cells for the canonical table block but fail on borderless tables with merged cells. *Model-based parsing* sends each page to a layout or vision-language model; it handles the hardest pages at a per-page model cost, seconds of latency, and a new failure class: plausible text that is not on the page. Route by need, record the route per page so each is a quality slice, and evaluate upgrades on real pages with hand-checked text. Images and charts are a multimodal problem (Chapter 37).
 
-`ragkit`'s PDF parser uses pypdf's text layer and is explicit about what it cannot see. Each page gets a `PageInfo` with the number of characters extracted and `needs_ocr=True` when that count is below a threshold (20 characters by default). On documents of three or more pages, running headers and footers are removed by finding lines at page edges that repeat on most pages, with digits masked so "Handbook, page 3" matches "Handbook, page 4". Lowercase hyphenation across line breaks is joined. Page numbers are kept on every block, so chunks report `page_start` and `page_end` and citations can say "page 4".
-
-The text layer is the floor, not the ceiling. Three families of tools recover layout and tables when it is not enough, and they trade cost for fidelity. **Coordinate-aware extraction** reads each glyph's position instead of the content stream order, clusters lines into columns by their x coordinates, and orders blocks top to bottom within a column; it fixes most two-column interleaving at text-extraction speed. **Table detectors** find ruled or whitespace-aligned grids from line and glyph geometry and emit cells, which the parser can turn into the same canonical table block the Markdown and HTML parsers produce; they fail on borderless tables with merged cells, and they need a header heuristic.
-
-**Model-based document parsing** renders each page and asks a layout model or a vision-language model for structured output (headings, paragraphs, tables as rows); it handles the hardest pages, at a per-page model cost, a latency measured in seconds, and a new failure class: plausible text that is not on the page.
-
-Route by need rather than by default. Use the text layer for exported documents, coordinate-aware extraction when a page's line lengths or column statistics suggest multiple columns, and a model only for pages flagged as tables or scans, recording the parser per page in `PageInfo` so each route is its own quality slice. Evaluate any upgrade on a sample of real pages with hand-checked text and tables, because every route looks fine on the page used to demo it. Images, charts, and figures inside documents are a multimodal retrieval problem (Chapter 37).
-
-**OCR.** When a page has no text layer, optical character recognition (rendering the page as an image and recognizing glyphs) is the only way in. OCR is slower than text extraction by orders of magnitude, often runs on separate infrastructure, and produces errors that text extraction never does: confused characters (`0` and `O`, `1` and `l`), lost table structure, and broken reading order. Treat OCR'd documents as a distinct quality slice: tag their blocks with the engine's confidence, track retrieval metrics for that slice separately (Chapter 14), and set a confidence floor below which a page is excluded or routed for review. Confidence numbers are engine-specific and not comparable across engines, so calibrate a floor per engine on a labeled sample.
-
-`ragkit` defines an `OcrEngine` protocol with one method, `ocr_page(pdf_bytes, page_number) -> OcrResult(text, confidence)`, and does not ship an engine. When an engine is supplied, pages that need OCR are sent to it and marked `ocr_applied` with the confidence. When it is not, the document reports `needs_ocr`, and the loader lists it so the pipeline can queue it rather than index an empty page.
-
-**Office documents** (word processor, spreadsheet, and slide formats) are zipped XML. The book does not implement parsers for them; the approach is the same as for HTML. Map paragraphs with heading styles to headings, keep tables as tables, keep slide titles as headings and speaker notes as separate blocks marked as notes, and treat each spreadsheet sheet as a table with its header row. Spreadsheets are usually better handled as structured sources (below) than as text. Implement them behind the same `Parser` protocol so the rest of the pipeline does not change.
-
-**Transcripts** (calls, meetings, incident bridges) have speakers and timestamps. A chunk that merges three speakers without labels loses who committed to what. `ragkit`'s text parser detects transcripts when most lines look like `[00:12:03] Dana: ...`, makes each turn its own block with `speaker` and `timestamp` metadata, and the chunkers lift those into chunk metadata (`speakers`, `start_time`) so retrieval can filter by participant or time range.
-
-**Source code** has syntax-level units: functions, classes, modules. A function cut in half retrieves badly and cannot be cited usefully. Code-aware chunking splits on syntax boundaries (with a parser for the language, or at least with separators like a newline followed by `def ` or `class `), and attaches context that the unit alone lacks: the file path, the enclosing class name, and the imports the function relies on. This chapter's recursive chunker accepts custom separators for exactly this purpose (exercise P2); full syntax-tree chunking is a natural extension behind the same interface. For code embedded in documentation, the rule is simpler: never split a fenced block.
+**OCR output is its own quality slice.** Tag OCR'd blocks with the engine's confidence, track their retrieval metrics separately (Chapter 14), and exclude or review pages below a floor. Confidences are not comparable across engines, so calibrate the floor per engine on a labeled sample.
 
 ### Tables
 
-Tables deserve their own section because they are where naive pipelines lose the most meaning. A table row means something only together with its header: "| Internal tools | 100 requests/minute |" is interpretable, "| 100 | 422 | expired |" is not. Three representations are common:
+Tables are where naive pipelines lose the most meaning. A row means something only with its header: "| Internal tools | 100 requests/minute |" is interpretable, "| 100 | 422 | expired |" is not. Three representations are common:
 
-1. **Keep the table whole** as rendered text (a canonical pipe table). Best when the table fits the chunk budget, which most documentation tables do.
-2. **Split by rows and repeat the header** in every part. Each part is self-describing; the cost is the repeated header tokens: index overhead of a few percent of corpus tokens at typical budgets, and about 11 percent at the extreme 48-token budget in the evaluation below.
-3. **Serialize each row as a sentence** with column names ("Client type: Internal tools. Limit: 100 requests per minute."). This makes each row retrievable on its own and works well for lookup tables, at the cost of destroying cross-row relationships (totals, comparisons, "the row above").
+1. **Keep the table whole** as a canonical pipe table, when it fits the budget, as most documentation tables do.
+2. **Split by rows and repeat the header** in every part. Each part is self-describing, at a few percent of corpus tokens (about 11 percent at the extreme 48-token budget evaluated below).
+3. **Serialize each row as a sentence** ("Client type: Internal tools. Limit: 100 requests per minute."). Good for lookups, but cross-row relationships such as totals and comparisons are lost.
 
-Large or numeric tables are often better not embedded at all: load them into a database and answer questions with SQL (Chapter 1's decision ladder, and the semantic-layer tool in later chapters). `ragkit` renders every table canonically, without the alignment padding authors add for readability, because padding costs tokens and carries no meaning. The vendor newsletter's padded catalogue table loses about a third of its characters when re-rendered. The section-aware chunker implements options 1 and 2.
+Large or numeric tables often belong in a database queried with SQL (Chapter 1's decision ladder). `ragkit` drops alignment padding, which costs tokens and carries no meaning (the vendor newsletter's padded table loses about a third of its characters). The section-aware chunker implements options 1 and 2; exercise P3 builds option 3.
 
 ### Cleaning and normalization
 
-Normalization makes equivalent content byte-identical, so that hashes, caches, and deduplication work, and removes text that would pollute retrieval. Its constraint is that it must never change meaning.
+> **Deep dive.** Unicode, whitespace, and boilerplate rules that make equal content hash equally; skip on a first reading.
 
-**Unicode.** The same visible text can be encoded several ways: composed or decomposed accents, ligatures (the single glyph "ﬁ"), full-width digits, non-breaking spaces, zero-width joiners, and soft hyphens. NFC normalization unifies composed and decomposed forms. NFKC also folds compatibility characters: ligatures become letters and full-width digits become ASCII, which helps matching, but it also turns "m²" into "m2" and "½" into "1⁄2". `ragkit` defaults to NFKC for prose and makes the form configurable, and it removes zero-width characters and soft hyphens, which are invisible and break token matching.
+Normalization makes equivalent content byte-identical, so hashes, caches, and deduplication work, and removes text that pollutes retrieval. It must never change meaning.
 
-**Whitespace.** Line endings are unified, runs of spaces and tabs collapse, and three or more newlines collapse to a paragraph break. Hard-wrapped Markdown paragraphs are reflowed into single lines by the parser, which helps sentence splitting.
+**Unicode.** NFC unifies composed and decomposed accents. NFKC also folds compatibility characters such as ligatures ("ﬁ") and full-width digits, which helps matching but turns "m²" into "m2". `ragkit` defaults to NFKC for prose (configurable) and removes zero-width characters and soft hyphens, which are invisible and break token matching.
 
-**Boilerplate.** Page counters ("Page 3 of 12"), confidentiality footers, copyright lines, and email unsubscribe footers repeat across documents. Left in, they make every chunk slightly similar to every other chunk and slightly dissimilar from its own topic. `ragkit` removes lines that fully match a small, configurable list of patterns. Removing whole lines only, and only on full matches, keeps the risk of deleting real content low.
+**Whitespace.** Line endings are unified, runs of spaces collapse, and three or more newlines become a paragraph break.
 
-**Code is data.** Collapsing spaces in a Python block changes its meaning, and NFKC can alter string literals. The normalizer only unifies line endings and removes invisible characters inside code blocks. Tables are normalized cell by cell and re-rendered.
+**Boilerplate.** Page counters ("Page 3 of 12"), confidentiality footers, and unsubscribe lines make every chunk slightly similar to every other. `ragkit` removes only whole lines that fully match a small, configurable pattern list, which keeps the risk of deleting real content low.
 
-Normalization runs on blocks, not on the flat text, and then the document is rebuilt so offsets and the content hash stay correct. A normalization change is a re-ingestion event: every content hash may change, so incremental indexers will see changed documents. Version the normalization configuration with the parser.
+**Code is data.** Collapsing spaces or applying NFKC can alter a program, so inside code blocks only line endings and invisible characters change. Tables are normalized cell by cell and re-rendered.
+
+Normalization runs on blocks and then rebuilds the document so offsets and the content hash stay correct. Changing it can alter every content hash, so version its configuration with the parser.
 
 ### Metadata extraction
 
-Metadata is everything about a chunk that is not its text and that someone will want to filter, sort, display, or debug by. Sources provide some of it explicitly (front matter fields such as owner, tags, and updated date; HTML meta tags; PDF document info; JSON fields). Structure provides more (section path, page numbers, block kinds, speakers). Some must be derived: language detection, entity extraction (product names, error codes, ticket ids), or a document type classifier. Derived metadata from a model is an extraction problem with its own evaluation (Chapter 6); do not let an unvalidated classifier write a field that a permission filter or a freshness rule depends on.
+> **Deep dive.** Which fields to extract, where freshness and supersession come from, and how to keep metadata filterable; skip on a first reading.
 
-Freshness and authority are metadata that later stages depend on, so they need a convention, not an ad hoc field per corpus. `ragkit` copies every front-matter key that is not an identity or permission field into `Document.metadata`, and chunks inherit it, so a document can declare `effective_date: 2026-01-01` and `supersedes: [hr-faq]` and Chapter 13's evidence packer reads both: it prefers the newer effective date over a file's `updated_at`, and an explicit supersedes link resolves a conflict that a heuristic can only guess at. The Northwind corpus states its supersession only in prose ("This version (3.0) supersedes PTO Policy 2.2 ... and any older guidance, including HR FAQ entries"), which is the normal state of real corpora and the root of the stale-FAQ failure from Chapter 10.
+Metadata is anything besides the text that someone will filter, sort, display, or debug by. Sources provide some (front matter, HTML meta tags, PDF document info, JSON fields), structure provides more (section path, pages, speakers), and some must be derived (language, error codes, document type). Never let an unvalidated model (Chapter 6) write a field that a permission or freshness rule depends on.
 
-Treat these fields like permissions: they come from the document system or a reviewed authority map, never from a model reading the prose, because a wrong `supersedes` silently hides a correct source. Project 3 (Chapter 15) supplies them through an ingestion-side authority map.
+`ragkit` copies every front-matter key that is not an identity or permission field into `Document.metadata`, and chunks inherit it. A document can declare `effective_date: 2026-01-01` and `supersedes: [hr-faq]`, and Chapter 13's evidence packer reads both: the newer effective date wins over a file's `updated_at`, and an explicit supersedes link resolves a conflict that a heuristic can only guess at. The Northwind corpus states supersession only in prose ("This version (3.0) supersedes PTO Policy 2.2 ... and any older guidance, including HR FAQ entries"), which is normal for real corpora and the root of Chapter 10's stale-FAQ failure.
 
-Two rules keep metadata useful. First, keep it flat and typed on the chunk: `priority: "P1"`, not a nested blob, because vector stores filter on flat fields. Second, separate what controls access (tenant, ACL groups) from what helps relevance (tags, section path). The first must come from an authoritative source and be validated; the second can be best-effort.
+Treat these fields like permissions: they come from the document system or a reviewed authority map (Project 3 in Chapter 15 uses one), never from a model reading prose, because a wrong `supersedes` silently hides a correct source.
+
+Keep metadata flat and typed (`priority: "P1"`, not a nested blob), because vector stores filter on flat fields. Access fields (tenant, ACL groups) must be authoritative and validated; relevance fields (tags, section path) can be best-effort.
 
 ### Contextual chunk headers
 
-A chunk cut out of its document loses context the author left implicit. The "Troubleshooting" section of the VPN runbook does not repeat the word VPN; a policy clause says "this limit" and the limit is named two sections up. Neither an embedding nor a lexical index can match a question to context that is not in the indexed text. A contextual chunk header puts it back: a short prefix, added only to the text that is indexed, that says where the chunk comes from.
+> **Deep dive.** Three levels of indexed context prefix and when each one pays; skip on a first reading.
 
-There are three levels, in increasing order of cost.
+A chunk cut out of its document loses implicit context: the VPN runbook's "Troubleshooting" section never says VPN, and no index can match a question to words that are not in the indexed text. A contextual chunk header restores it as a short prefix on the indexed text only. There are three levels, in increasing cost.
 
-1. **Deterministic breadcrumb.** Title and section path, taken from the parser's structure. `Chunk.embedding_text()` does this ("NorthGate VPN Access Runbook > Troubleshooting"). It is free, deterministic, and never invents anything. It is only as good as the headings: a section called "Notes" adds little.
-2. **Document summary.** One or two sentences describing the whole document, written once per document (by the owner, from a description field, or by a model) and prepended to every chunk along with the breadcrumb. It helps when titles are uninformative, such as exported files named `final_v3.pdf`, and costs at most one model call per document.
-3. **Chunk-specific context.** A model reads the chunk with its surrounding document and writes a situating sentence for that chunk. This is contextual retrieval, and Chapter 12 builds it with a cache keyed on everything that determines the prefix. It costs one model call per chunk at ingestion, repeated whenever the chunk's neighborhood changes, and it puts model-written text derived from untrusted documents into your index.
+1. **Deterministic breadcrumb.** Title and section path from the parser; `Chunk.embedding_text()` does this ("NorthGate VPN Access Runbook > Troubleshooting"). Free and never invents anything, but only as good as the headings.
+2. **Document summary.** One or two sentences per document (from the owner, a description field, or a model), prepended to every chunk with the breadcrumb. It helps when titles are uninformative, such as `final_v3.pdf`, for at most one model call per document.
+3. **Chunk-specific context.** A model reads the chunk with its document and writes a situating sentence. This is contextual retrieval, built in Chapter 12. It costs one model call per chunk, repeated when the chunk's neighborhood changes, and puts model-written text derived from untrusted documents into the index.
 
-Three rules hold at every level. Keep the header out of `Chunk.text`, so citations quote the source exactly and the generator reads evidence, not commentary. Treat the header format as part of the index version, because changing it changes every vector (Chapter 12 and Chapter 15 handle the re-index). And measure: start with the breadcrumb, add a document summary when titles are poor, and pay for per-chunk context only when an evaluation slice of terse, self-referential chunks shows a recall gap the cheaper levels did not close. Indexing section and document summaries as retrievable units of their own, rather than as prefixes, is the next step for questions that span a whole document (Chapter 37).
+At every level, keep the header out of `Chunk.text` so citations quote the source exactly, and treat its format as part of the index version, since changing it changes every vector (Chapters 12 and 15). Pay for per-chunk context only when an evaluation slice of terse, self-referential chunks shows a recall gap the cheaper levels did not close.
 
 ### Structured versus unstructured sources
 
-Tickets, CRM notes, FAQ entries, and product catalogs arrive as records with fields. Some fields are prose worth embedding (subject, body, resolution); others are facts worth filtering on (category, priority, status, tenant, dates). Treating the whole record as text and embedding it ("priority: P1" somewhere in a vector) loses the ability to filter on it exactly. Treating the whole record as structured data loses the prose.
+> **Deep dive.** How the JSONL parser splits records into embeddable prose and filterable fields; skip on a first reading.
 
-`ragkit`'s JSONL parser does both. Configured text fields are rendered as labeled paragraphs ("Subject: ...", "Body: ...", "Resolution: ...") and the remaining scalar fields become flat metadata. "Open P1 payment tickets similar to this one" then becomes a metadata filter plus a semantic query. Each record becomes its own document with `source_uri` set to `tickets.jsonl#TCK-2026-0001`, and its version is a hash of the record, so a changed record is detected without a declared version field. Bad lines either fail the file with the line number or are skipped and collected in `parser.errors`, depending on configuration; silent skipping is not an option.
+Tickets, CRM notes, FAQ entries, and catalogs arrive as records. Some fields are prose worth embedding (subject, body, resolution); others are facts worth filtering on (category, priority, status, tenant, dates). Embedding the whole record loses exact filtering on those facts.
 
-For questions about structured facts ("how many P1 tickets last week"), retrieval over text is the wrong tool. Query the system of record.
+`ragkit`'s JSONL parser does both: configured text fields become labeled paragraphs ("Subject: ...", "Body: ...") and the other scalar fields become flat metadata, so "open P1 payment tickets similar to this one" is a metadata filter plus a semantic query. Each record becomes a document (`source_uri` such as `tickets.jsonl#TCK-2026-0001`) whose version hashes the record. Bad lines either fail the file with the line number or are collected in `parser.errors`, by configuration; they are never skipped silently. For counts and aggregates ("how many P1 tickets last week"), query the system of record.
 
 ### Deduplication
 
-Enterprise corpora are full of duplicates: the same policy exported to two wikis, a runbook copied into a team space and edited slightly, an email thread quoted in ten replies, an old version kept next to the new one. Duplicates waste index space and embedding spend, and they crowd results: if the top five chunks are the same paragraph from five copies, the generator sees one piece of evidence five times and nothing else.
+> **Deep dive.** Exact and MinHash near-duplicate detection, and why scope matters more than the algorithm; skip on a first reading.
 
-**Exact duplicates** are found by content hash after normalization. Normalization matters here: two copies that differ only in trailing spaces or a non-breaking space must hash equally.
+Enterprise corpora are full of duplicates: a policy exported to two wikis, a runbook copied and lightly edited. They waste embedding spend and crowd results: five copies of one paragraph in the top five give the generator one piece of evidence.
 
-**Near duplicates** need a similarity measure. Jaccard similarity of word shingles (overlapping sequences of k words, five by default) is a good one for text reuse: two documents that share 90 percent of their five-word sequences are near copies. Computing it for every pair is quadratic.
+**Exact duplicates** are found by content hash after normalization, so copies that differ only in whitespace hash equally.
 
-MinHash compresses each shingle set into a fixed-length signature (128 values here), with the property that the fraction of positions where two signatures agree is an unbiased estimate of their Jaccard similarity. Banded locality-sensitive hashing (LSH) then splits each signature into b bands of r rows, where each band is a slice of r signature values, and two documents become candidates only if at least one band matches exactly. A pair with similarity s collides with probability 1 - (1 - s^r)^b. With 16 bands of 8 rows (illustrative, the defaults here), a pair at s = 0.9 collides with probability above 0.999, a pair at s = 0.5 with probability about 0.06, and the curve's midpoint sits near (1/16)^(1/8), about 0.71. Candidates are then checked against the threshold using the full signature.
+**Near duplicates** need a similarity measure. Jaccard similarity of word shingles (overlapping sequences of k words, five by default) suits text reuse, but comparing every pair is quadratic. MinHash compresses each shingle set into a fixed-length signature (128 values here) such that the fraction of agreeing positions is an unbiased estimate of Jaccard similarity. Banded locality-sensitive hashing (LSH) splits each signature into b bands of r values, and two documents become candidates only if at least one band matches exactly. A pair with similarity s collides with probability 1 - (1 - s^r)^b. With 16 bands of 8 rows (illustrative, the defaults here), a pair at s = 0.9 collides with probability above 0.999, a pair at s = 0.5 with probability about 0.06, and the curve's midpoint sits near (1/16)^(1/8), about 0.71. Candidates are then checked against the threshold using the full signature.
 
-**Scope matters more than the algorithm.** Two documents with identical text and different ACLs are not duplicates for retrieval. Merging them either leaks the restricted copy to everyone or hides the public copy from everyone. `ragkit` deduplicates only within a permission scope, keyed on tenant and sorted ACL groups, and keeps the newest copy by default. It records every dropped document with the id it duplicates and the similarity, so the decision can be audited and reversed.
+**Scope matters more than the algorithm.** Identical text with different ACLs is not a duplicate for retrieval: merging the copies either leaks the restricted one or hides the public one. `ragkit` deduplicates only within a permission scope (tenant plus sorted ACL groups), keeps the newest copy, and records every dropped document with the id it duplicates and the similarity, so the decision can be audited and reversed.
 
-Superseded versions are a related but different problem. Northwind's HR FAQ still describes the old five-day PTO carryover limit, while the PTO policy 3.0 says ten. These are not near duplicates (the documents differ substantially), and deduplication will not save you. Version conflicts are handled with metadata (updated dates, supersedes links) and at generation time (Chapter 13's handling of conflicting evidence). Near-duplicate detection can also run on chunks rather than documents, to drop repeated disclaimers and boilerplate paragraphs that slipped past the pattern list.
+Superseded versions are a different problem. Northwind's HR FAQ (five-day carryover) and PTO policy 3.0 (ten days) differ too much to be near duplicates; metadata and generation-time conflict handling (Chapter 13) resolve them.
 
 ### Chunking strategies
 
-Why chunk at all? Embedding models have input limits, retrieval returns units rather than documents, and every retrieved unit costs prompt tokens. A boundary therefore decides whether the evidence a question needs lands in one retrievable unit. A bad cut produces the failures this chapter opened with: a table row orphaned from its header, or a chunk that says "this limit does not apply to contractors" with no referent.
+Why chunk at all? Embedding models have input limits, retrieval returns units rather than documents, and every retrieved unit costs prompt tokens. A boundary decides whether the evidence a question needs lands in one retrievable unit. A bad cut orphans a table row from its header, or leaves "this limit does not apply to contractors" with no referent.
 
-A small invented section shows how strategies differ. Here it is, cut by three of them at a 24-token budget (`¦` marks a boundary, `...` elides text):
+Here is a small invented section, cut by three strategies at a 24-token budget (`¦` marks a boundary, `...` elides text):
 
 ```text
 ## Rate limits
@@ -176,49 +172,47 @@ sentence packing  : ## Rate limits ... get 20. | Client type | Limit | ¦ |---|-
 section-aware     : the whole section, heading and table together, is one chunk
 ```
 
-The fixed window cuts wherever the count runs out, here inside a table row. Sentence packing never cuts inside a sentence, but each table row counts as a sentence, so at this small budget the header lands in one chunk and the rows in others. The section-aware chunker keeps the section whole and would split an oversized table with its header repeated. At budgets of 150 tokens or more, sentence packing also keeps this section whole; the strategies diverge only when a section exceeds the budget. The rest of this section explains each strategy and when its trade-offs pay.
+The fixed window cuts inside a table row. Sentence packing treats each table row as a sentence, so at this budget the header and the rows land in different chunks. The section-aware chunker keeps the section whole. At 150 tokens or more, sentence packing does too: strategies diverge only when a section exceeds the budget.
 
-All six strategies in `ragkit` answer the same question, "where should the cuts go?", and differ in what they look at. They share one finalization step that computes token counts, inherits permissions and metadata, assigns section paths and pages from the document's blocks, and derives ids. That shared step is why the strategies can be swapped and compared fairly.
+All six `ragkit` strategies decide only where to cut. A shared finalization step computes token counts, permissions, metadata, section paths, pages, and ids, which is why strategies can be swapped and compared fairly.
 
-**Fixed-size token windows** (`FixedTokenChunker`) slide a window of N tokens with a stride (the step between window starts) of N minus the overlap. They look at nothing but the token sequence. Their virtues are real: every chunk fits the embedding model's input limit, behavior is perfectly predictable, and they are fast. Their weakness is that boundaries fall wherever the count runs out: mid-sentence, between a table header and its rows, through a code block. Use them as the baseline every other strategy must beat, and for homogeneous prose with no useful structure. Chapter 10's baseline used characters; tokens are better because the budgets they serve (embedding input, prompt context) are counted in tokens.
+**Fixed-size token windows** (`FixedTokenChunker`) slide a window of N tokens with a stride (the step between window starts) of N minus the overlap. They are fast, predictable, and always fit the input limit, but they cut mid-sentence, between a table header and its rows, and through code. Use them as the baseline every other strategy must beat, and for homogeneous prose.
 
-**Recursive splitting** (`RecursiveChunker`) tries the coarsest separator first (paragraph breaks), recursing into finer separators (line breaks, sentence ends, spaces, and finally token windows) only for pieces that are still too large, and then greedily merges small adjacent pieces up to the budget. It respects whatever natural boundaries the text has without needing a parser, which makes it a strong default for unstructured text. Its overlap is applied in whole pieces, so with paragraph-sized pieces the effective overlap is often zero. That is usually fine. Custom separator lists make it code-aware or format-aware.
+**Recursive splitting** (`RecursiveChunker`) splits on the coarsest separator first (paragraph breaks), recurses into finer ones (lines, sentence ends, spaces, token windows) only for pieces still too large, then merges small neighbors up to the budget. It respects natural boundaries without a parser, a strong default for unstructured text, and custom separators make it code-aware. Its overlap is applied in whole pieces, so with paragraph-sized pieces it is often zero.
 
-**Sentence and paragraph packing** (`SentenceChunker`) splits text into sentences and packs them up to the budget, never cutting inside a sentence unless one sentence alone exceeds the budget. Paragraphs that fit are packing units, so chunk boundaries fall between paragraphs whenever possible. Overlap is a number of trailing sentences repeated at the start of the next chunk. The splitter is rule-based: it handles abbreviations, initials, version numbers, and decimals, and treats newlines as boundaries because, in parsed documents, newlines separate list items, table rows, and code lines. Statistical splitters handle messy prose better; a deterministic one with no dependencies is the right default for a library. This strategy suits prose where sentence integrity matters (policies, articles) but where structure is weak or untrusted.
+**Sentence packing** (`SentenceChunker`) packs whole sentences, and whole paragraphs when they fit, up to the budget; overlap is a number of trailing sentences. Its rule-based splitter handles abbreviations, initials, and decimals, and treats newlines as boundaries because parsed newlines separate list items and table rows. It suits prose with weak or untrusted structure.
 
-**Document-aware chunking** (`MarkdownSectionChunker`) works on parsed blocks, so it applies to Markdown, HTML, JSONL, and transcripts alike. A heading starts a new section and chunks never span sections. Within a section, blocks are packed up to the budget, with the heading line at the top of the section's first chunk (unless that first block is itself oversized, in which case the heading survives only in `section_path`). Code blocks are atomic: never split, even when oversized, in which case the chunk is flagged `oversize` so you can see it and decide. Tables are atomic when they fit and split by rows with a repeated header when they do not. An oversized paragraph falls back to sentence packing inside that block. A heading with no body produces no chunk, because its title already appears in the section path of its subsections. This is the strongest default for documentation, policies, and runbooks: boundaries match how authors organized meaning, citations can name a section, and, as shown above, ids survive edits.
+**Section-aware chunking** (`MarkdownSectionChunker`) works on parsed blocks, so it applies to Markdown, HTML, JSONL, and transcripts alike. Chunks never span sections, and blocks are packed up to the budget with the heading at the top of the section's first chunk. Code blocks are atomic (flagged `oversize` when too big), tables are split by rows with a repeated header only when they do not fit, and an oversized paragraph falls back to sentence packing. This is the strongest default for documentation, policies, and runbooks: boundaries follow the author's organization, citations can name a section, and ids survive edits.
 
-**Semantic chunking** (`SemanticChunker`) embeds each sentence (optionally with neighbors on each side to smooth noise), computes the cosine distance between consecutive sentence embeddings, and cuts where the distance exceeds a threshold, either absolute or a percentile of the document's own distances. It then enforces maximum and minimum sizes. The appeal is boundaries at topic shifts in text that has no headings: transcripts, long emails, scraped articles.
+**Semantic chunking** (`SemanticChunker`) embeds each sentence (optionally with neighbors to smooth noise), cuts where the cosine distance between consecutive sentences exceeds a threshold (absolute, or a percentile of the document's own distances), then enforces size limits. It targets topic shifts in text without headings, such as transcripts and long emails. The costs are concrete. A 2,000-token document of 100 sentences of about 20 tokens, embedded with one neighbor on each side, sends roughly 6,000 tokens to the embedding model just to place boundaries, three times the cost of embedding the final chunks (illustrative arithmetic). Boundaries depend on the embedding model, so its id is part of the fingerprint and a model change re-chunks the corpus. And published comparisons are mixed on whether it beats a good recursive or section-aware baseline. Measure before you pay for it.
 
-The costs are concrete. Ingestion embeds every sentence: a 2,000-token document with 100 sentences of about 20 tokens, embedded with a window of one neighbor on each side, sends roughly 6,000 tokens to the embedding model to produce boundaries, three times what embedding the final chunks costs (illustrative arithmetic). Boundaries depend on the embedding model, so the model id is part of the fingerprint and a model change re-chunks the corpus. And the topic-shift signal is noisy: published comparisons and practitioner reports are mixed on whether it beats a good recursive or section-aware baseline. Measure before you pay for it.
-
-**Parent-child chunking** (`ParentChildChunker`) produces two levels: parents (by default sections up to 800 tokens) and children cut inside each parent (by default sentence packs up to 128 tokens). You index the children and, when a child is retrieved, give the generator its parent. Small children produce precise embeddings that match specific questions; parents restore the definitions, qualifiers, and neighboring rows that a child alone would lack. The cost is a second lookup at query time, more vectors in the index, and larger evidence in the prompt. `expand_to_parents` maps ranked child hits to parents, keeping the best rank and dropping repeats, so three hits inside one section become one passage. Chapter 12 builds parent-document retrieval on top of this.
+**Parent-child chunking** (`ParentChildChunker`) cuts parents (by default sections up to 800 tokens) and children inside them (by default sentence packs up to 128 tokens). Children are indexed for precise matching; the generator reads the parent, which restores the definitions, qualifiers, and neighboring rows a child lacks. The cost is a second lookup, more vectors, and larger prompts. `expand_to_parents` maps ranked child hits to distinct parents, and Chapter 12 builds parent-document retrieval on it.
 
 ### Overlap
 
-Overlap repeats the end of one chunk at the start of the next, so that a fact near a boundary appears whole in at least one chunk. It is a patch for structure-blind boundaries, and it is not free. With a window of N and overlap O, the index holds about N / (N - O) times the corpus tokens: 256 with 32 overlap is about 14 percent more vectors, tokens, and embedding spend (the evaluation below measures 12 to 13 percent). Overlap also produces near-duplicate retrieval results: two adjacent chunks sharing 32 tokens often both make the top k for a question about those 32 tokens, wasting a slot. And it makes evidence packing harder, because the packer must detect and merge overlapping spans (Chapter 13).
+Overlap repeats the end of one chunk at the start of the next, so a fact near a boundary appears whole in at least one chunk. It is a patch for structure-blind boundaries, and it is not free. With a window of N and overlap O, the index holds about N / (N - O) times the corpus tokens: 256 with 32 overlap is about 14 percent more vectors and embedding spend (the evaluation below measures 12 to 13 percent). Adjacent chunks also tend to both make the top k, wasting a slot, and the evidence packer must merge overlapping spans (Chapter 13).
 
-Use overlap with fixed and recursive chunkers on unstructured text, keep it small (10 to 15 percent is a common starting range), and prefer sentence-level overlap to token-level overlap so that the repeated part is a whole sentence. With section-aware or parent-child chunking, overlap is usually unnecessary: the boundaries are meaningful, and parents supply the surrounding context at generation time.
+Use overlap with fixed and recursive chunkers on unstructured text, keep it small (10 to 15 percent is a common starting range), and repeat whole sentences rather than raw tokens. Section-aware and parent-child chunking rarely need it: their boundaries are meaningful, and parents supply the surrounding context.
 
 ### Chunk size
 
-There is no universal chunk length. Small chunks retrieve precisely, because the embedding represents one idea and lexical scores are not diluted, but they lose context: a chunk that says "this limit does not apply to contractors" without saying which limit is useless alone. Large chunks keep context but dilute relevance: an embedding of a 1,000-token section is an average of many ideas, and a question about one of them may match a different, more focused chunk better. Large chunks also cost more per retrieved passage, so at a fixed context budget you can afford fewer of them, which reduces the diversity of evidence.
+There is no universal chunk length. Small chunks embed one idea and retrieve precisely, but they lose context: "this limit does not apply to contractors" is useless without the limit. Large chunks keep context but dilute relevance, because an embedding of a 1,000-token section averages many ideas, and fewer of them fit a context budget.
 
-What determines the right size is the shape of your questions and your documents. Lookup questions over reference material ("what does error RET-005 mean") want small units. Synthesis questions over policies ("what happens to my carryover if I leave in February") want the whole section. Compact FAQ entries chunk well at 100 tokens; long-form policy sections at 300 to 500. The embedding model's input limit sets a hard ceiling, and its quality at long inputs, which varies by model, sets a softer one. Parent-child chunking exists precisely because one size cannot serve both retrieval precision and generation context.
+The shape of your questions and documents decides. Lookups over reference material ("what does error RET-005 mean") want small units; synthesis over policies ("what happens to my carryover if I leave in February") wants whole sections. FAQ entries chunk well at about 100 tokens, long policy sections at 300 to 500. The embedding model's input limit is the hard ceiling. Parent-child chunking exists because one size cannot serve both retrieval precision and generation context.
 
-So measure. The measurement must target evidence the answers actually need, not documents: a question is answered by specific spans, so a chunker should be judged on whether those spans land together in one retrievable chunk (this chapter calls that span integrity) and whether retrieval finds it. The evaluation section below does this on the Northwind corpus and shows how the numbers move.
+So measure against evidence, not documents. A question is answered by specific spans, so judge a chunker on whether those spans land together in one retrievable chunk (this chapter calls that **span integrity**) and whether retrieval finds it. Evaluation and testing does this on the Northwind corpus.
 
 ## How it works
 
-Follow one document, Northwind's `retail-returns-api.md`, through the pipeline.
+Follow Northwind's `retail-returns-api.md` through the pipeline.
 
-1. **Parse.** `MarkdownParser` splits off the front matter and reads `id: prod-retail-returns-api`, `version: "2.3"`, `tenant: retail`, `acl_groups: ["all"]`, plus owner and tags, which become metadata. It strips HTML comments outside code fences, then walks the body line by line: an ATX heading pushes onto the section stack, a fence opens a code block that runs until the matching fence, a line starting with `|` followed by a separator line starts a table, list items and their continuation lines form a list block, and everything else accumulates into paragraphs that are reflowed onto one line. The `DocumentBuilder` stamps each block with the current section path and assembles `text` with blank lines between blocks, recording offsets.
-2. **Normalize.** `normalize_document` applies Unicode and whitespace normalization and boilerplate removal block by block, leaves code blocks alone except for line endings, re-renders tables from normalized cells, and rebuilds the document so offsets and `content_hash` are fresh.
-3. **Gate.** The loader checks `has_acl` (tenant and at least one group) and rejects the document otherwise. It checks for empty text and for pages that need OCR.
-4. **Deduplicate.** Within the scope `(retail, ["all"])`, the content hash is checked against earlier documents, then the MinHash signature is checked against the LSH index. The returns API has no duplicates, so it is kept.
-5. **Chunk.** `MarkdownSectionChunker(300)` groups blocks into sections. "Authentication" becomes one chunk with its heading. "Rate limits" becomes one chunk containing the heading, the table, and the paragraph after it (kind `mixed`). The `POST /v2/returns/validate` section's JSON code block stays intact with its explanatory sentences. With a budget of 48 tokens the error-code table no longer fits, so it is split into parts, each starting with `| Code | HTTP | Meaning |` and its separator line.
-6. **Finalize.** For each piece, `BaseChunker.finalize` slices the text, finds the covered blocks to infer the kind and lift block metadata, copies `tenant`, `acl_groups`, title, source URI and updated date, counts tokens, and derives the id from the fingerprint, section path, content hash, and occurrence.
-7. **Hand off.** The chunks go to the index (Chapter 9's store, Chapter 15's worker). On the next ingestion run, `diff_chunks` compares the ids already indexed for this document with a fresh chunking and returns what to embed, what to keep, and what to delete.
+1. **Parse.** `MarkdownParser` reads the front matter (`id: prod-retail-returns-api`, `version: "2.3"`, `tenant: retail`, `acl_groups: ["all"]`), strips HTML comments outside code fences, and walks the body into typed blocks, each stamped with its section path and offsets.
+2. **Normalize.** `normalize_document` normalizes block by block and rebuilds the document so offsets and `content_hash` are fresh.
+3. **Gate.** The loader rejects the document unless `has_acl` holds (a tenant and at least one group), and checks for empty text and pages that need OCR.
+4. **Deduplicate.** Within the scope `(retail, ["all"])`, the content hash and then the MinHash signature are checked against earlier documents. There is no match, so the document is kept.
+5. **Chunk.** `MarkdownSectionChunker(300)` makes "Authentication" one chunk with its heading, and "Rate limits" one `mixed` chunk holding the heading, the table, and the paragraph after it. The `POST /v2/returns/validate` section keeps its JSON code block intact. At a 48-token budget the error-code table no longer fits, so it is split into parts, each starting with `| Code | HTTP | Meaning |` and its separator line.
+6. **Finalize.** `BaseChunker.finalize` slices each piece, infers its kind from the covered blocks, copies permissions and document metadata, counts tokens, and derives the id.
+7. **Hand off.** The chunks go to the index (Chapter 9's store, Chapter 15's worker). On the next run, `diff_chunks` compares the ids already indexed for this document with a fresh chunking and returns what to embed, keep, and delete.
 
 ## Architecture
 
@@ -325,7 +319,7 @@ Configuration is optional and read from environment variables:
 
 ### The document model
 
-`Document`, `Block`, and `Chunk` carry the fields described above. The excerpt shows the parts with behavior: `short_hash` (stable across processes), `assemble`, which records block offsets, `with_blocks`, which every transformation uses to rebuild text, offsets, and hash together, and `embedding_text`, which adds the breadcrumb only to the indexed text. `SourceType`, `PageInfo`, `visible_to`, and the remaining fields are on disk.
+`Document`, `Block`, and `Chunk` carry the fields described above. The excerpt shows the parts with behavior: `short_hash` (stable across processes), `assemble` (records block offsets), `with_blocks` (rebuilds text, offsets, and hash together after any transformation), and `embedding_text` (adds the breadcrumb only to the indexed text).
 
 ```python
 # path: book/projects/ragkit/ragkit/documents.py (excerpt; full file on disk)
@@ -398,7 +392,9 @@ class Chunk(BaseModel):
 
 ### Tokenizers with spans
 
-Chunk budgets are in tokens, but chunk text must be exact source text. Re-joining decoded tokens alters whitespace and breaks citation offsets, so every tokenizer returns character spans and chunkers slice `Document.text` at those offsets. The default `RegexTokenizer` counts words and punctuation marks. It is deterministic and dependency-free, and it differs from a subword tokenizer by tens of percent on rare words and code, so production systems should count with the embedding model's own tokenizer (`TiktokenTokenizer` is one example, via `RAGKIT_TOKENIZER=tiktoken`).
+> **Deep dive.** Why tokenizers return character spans, and which one to count with in production; skip on a first reading.
+
+Chunk budgets are in tokens, but chunk text must be exact source text, so every tokenizer returns character spans and chunkers slice `Document.text` at them instead of re-joining decoded tokens. The default `RegexTokenizer` counts words and punctuation. It is deterministic and dependency-free, but it differs from a subword tokenizer by tens of percent on rare words and code, so count with the embedding model's own tokenizer in production (for example `RAGKIT_TOKENIZER=tiktoken`).
 
 ```python
 # path: book/projects/ragkit/ragkit/tokenizers.py  (excerpt; full file on disk)
@@ -415,7 +411,9 @@ class RegexTokenizer:
 
 ### Parsers
 
-All parsers implement one `Parser` protocol, `parse(raw, *, source_uri, defaults) -> list[Document]`, and return a list because a JSONL file yields many documents. `DocumentBuilder` tracks the heading stack and resolves identity with a fixed precedence: what the source declares, then caller-supplied defaults (`DocDefaults`, on disk), then derived values.
+> **Deep dive.** The parser protocol, identity precedence, and the code behind the format table; skip on a first reading.
+
+All parsers implement `parse(raw, *, source_uri, defaults) -> list[Document]`, returning a list because a JSONL file yields many documents. `DocumentBuilder` tracks the heading stack and resolves identity with a fixed precedence: what the source declares, then caller-supplied defaults, then derived values.
 
 ```python
 # path: book/projects/ragkit/ragkit/parsers/base.py  (excerpt; full file on disk)
@@ -442,7 +440,7 @@ All parsers implement one `Parser` protocol, `parse(raw, *, source_uri, defaults
         )
 ```
 
-The Markdown body loop shows the order that matters: fences before headings, tables before paragraphs. List, quote, and paragraph handling follow on disk.
+The Markdown body loop shows the order that matters: fences before headings, tables before paragraphs.
 
 ```python
 # path: book/projects/ragkit/ragkit/parsers/markdown.py  (excerpt; full file on disk)
@@ -484,7 +482,7 @@ The Markdown body loop shows the order that matters: fences before headings, tab
             # ...
 ```
 
-The HTML extractor's hidden-content rule, and the PDF parser's per-page quality accounting with its OCR seam. `OcrEngine` is a protocol with one method, `ocr_page(pdf_bytes, page_number) -> OcrResult(text, confidence)`; the JSONL parser's split between rendered text fields and filterable metadata is on disk.
+The HTML extractor's hidden-content rule, and the PDF parser's per-page accounting with its OCR seam:
 
 ```python
 # path: book/projects/ragkit/ragkit/parsers/html.py  (excerpt; full file on disk)
@@ -516,6 +514,8 @@ The HTML extractor's hidden-content rule, and the PDF parser's per-page quality 
 
 ### Normalization and deduplication
 
+> **Deep dive.** The per-block normalizer and the MinHash, LSH, and scope code; skip on a first reading.
+
 Normalization works per block, so code and tables get their own rules, and then rebuilds the document through `with_blocks`.
 
 ```python
@@ -540,7 +540,7 @@ def normalize_document(doc: Document, config: NormalizationConfig | None = None)
     return doc.with_blocks(blocks, metadata=meta, title=normalize_text(doc.title, cfg))
 ```
 
-MinHash and banded LSH in a few lines. `MinHasher.signature` takes the minimum of 128 universal hashes over a document's shingles; `NearDuplicateIndex` buckets each signature by band and verifies candidates against the full signature. Only the scope logic of `dedupe_documents` is shown: the scope key comes first, for both exact and near duplicates.
+MinHash and banded LSH, then the scope logic of `dedupe_documents`: the scope key comes first, for exact and near duplicates alike.
 
 ```python
 # path: book/projects/ragkit/ragkit/normalize.py  (excerpt; full file on disk)
@@ -581,7 +581,7 @@ MinHash and banded LSH in a few lines. `MinHasher.signature` takes the minimum o
 
 ### The chunker base: one finalization, one identity scheme
 
-This is the one place where ids, permissions, metadata, pages, and token counts are computed; each strategy only implements `config()` and `split()`, returning `Piece`s, character spans of where to cut with optional replacement text and hints. The helpers that map spans back to blocks (`_BlockIndex`, `_infer_kind`, and `_aggregate_block_meta`, which lifts speakers, timestamps, and OCR confidence into chunk metadata) are on disk.
+Each strategy implements only `config()` and `split()`, returning `Piece`s: character spans of where to cut, with optional replacement text and hints. `finalize` is the one place where ids, permissions, metadata, pages, and token counts are computed.
 
 ```python
 # path: book/projects/ragkit/ragkit/chunking/base.py (excerpt; full file on disk)
@@ -637,7 +637,9 @@ def make_chunk_id(
 
 ### Fixed, recursive, and sentence strategies
 
-The fixed chunker's whole strategy is a stride over token spans. `RecursiveChunker` (on disk) splits on the coarsest separator present, recurses into pieces still over budget, and merges small neighbors back up to the budget; its separators stay attached to the left part so spans stay contiguous. `split_sentences` (on disk) is the rule-based splitter with its abbreviation, initial, and decimal checks.
+> **Deep dive.** The window and sentence-packing loops; skip on a first reading.
+
+The fixed chunker's whole strategy is a stride over token spans. `RecursiveChunker` (on disk) keeps each separator attached to the left part so spans stay contiguous.
 
 ```python
 # path: book/projects/ragkit/ragkit/chunking/fixed.py  (excerpt; full file on disk)
@@ -676,7 +678,7 @@ Sentence packing applies overlap in whole sentences and drops the overlap tail w
 
 ### Section-aware chunking with intact code and tables
 
-Follow the per-block decisions from the second Architecture diagram: code is atomic, tables split by rows with a repeated header, and an oversized paragraph falls back to sentence packing. The section grouping in `split` and the offset bookkeeping in `_split_table` are on disk.
+Follow the per-block decisions from the second Architecture diagram: code is atomic, tables split by rows with a repeated header, and an oversized paragraph falls back to sentence packing.
 
 ```python
 # path: book/projects/ragkit/ragkit/chunking/section.py  (excerpt; full file on disk)
@@ -736,7 +738,9 @@ Follow the per-block decisions from the second Architecture diagram: code is ato
 
 ### Semantic chunking
 
-The chunker embeds sentence windows, computes consecutive cosine distances, and cuts at a percentile threshold. The size enforcement that follows (split groups over the maximum, merge groups under the minimum into their predecessor) is on disk.
+> **Deep dive.** The distance signal and where the cuts go; skip on a first reading.
+
+The chunker embeds sentence windows, computes consecutive cosine distances, and cuts above a percentile threshold; size enforcement follows on disk. `last_distances` keeps the distances for the last document, which is what you plot when tuning the percentile.
 
 ```python
 # path: book/projects/ragkit/ragkit/chunking/semantic.py  (excerpt; full file on disk)
@@ -764,7 +768,9 @@ The chunker embeds sentence windows, computes consecutive cosine distances, and 
 
 ### Parent-child chunking
 
-Parents are finalized first because each child id includes its parent id; `_children_of` (on disk) runs the child chunker inside each parent and shifts offsets back into document coordinates. `expand_to_parents` is the query-time half.
+> **Deep dive.** Two-pass parent-child linkage and query-time expansion; skip on a first reading.
+
+Parents are finalized first because each child id includes its parent id. Children are then cut inside each parent, and their offsets are shifted back into document coordinates. `expand_to_parents` is the query-time half.
 
 ```python
 # path: book/projects/ragkit/ragkit/chunking/parent_child.py  (excerpt; full file on disk)
@@ -804,7 +810,7 @@ def expand_to_parents(hits: Iterable[Chunk], parents: Mapping[str, Chunk]) -> li
 
 ### The corpus loader and chunk diffs
 
-`load_documents` parses every source, never lets one bad file stop the batch, and never admits a document without an ACL. Its signature (sources, `root` for machine-independent URIs, per-extension parser overrides, normalization and dedup switches) is on disk; the loop is the part that matters.
+`load_documents` never lets one bad file stop the batch and never admits a document without an ACL; every exit lands in the report with a reason.
 
 ```python
 # path: book/projects/ragkit/ragkit/pipeline.py  (excerpt; full file on disk)
@@ -850,7 +856,9 @@ def diff_chunks(previous_ids: Iterable[str], new_chunks: Iterable[Chunk]) -> Chu
 
 ### Tests
 
-These excerpts show the properties that matter most: intact code, tables split without losing a row or a header, id stability under edits, and honest PDF page accounting. Exact overlap, parent-child linkage, and offset invariants for every strategy are tested on disk.
+> **Deep dive.** The tests behind intact code, table splits, id stability, and PDF page accounting; skip on a first reading.
+
+Exact overlap, parent-child linkage, and offset invariants for every strategy are tested on disk.
 
 ```python
 # path: book/projects/ragkit/tests/test_chunkers.py  (excerpt; full file on disk)
@@ -912,59 +920,57 @@ PDF tests need no binary fixtures: `tests/pdf_fixtures.py` writes a valid PDF wi
 
 ## Code walkthrough
 
-**Strategies only decide where to cut.** Every chunker returns `Piece`s, character spans with optional replacement text and hints, and `BaseChunker.finalize` does the rest. This is the design decision that keeps six strategies honest. Ids, permissions, metadata, pages, kinds, and token counts are computed in one place, so a comparison between strategies compares boundaries and nothing else, and a bug fix in metadata propagation fixes every strategy at once.
+**Strategies only decide where to cut.** Because `finalize` computes everything else in one place, a comparison between strategies compares boundaries and nothing else, and a metadata fix fixes every strategy at once.
 
-**Offsets are an invariant, not a convenience.** Parsers build text through `assemble`, which records block offsets, and normalization rebuilds through `with_blocks`, which recomputes them. Chunkers cut at token spans or block offsets, so for every chunk whose text was not synthesized, `doc.text[c.char_start:c.char_end] == c.text`. The only exception is a table part with a repeated header, whose text is synthesized; its span covers the rows it contains, and its metadata says `header_repeated`. Tests assert the invariant for every strategy.
+**Offsets are an invariant.** `assemble`, `with_blocks`, and span-based cutting guarantee `doc.text[c.char_start:c.char_end] == c.text` for every chunk. The one exception is a table part with a repeated header: its text is synthesized, its span covers its rows, and its metadata says `header_repeated`.
 
-**The fingerprint closes the loop on configuration.** `fingerprint()` hashes the chunker's `config()` together with the tokenizer name. It feeds every chunk id and is stored on every chunk. When someone changes a budget from 300 to 400 tokens, the fingerprint changes, the ids change, and the index can hold both versions until the evaluation says which one wins. Without it, two configurations would overwrite each other's chunks with the same ids.
+**The fingerprint closes the loop on configuration.** `fingerprint()` hashes `config()` with the tokenizer name and feeds every chunk id. Change a budget from 300 to 400 tokens and the ids change, so both versions can coexist in the index until the evaluation picks one, instead of overwriting each other.
 
-**Fail-closed defaults appear in three places.** An empty `acl_groups` list means nobody; the loader rejects documents without tenant and ACL; and the front-matter reader raises on syntax it does not understand. Each of these turns a silent permission bug into a visible rejection in the load report.
+**Fail closed, and leave traces.** An empty `acl_groups` means nobody, the loader rejects documents without tenant and ACL, and the front-matter reader raises on syntax it does not understand. Oversized code is flagged rather than truncated, and split tables record `table_part` and `table_parts`. Every silent problem becomes a visible line in a report.
 
-**The section chunker's escape hatches are explicit.** An oversized code block is emitted whole and flagged, not silently truncated or split. An oversized table is split with headers repeated, and each part records its position (`table_part`, `table_parts`, row range). An oversized paragraph falls back to sentence packing. Each escape hatch leaves a trace in metadata, so a dashboard can count oversize chunks per source and someone can decide whether a 2,000-token code listing belongs in the index at all.
-
-**Semantic chunking exposes its signal.** `last_distances` holds the consecutive-sentence distances for the last document, which is what you plot when tuning the percentile. Its test (on disk) uses `FakeEmbeddings(vocabulary=...)` from `aie_core`, which embeds by bag of words over a fixed vocabulary, so two refund sentences are close and a VPN sentence is far, and asserts that the single cut lands at the topic shift.
-
-**Parent-child linkage is built in two passes.** Parents are finalized first, because a child's id includes its parent's id. Children are then cut inside each parent by `_children_of`, which runs the child chunker on a lightweight copy of the document whose text is the parent's text, and their offsets are shifted back into document coordinates. The output interleaves each parent with its children and records `child_count` on the parent.
+**Semantic chunking is testable offline.** Its test uses `aie_core`'s bag-of-words `FakeEmbeddings(vocabulary=...)`, so refund sentences sit close and a VPN sentence far, and asserts the single cut lands at the topic shift.
 
 ## Production considerations
 
-**Throughput and latency.** Ingestion is offline, but it is not free of deadlines: a freshness target such as "policy changes searchable within 15 minutes" (illustrative) bounds how long parsing, chunking, and embedding may take per document. Parsing Markdown and HTML is fast; PDF text extraction is slower and varies wildly with file complexity; OCR is slower still and usually runs on separate workers with its own queue. Run parsers in a process pool with a per-document timeout, because a pathological PDF can hang a parser, and record parse duration per source type so the slow slice is visible. Semantic chunking adds embedding calls to the ingestion path, which turns an embedding provider's rate limit into an ingestion bottleneck.
+> **Deep dive.** Throughput, cost, security, and operations for a running ingestion pipeline; skip on a first reading.
 
-**Cost.** Ingestion cost is dominated by embeddings, and embeddings scale with indexed tokens. Overlap multiplies indexed tokens by about N / (N - O). Parent-child chunking indexes only children, but children are more numerous. Semantic chunking pays for sentence embeddings that are thrown away after boundaries are chosen. Repeated table headers add a few percent of corpus tokens at typical budgets. Duplicates that slip past deduplication cost their full share. Cache embeddings by content hash and model (`aie_core.CachedEmbeddings` does exactly this): with content-derived chunk ids and hashes, re-ingesting an edited document re-embeds only the changed chunks. Query-time cost is the other side: chunk size times k is the evidence budget for every request, so a move from 300-token to 500-token chunks at k=5 adds about 1,000 prompt tokens to every answer (illustrative).
+**Throughput.** A freshness target such as "policy changes searchable within 15 minutes" (illustrative) bounds the time per document. PDF extraction time varies wildly with file complexity, and OCR needs its own workers and queue, so record parse duration per source type. Semantic chunking turns the embedding provider's rate limit into an ingestion bottleneck.
 
-**Security.** Everything that enters through ingestion is untrusted input to a model later. Parsers should strip invisible content (HTML comments, hidden elements, zero-width characters) and record what they removed, so that a security review can see that a document contained hidden text. Do not rely on this as the defense: Chapter 26's contract (retrieved text is data, never instructions) and Chapter 27's guardrails are the defense, and ingestion hygiene reduces exposure. ACLs must come from an authoritative source (the document system's permissions, not a field anyone can edit in a Markdown file) and must be validated at ingestion; a document without them is rejected. Deduplication must never cross permission scopes. Parsers process attacker-controllable files, so treat them as an attack surface: keep parser libraries patched, set size and page limits, and run them without network access.
+**Cost.** Embeddings dominate ingestion cost and scale with indexed tokens, so overlap, the extra vectors of parent-child chunking, discarded sentence embeddings, repeated headers, and missed duplicates all add up. Cache embeddings by content hash and model (`aie_core.CachedEmbeddings`) so that an edited document re-embeds only its changed chunks. At query time, chunk size times k is every request's evidence budget: moving from 300-token to 500-token chunks at k=5 adds about 1,000 prompt tokens per answer (illustrative).
 
-**Operations.** Every ingestion run should produce a report: documents loaded, rejected with reasons, duplicates dropped with the ids they duplicate, documents needing OCR, oversize chunks by source, and parse duration percentiles. `LoadReport` is the in-process version. Track these as metrics over time: a jump in rejected documents means a source changed its format or lost its ACL export; a jump in `needs_ocr` means someone started uploading scans; a jump in near duplicates means a wiki migration copied a space. Store `parser`, normalization form, and `chunker` fingerprint with every chunk so you can find and re-ingest exactly the chunks produced by a buggy version. Keep a small, versioned set of tricky documents (a two-column PDF, a scan, a page with hidden text, a huge table, a long code listing) as an ingestion regression suite and run it on every parser change.
+**Security.** Everything ingested is untrusted input to a model later. Stripping hidden content reduces exposure, but Chapter 26's contract (retrieved text is data, never instructions) and Chapter 27's guardrails are the defense. Parsers process attacker-controllable files, so keep parser libraries patched and isolated (Before you ship lists the limits).
 
-**Incremental ingestion.** Full rebuilds do not scale and they make deletions lag. The pieces this chapter provides are the ones that depend only on identity: document `content_hash` to skip unchanged documents, content-derived chunk ids, and `diff_chunks`, which compares the ids currently indexed for a document with a fresh chunking and returns chunks to embed, ids to keep, and ids to delete. Chapter 15 builds the rest: an idempotent indexing worker driven by change events, version records per document, deletion propagation to every index and cache, and freshness SLOs.
+**Operations.** Every run produces a `LoadReport` (loaded, rejected with reasons, duplicates, `needs_ocr`, oversize chunks, parse durations). Alert on jumps: more rejections mean a source changed format or lost its ACL export, more `needs_ocr` means scans arrived, more near duplicates mean a wiki migration copied a space. Run a small, versioned suite of tricky documents (a two-column PDF, a scan, hidden text, a huge table, a long code listing) on every parser change.
+
+**Incremental ingestion.** This chapter supplies the identity pieces (`content_hash`, content-derived ids, `diff_chunks`); Chapter 15 builds the indexing worker, deletion propagation, and freshness SLOs.
 
 ## Common mistakes
 
-- **Flattening before chunking.** Converting every source to plain text first and chunking the string throws away headings, tables, code fences, and pages that no chunker can recover. Parse to structure, then chunk.
+- **Flattening before chunking.** A plain-text conversion throws away headings, tables, code fences, and pages that no chunker can recover. Parse to structure, then chunk.
 - **Defaulting missing ACLs to public.** A missing permission field must reject the document, not publish it.
-- **Treating overlap as free.** Twenty-five percent overlap means a third more vectors, embedding spend, and near-duplicate hits. Measure what it buys.
-- **Tuning chunk size by reading a few chunks.** Chunks that look sensible to a human can still score badly on retrieval. Use an evidence-span gold set.
-- **Normalizing code like prose.** Collapsing whitespace in code changes its meaning; NFKC can change string literals.
-- **Deduplicating across ACL scopes.** Merging a public and a restricted copy of the same text either leaks or hides.
-- **Embedding the breadcrumb into `text`.** Context headers help retrieval, but if they are baked into the stored text, citations no longer quote the source. Keep them in `embedding_text()`.
+- **Treating overlap as free.** Twenty-five percent overlap means a third more vectors, embedding spend, and near-duplicate hits.
+- **Tuning chunk size by reading a few chunks.** Chunks that look sensible can still retrieve badly. Use an evidence-span gold set.
+- **Normalizing code like prose.** Collapsing whitespace or applying NFKC can change a program.
+- **Deduplicating across ACL scopes.** Merging a public and a restricted copy either leaks or hides.
+- **Embedding the breadcrumb into `text`.** Citations then no longer quote the source. Keep it in `embedding_text()`.
 
 ## Failure modes
 
-**Silent empty documents.** Symptom: questions about a contract or a scanned procedure always abstain or retrieve neighbors. Telemetry: the document exists in the source system and in the load report, with `needs_ocr` set and zero chunks; document-level recall for the scanned slice is near zero. Test: a fixture PDF with an image-only page must produce `needs_ocr=True` and appear in the report.
+**Silent empty documents.** Symptom: questions about a scanned contract always abstain or retrieve neighbors. Telemetry: the load report lists the document with `needs_ocr` and zero chunks; recall for the scanned slice is near zero. Test: an image-only fixture page yields `needs_ocr=True` and appears in the report.
 
-**Orphaned table rows.** Symptom: answers to lookup questions cite the right section but give the wrong value or say the table does not list the item. Telemetry: the retrieved chunk is a table part without a header, or a fixed window that starts mid-table; span integrity for table questions is low. Test: the large-table test asserts every part starts with the header and no row is lost or duplicated.
+**Orphaned table rows.** Symptom: lookup answers cite the right section but give the wrong value or say the item is not listed. Telemetry: the retrieved chunk is a headerless table part or a window starting mid-table; span integrity for table questions is low. Test: the large-table test (every part starts with the header, no row lost or duplicated).
 
-**Broken code examples.** Symptom: the assistant returns half a command or a function without its last lines. Telemetry: chunks containing an odd number of fence markers. Test: assert balanced fences in every chunk for every strategy that claims to preserve code.
+**Broken code examples.** Symptom: half a command, or a function without its last lines. Telemetry: chunks with an odd number of fence markers. Test: balanced fences in every chunk for every strategy that claims to preserve code.
 
-**Running headers dominate similarity.** Symptom: queries about one topic retrieve pages from unrelated sections of the same PDF. Telemetry: the top chunks share a repeated first line ("Northwind Employee Handbook 2026"). Test: the repeated-line test, plus a check that no single line appears in more than a set fraction of a document's chunks.
+**Running headers dominate similarity.** Symptom: queries retrieve unrelated pages of the same PDF. Telemetry: the top chunks share a repeated first line ("Northwind Employee Handbook 2026"). Test: the repeated-line test, plus a cap on the fraction of a document's chunks any one line may appear in.
 
-**Duplicate crowding.** Symptom: the top five results are the same paragraph from five wiki copies, and the answer misses a second relevant source. Telemetry: high pairwise similarity among retrieved chunks; many distinct document ids with near-identical content hashes. Test: the near-duplicate test; at query time, Chapter 12's MMR diversity stage limits the crowding that slips through.
+**Duplicate crowding.** Symptom: the top five results are one paragraph from five wiki copies, and a second relevant source is missed. Telemetry: high pairwise similarity among retrieved chunks from distinct document ids. Test: the near-duplicate test; at query time, Chapter 12's MMR diversity stage limits what slips through.
 
-**Re-embedding storms.** Symptom: embedding spend spikes after a routine edit to a large document set. Telemetry: `diff_chunks` reports most chunks as added and removed for documents whose content barely changed. Causes: positional ids, a chunker whose boundaries shift with every insertion, or a normalization or parser version change that altered every hash. Test: the id-stability test under insertion and version bump.
+**Re-embedding storms.** Symptom: embedding spend spikes after a routine edit. Telemetry: `diff_chunks` reports most chunks as added and removed for documents that barely changed. Causes: positional ids, boundaries that shift with every insertion, or a parser or normalization change that altered every hash. Test: the id-stability test under insertion and version bump.
 
-**Hidden instructions indexed.** Symptom: an answer contains a phrase from a vendor document that no human reader of the page saw. Telemetry: `html_comments_removed` or `hidden_elements_removed` is absent for a source that does contain hidden content, meaning the parser did not run or a different parser was used. Test: the HTML and Markdown tests that assert hidden text is absent from `text`.
+**Hidden instructions indexed.** Symptom: an answer contains vendor-document text no human reader saw. Telemetry: `html_comments_removed` or `hidden_elements_removed` is absent for a source known to hold hidden content, so the parser did not run or another one did. Test: the hidden-text tests for HTML and Markdown.
 
-**Fingerprint drift.** Symptom: after a deploy, retrieval quality changes although no one "changed chunking". Telemetry: chunks in the index carry two different `chunker` fingerprints, because a default changed in a library upgrade. Test: pin chunker configuration explicitly in the ingestion config and alert when an index contains more than the expected fingerprints.
+**Fingerprint drift.** Symptom: after a deploy, retrieval quality changes although no one "changed chunking". Telemetry: the index holds chunks with two `chunker` fingerprints, because a library upgrade changed a default. Test: pin chunker configuration explicitly and alert when an index holds more fingerprints than expected.
 
 ## Tradeoffs
 
@@ -977,26 +983,13 @@ PDF tests need no binary fixtures: `tests/pdf_fixtures.py` writes a valid PDF wi
 | Semantic | Topic shifts | One embedding per sentence | About 1x | Transcripts, long unstructured text | Noisy signal, model-dependent ids, cost |
 | Parent-child | Whatever the parent chunker respects | Low | More vectors (children) | Questions needing precise match and broad context | Larger prompts, extra lookup |
 
-Two cross-cutting trade-offs sit behind the table. Precision against context: smaller units match questions better and carry less context; parent-child chunking is the standard way to have both, paid for in prompt tokens. Simplicity against fidelity: every structure-aware step depends on a parser being right, and a wrong heading tree produces confidently wrong section paths. Where parsing is unreliable (scraped HTML, OCR output), recursive or sentence chunking degrades more gracefully.
-
-### The default configuration for Northwind Assist
-
-The later RAG chapters need a starting point. Northwind Assist uses the following ingestion configuration from Chapter 12 onward. Treat it as a baseline to re-measure when the corpus changes, not as a universal recommendation.
-
-- **Policies, runbooks, and product documentation** (Markdown and HTML) go through `MarkdownSectionChunker(300)` with table headers repeated, wrapped in `ParentChildChunker` when the retrieval chapter needs it: sections up to 800 tokens as parents and sentence packs of about 96 tokens as children. On the evaluation above this pairing gives near-best recall@1 (0.69, behind fixed-512's 0.75 at about a third of its context), and its ids survive edits because the boundaries are anchored to headings.
-- **Tickets** go through `JsonlParser` with subject, body, and resolution as text fields and everything else as metadata. Each ticket is usually short enough to be a single chunk, so the chunker hardly matters; the metadata does. Category, priority, status, tenant, and creation date are filterable fields, and the `support` group is supplied as the ACL default because the export has no permission column.
-- **Incident bridge transcripts** go through the text parser's transcript mode and the section-aware chunker, which falls back to packing turns. Speaker and start time travel with each chunk.
-- **PDFs** go through `PdfParser` with no OCR engine in the book's environment. Pages that need OCR are listed in the load report and excluded from the index until an engine is configured, so retrieval never silently treats a scanned contract as empty.
-- **Normalization** is NFKC for prose, code untouched, with the default boilerplate patterns. Deduplication runs within each permission scope at an estimated Jaccard of 0.9, keeping the newest copy.
-- **Token counting** uses `RegexTokenizer` in tests and the embedding model's own tokenizer in deployment, with budgets set about 20 percent below the model's input limit to absorb the difference between the two counts (illustrative margin).
-
-ACLs are mandatory, OCR-pending pages are visible rather than empty, and oversize code is flagged rather than truncated: each makes a problem appear in a report the day it happens. Re-measure the section and parent-child sizes whenever the corpus gains a new document type.
+Two trade-offs sit behind the table. Precision against context: smaller units match better and carry less context, and parent-child chunking buys both with prompt tokens. Simplicity against fidelity: structure-aware steps depend on correct parsing, and a wrong heading tree yields confidently wrong section paths. Where parsing is unreliable (scraped HTML, OCR output), recursive or sentence chunking degrades more gracefully. Northwind Assist's configuration closes Evaluation and testing, after the measurements it rests on.
 
 ## Evaluation and testing
 
-Test ingestion at two levels. **Unit properties** are deterministic and belong in CI: offsets match text, overlap is exact, sizes are bounded, code fences are balanced, tables keep their headers, parent links resolve, ids are deterministic and stable under unrelated edits, permissions propagate to every chunk, hidden content is removed, scans are flagged. The ingestion tests in `ragkit` cover each of these and run offline.
+Test ingestion at two levels. **Unit properties** are deterministic and belong in CI: offsets match text, overlap is exact, sizes are bounded, code fences balance, tables keep their headers, parent links resolve, ids are stable under unrelated edits, permissions reach every chunk, hidden content is removed, scans are flagged. `ragkit`'s tests cover each offline.
 
-**Retrieval effect** is measured, not asserted. The chunk-size script uses a gold set of questions whose answers need specific evidence spans (`eval_data/chunk_eval_gold.jsonl`: 16 questions over five Northwind documents, several of which need a table header and a row together). For each configuration it reports span integrity (are all evidence spans inside one chunk, independent of retrieval), recall@k (are all spans present in the top k after retrieval), MRR of the first chunk containing any span, context tokens at k (what the generator would read), mean and p95 chunk tokens, and index overhead. Retrieval is a small TF-IDF ranker so that the script runs offline; it stands in for the lexical, dense, and hybrid retrievers of Chapter 12, and the harness accepts any retriever factory.
+**Retrieval effect** is measured, not asserted. The chunk-size script uses a gold set whose answers need specific evidence spans (`eval_data/chunk_eval_gold.jsonl`: 16 questions over five Northwind documents, several needing a table header and a row together). Per configuration it reports span integrity (all evidence spans inside one chunk, independent of retrieval), recall@k (all spans in the top k), MRR, context tokens at k, chunk-size statistics, and index overhead. Retrieval is a small offline TF-IDF ranker standing in for Chapter 12's retrievers; the harness accepts any retriever factory.
 
 Output on the Northwind corpus at k=3 (24 documents, 16 questions; illustrative, because the gold set is small and each question is worth 0.06):
 
@@ -1034,13 +1027,26 @@ And the same configurations at k=1, the strictest setting:
 
 How to read this:
 
-- **Span integrity catches what recall hides.** Fixed 64-token windows split the evidence of five questions across chunks (integrity 0.69). At k=3 retrieval sometimes reassembles the pieces from adjacent chunks, so recall@3 (0.81) looks better than the chunking deserves. At k=1 it collapses to 0.38.
-- **Large chunks buy recall with context tokens.** Fixed 512-token windows reach the best recall@1 (0.75), but the generator reads 456 tokens for one passage. Parent-child reaches 0.69 at 144 tokens, and section-48 reaches 0.69 at 41 tokens. At k=3, seven configurations reach full recall, with context from 112 to 1,364 tokens; recursive-200 and section-300 each miss one question. On this corpus, the size decision is mostly a cost decision.
-- **Repeating table headers is measurable.** With a 48-token budget, tables are split. Without header repetition, span integrity drops from 0.94 to 0.88 and recall@1 from 0.69 to 0.56, to save about 11 percent of corpus tokens in the index (overhead +8 percent with repeated headers, -3 percent without). The header repetition pays for itself on table questions.
-- **Small sections can hurt a lexical retriever.** Section-300 has perfect integrity but the weakest recall@1 among configurations with perfect integrity (0.50). Inspecting the eight misses: three go to sibling documents on the same topic (the HR FAQ, the IT FAQ, the travel policy), and five go to the wrong section of the right document. This is a retrieval problem exposed by chunking, exactly the case for Chapter 12's hybrid retrieval and reranking. Without stage isolation you would blame the chunker.
-- **Overlap buys integrity at fixed sizes, and you pay for it in overhead.** A side run without overlap shows the effect: fixed-128/0 has span integrity 0.75 and recall@1 0.38, against 1.00 and 0.56 with 16 tokens of overlap; fixed-256/0 has 0.81 against 1.00 with 32 tokens. That is the boundary patch working as designed, for 12 to 13 percent more index. Section-aware chunking reaches full integrity at about zero overhead, because its boundaries are already meaningful.
+- **Span integrity catches what recall hides.** Fixed 64-token windows split the evidence of five questions (integrity 0.69). At k=3 adjacent chunks sometimes reassemble the pieces, so recall@3 (0.81) flatters the chunking; at k=1 it collapses to 0.38.
+- **Large chunks buy recall with context tokens.** Fixed-512 reaches the best recall@1 (0.75) but reads 456 tokens per passage; parent-child reaches 0.69 at 144 tokens and section-48 0.69 at 41. At k=3, seven configurations reach full recall with context from 112 to 1,364 tokens. On this corpus, the size decision is mostly a cost decision.
+- **Repeating table headers pays for itself.** At a 48-token budget, dropping repetition lowers span integrity from 0.94 to 0.88 and recall@1 from 0.69 to 0.56, to save about 11 percent of corpus tokens.
+- **Small sections can hurt a lexical retriever.** Section-300 has perfect integrity but recall@1 of only 0.50. Of its eight misses, three go to sibling documents on the same topic (the HR FAQ, the IT FAQ, the travel policy) and five to the wrong section of the right document: a retrieval problem exposed by chunking, and the case for Chapter 12's hybrid retrieval and reranking. Without stage isolation you would blame the chunker.
+- **Overlap buys integrity at fixed sizes.** Without overlap, fixed-128 has integrity 0.75 and recall@1 0.38, against 1.00 and 0.56 with 16 tokens of overlap; fixed-256 has integrity 0.81 against 1.00. That costs 12 to 13 percent more index; section-aware chunking reaches full integrity at about zero overhead.
 
-Running with `--embeddings fake` adds a semantic-chunker row. With the hashing fake, embeddings carry no meaning, so that row measures nothing about semantic chunking. Rerun with `--embeddings settings` and a real embedding model before drawing conclusions. The general method carries over to your corpus: build evidence-span questions per document type, include table, code, and multi-sentence questions, report span integrity and recall separately, compare against the fixed-size baseline, and pick the cheapest configuration within noise of the best.
+The `--embeddings fake` semantic-chunker row measures nothing, because the hashing fake's embeddings carry no meaning; rerun with `--embeddings settings` and a real model before drawing conclusions. On your corpus: build evidence-span questions per document type, including table, code, and multi-sentence questions, report span integrity and recall separately, compare against the fixed-size baseline, and pick the cheapest configuration within noise of the best.
+
+### The default configuration for Northwind Assist
+
+The later RAG chapters need a starting point. Northwind Assist uses this ingestion configuration from Chapter 12 onward, as a baseline to re-measure when the corpus changes, not a universal recommendation.
+
+- **Policies, runbooks, and product documentation** (Markdown and HTML) go through `MarkdownSectionChunker(300)` with table headers repeated, wrapped in `ParentChildChunker` when the retrieval chapter needs it: sections up to 800 tokens as parents and sentence packs of about 96 tokens as children. In the k=1 table above, this pairing reaches recall@1 0.69, behind fixed-512's 0.75 at about a third of its context, and its heading-anchored ids survive edits.
+- **Tickets** go through `JsonlParser` with subject, body, and resolution as text fields and everything else as metadata. A ticket is usually one chunk, so the metadata matters more than the chunker. The `support` group is the ACL default because the export has no permission column.
+- **Incident bridge transcripts** go through transcript mode and the section-aware chunker, which packs turns. Speaker and start time travel with each chunk.
+- **PDFs** go through `PdfParser` with no OCR engine in the book's environment. Pages that need OCR are reported and excluded from the index until an engine is configured.
+- **Normalization** is NFKC for prose, code untouched, with the default boilerplate patterns. Deduplication runs within each permission scope at an estimated Jaccard of 0.9, keeping the newest copy.
+- **Token counting** uses `RegexTokenizer` in tests and the embedding model's own tokenizer in deployment, with budgets about 20 percent below the model's input limit to absorb the difference (illustrative margin).
+
+Each choice makes a problem visible the day it happens. Re-measure the sizes whenever the corpus gains a new document type.
 
 ## Before you ship
 

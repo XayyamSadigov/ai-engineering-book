@@ -1,6 +1,18 @@
 # Chapter 38 — Durable and Long-Running Agents
 
-After this chapter you will be able to run agents that outlive the process that started them: runs that survive a crash in the middle of a side effect without repeating it, wait hours for an approval or a webhook without holding a thread, escalate and expire unanswered approvals, keep a two-hundred-step task inside a bounded context, and replay any of it offline. You will also be able to analyze coding, IDE, computer-use, skill, and voice agents as harness engineering problems, where the harness is the code around the model that runs tools, keeps state, and enforces checks. The code in `book/projects/examples/ch38/` extends Chapter 19's `agentkit` and Chapter 16's `toolkit`: a SQLite-backed `DurableRunner` with leases and outcome reconciliation, an `InterruptManager` for approvals, timers, and events, a task ledger with compaction, a coding-agent harness with a deterministic Definition of Done, a skill loader, and a voice-turn gate, all offline with scripted models.
+This chapter is about agents that outlive the process that started them: runs that last hours or days, survive crashes and deploys, wait for people and webhooks, and still perform each side effect once. It is also about the harness, the code around the model that runs tools, keeps state, and enforces checks, which decides how well coding, computer-use, and skill-based agents work in practice.
+
+**You will be able to:**
+- Build a durable agent run on an event log with leases and fence tokens, so that exactly one worker drives a run and a crashed run resumes where it stopped.
+- Close the at-least-once window around side effects with stable idempotency keys, an outcome ledger, and reconciliation against the system of record.
+- Model approvals, timers, and external events as persisted interrupts with owners, escalation, expiry as denial, and deduplication.
+- Keep a two-hundred-step run inside a bounded context with a typed task ledger and literal-preserving compaction.
+- Decide whether to build durability on your own database or adopt a durable execution engine, and know what each choice still leaves to you.
+- Design a coding-agent harness with narrow tools, a sandbox, and a deterministic Definition of Done, and package procedure as versioned, pinned skills.
+
+**Prerequisites:** Chapters 16 (tool contracts, `SQLiteIdempotencyStore`, `SandboxRunner`), 17 (checkpoints and the engine landscape), and 19 (`agentkit`'s event log, approvals, and replay). | **Code:** `book/projects/examples/ch38/` (run: `cd book/projects/examples/ch38 && pytest -q`) | **Builds:** a SQLite-backed `DurableRunner` with leases and outcome reconciliation, an `InterruptManager` for approvals, timers, and events, a task ledger with compaction, a coding-agent harness, a skill loader, and a voice-turn gate, all offline with scripted models.
+
+The chapter has two parts. **Part one, durable runs**, covers the log, the at-least-once window, leases, interrupts, replay, long-horizon context, and when to adopt an engine instead of building one. **Part two, harness engineering in agent products**, applies the same lens to coding, IDE, computer-use, and skill-based agents, with a short note on voice, which Chapter 35 owns. The Implementation section builds both parts in that order.
 
 ## Why this matters
 
@@ -10,7 +22,7 @@ When that happens to a naive agent, one of three things goes wrong. The run is l
 
 Long runs also break the context window. Every tool result the agent sees stays in the transcript, and by step forty the prompt is mostly stale search results. Truncating blindly loses the one ticket id that the final answer depends on; summarizing with a model loses it differently. And long runs are where humans enter the loop, so approvals need deadlines, owners, and an answer for "what if nobody answers?"
 
-None of this is new to distributed systems. Job queues, workflow engines, and payment systems solved crash recovery, idempotent side effects, timers, and leases long ago. What is new is that the component choosing the next action is probabilistic, so the harness cannot rely on it to remember, reconcile, or stop. Agent reliability is ordinary distributed-systems reliability plus probabilistic planning. The second half of the chapter applies the same lens to coding, IDE, computer-use, and voice agents, whose quality, in practice, often depends as much on the harness as on the model.
+None of this is new to distributed systems. Job queues, workflow engines, and payment systems solved crash recovery, idempotent side effects, timers, and leases long ago. What is new is that the component choosing the next action is probabilistic, so the harness cannot rely on it to remember, reconcile, or stop. Agent reliability is ordinary distributed-systems reliability plus probabilistic planning. The second part of the chapter applies the same lens to coding, IDE, and computer-use agents, whose quality, in practice, often depends as much on the harness as on the model.
 
 ## Mental model
 
@@ -96,6 +108,33 @@ Compaction then works on the request, not on the log. `CompactingLLM` wraps any 
 
 Extractive digests are cheaper and more predictable than model summaries, and they cannot invent content. Their weakness is reasoning: they keep that a search returned `INC-1007`, not why it mattered. That is the ledger's job, which is why the agent is told to write decisions and facts into it as it goes, and why the compacted block says the ledger and digests are authoritative and that the agent should re-read a source with a tool if it needs the full text. An LLM summarizer (Chapter 5's `LLMSummarizer`) can replace the digest for old steps when the tool outputs are prose-heavy; keep the literal extraction regardless.
 
+### Build vs adopt a durable engine
+
+Everything above can be built on your own database, and this chapter does so in about a thousand lines. It can also be adopted. Chapter 17 introduced the engine families and mapped them onto its workflow checkpoints, retries, step keys, and pauses; this section maps them onto the concepts of this chapter and covers the parts that decide whether an engine fits an agent.
+
+Four shapes are common as of 2026, named here only as examples. **Replay-based workflow engines** (for example Temporal) run as a separate service that records an event history per run and dispatches work to your workers. **Durable function libraries over your own database** (for example DBOS, on PostgreSQL) checkpoint each step's output in tables next to your application data, with no extra service. **Durable RPC runtimes** (for example Restate) keep a journal per invocation and offer keyed objects that process one call per key at a time. **Graph checkpointers** (for example LangGraph's) save state after each step of a graph inside your process.
+
+| This chapter | History-based engines (Temporal-, DBOS-, Restate-style) | Graph checkpointer |
+|---|---|---|
+| Event log, state as a fold | Event history or step table; state rebuilt by re-running the workflow function against it | Checkpoint per step, keyed by a thread id |
+| Lease and fence token | Engine dispatches each run to one worker; heartbeat timeouts and rejected late completions play the fence's role | None; you prevent two processes resuming one thread |
+| Outcome ledger and reconciliation | Recorded step results cover "completed but not acknowledged"; a step that died mid-call is retried, so external deduplication or lookup is still yours | Same as the left column, with a coarser step |
+| Timer interrupt | Durable sleep or timer | None; you bring a scheduler |
+| Event interrupt and inbox | Signals, messages, or awakeables addressed to a run, persisted if they arrive early | Resume with a value; you bring the delivery and deduplication |
+| Approval owner, escalation, expiry | Built from a signal plus a timer; the policy (who, when, expiry as denial) is still your code | Interrupt plus your own policy and scheduler |
+| Recovery loop | Built in | You resume threads yourself |
+| Request compaction, Definition of Done | Not provided; same code as this chapter | Not provided |
+
+The table shows the pattern: an engine takes over the log, ownership, timers, delivery, and recovery, which are the hardest parts to operate. It does not take over idempotency at the external system, approval policy, context management, or verification. Those are about the agent, not about durability. One graph-specific trap: in some libraries, resuming after an interrupt re-runs the interrupted node from its start, so a side effect placed before the interrupt point runs twice. Put the approval and the side effect in separate nodes.
+
+**Determinism is the price of replay.** Replay-based engines rebuild state by running your workflow function again from the top, substituting recorded results for completed steps. The function must therefore take the same path every time. For an agent this means: every model call and tool call is a step (an activity), because a model asked twice answers differently; the loop's control code (budgets, policy checks, routing on validated values) lives in the workflow function and must not read the wall clock, draw random numbers, generate `uuid4()` request ids, or read configuration directly. Use the engine's clock and deterministic id helpers, or derive ids from the step counter, exactly as this chapter derives idempotency keys from the log. A violation does not fail loudly at write time; it fails when a recovered run diverges from its history, often days later. This chapter's design avoids the rule by a different choice: it records each decision as an event and folds events into state, so recovery never re-executes loop code. The cost moves to the fold, which must accept every event shape ever written.
+
+**In-flight runs meet new code.** An agent run paused three days on an approval resumes on whatever release is deployed then. With a replay-based engine, a change to the workflow function (a new policy check before each tool call, a reordered step) makes old histories diverge. Engines offer versioning markers that branch on the version recorded in the history, and worker versioning that keeps old runs on old workers until they drain. The durable habit either way: keep the workflow function small and stable, and put what changes often (prompts, tool sets, models, policy tables) inside steps or configuration read through a step, where replay does not re-execute it. In this chapter's design the same problem shows up as event schema versioning and as decisions that depend on code: a resumed run uses the current tools and policy by design, so record which release took over (for example in the `Resumed` event's note) to keep replay and audit honest.
+
+**LLM payloads are large.** Engines store step inputs and outputs in the history, and agents produce big ones: full prompts, model responses, tool outputs, file contents. Engines cap the size of each payload and the length of a history (limits of a few megabytes per payload and tens of thousands of events are typical, illustrative; check your engine). A two-hundred-step coding run can hit both. Three habits keep histories small. Store large blobs (observations, files, transcripts) in object storage and record a reference plus a content hash, the claim-check pattern. Pass the compacted ledger, not the raw transcript, between steps. And for very long runs, use the engine's "continue as new" or equivalent to start a fresh history carrying only the ledger and the run's identity. Remember that the history is also a data store: prompts and tool outputs in it inherit its retention and access rules, so redaction (Chapter 27) applies there too. Retries also cost tokens: a model-call step retried by the engine pays for the call again, so give model steps a retry policy per error class (Chapter 29) rather than the engine's default.
+
+**When building your own is justified.** Build on your database when most of these hold: you already have an event-sourced loop like `agentkit`; there are few run types, owned by one team; volumes of timers and concurrent runs are modest (thousands, not millions); you cannot add a stateful service to operate (an air-gapped site, a strict data-residency rule, a platform team without capacity); or transcripts must never leave a database you control. Adopt an engine when several teams build long-running workflows, runs span services, timers and signals are central rather than occasional, or you want visibility, cancellation, and versioning tooling you would otherwise write. A durable function library over your existing PostgreSQL is a middle path: engine semantics without a new service. Be honest about the cost of building: the log takes a week; the scheduler, timer scale-out, upgrade story for in-flight runs, operator tooling, and runbooks take the rest of the year.
+
 ## Harness engineering in agent products
 
 In many agent products the model is easier to swap than the surrounding harness, and a stronger harness can make the same base model substantially more useful. The products below show why. In each, the hard engineering is in tools, state, verification, and permissions.
@@ -134,25 +173,7 @@ Skills are also a supply chain. A skill can carry scripts that run, URLs that ex
 
 ### Realtime voice agents
 
-A voice agent is the latency-critical extreme of harness engineering. A typical pipeline is audio capture, voice activity detection (VAD, which decides when someone is speaking), streaming automatic speech recognition (ASR), turn detection, agent reasoning and tool calls, text-to-speech (TTS), and streaming playback. Native speech-to-speech models collapse some stages, but the turn-taking, tool, and safety problems remain. Latency is cumulative and every stage takes its share. A worked example with illustrative numbers: ASR partials at 150 ms, model time to first token at 400 ms, first TTS audio at 250 ms, and 150 ms of network and processing put first audio near 950 ms before any queueing, and a one-second target cannot be met by optimizing the model if endpointing alone waits 800 ms.
-
-The engineering response is a per-stage budget, measured at p95, with an owner per stage:
-
-| Stage | Illustrative p95 budget | What drives it |
-|---|---|---|
-| Endpointing (VAD and end-of-turn decision) | 100 to 250 ms | Silence threshold; semantic end-of-turn models |
-| ASR finalization | 100 to 300 ms | Streaming partials; model size; audio codec |
-| Model time to first token | 200 to 700 ms | Prompt length, prefix caching, queueing (Chapter 34) |
-| TTS first audio | 100 to 300 ms | Streaming synthesis; chunking of model output |
-| Transport and telephony | variable | Codecs, SIP gateways, jitter buffers |
-
-These numbers are illustrative, not SLOs. Summing per-stage p95s overestimates the p95 of the total, which is the safe direction for a budget; measure the end-to-end distribution as well. Streaming overlaps stages: reasoning can start on stable partial transcripts, and TTS can start on the first stable sentence of model output.
-
-Barge-in, the caller speaking over the agent, must stop playback immediately, cancel the in-flight generation so no more audio is queued, and preserve state. A subtle point: the conversation history must record what the caller actually heard, not what the model planned to say. If the agent planned "Your order ships tomorrow. Would you like me to change the address?" and the caller interrupted after the first sentence, the history that the next turn sees must contain only the first sentence plus an interruption marker; otherwise the agent believes it asked a question the caller never heard. Track played characters from the audio clock, not from the text sent to TTS.
-
-The rule that matters most for safety: never act on an unstable partial transcript. Speculation is fine for reads: looking up the account or prefetching the returns policy while the caller is still talking saves hundreds of milliseconds. A side effect needs a final transcript with adequate confidence, then the normal confirmation for that action class: ticket fields read back and confirmed, payments and cancellations behind stronger verification. When ASR confidence is low, ask the caller to repeat rather than guessing an account action.
-
-The tool layer, not the model, enforces which authenticated customer's account a call may touch. And call state is durable like any other run: a transient worker restart during a call must not erase a confirmation or create a second ticket, which is the same reconciliation machinery as above with a much shorter clock.
+A voice agent is the latency-critical extreme of the same harness problem, and Chapter 35 (Case 2) owns its design: the streaming pipeline, the per-stage latency budget, barge-in, and evaluation. Three harness rules from this chapter carry over unchanged and are what `voice_gate.py` encodes. A partial transcript may trigger only reads; a side effect needs a final transcript above a confidence threshold plus the normal confirmation for its action class. After barge-in, the conversation history must hold only what the caller actually heard, measured from the audio clock, or the next turn reasons about a question the caller never heard. And call state is durable like any other run: a worker restart mid-call must not erase a confirmation or create a second ticket, which is the reconciliation machinery above with a much shorter clock.
 
 ## How it works
 
@@ -231,25 +252,6 @@ flowchart LR
     D -->|unmet criteria| M
 ```
 
-A realtime voice turn is a pipeline of streaming stages with two control paths that matter: barge-in, which cancels downstream work, and the gate, which decides what a transcript may trigger.
-
-```mermaid
-flowchart LR
-    MIC[Caller audio] --> VAD[VAD and endpointing]
-    VAD --> ASR[Streaming ASR]
-    ASR -->|partials| GATE{Turn gate}
-    GATE -->|stable partial| SPEC[Speculative read-only lookups]
-    GATE -->|final and confident| AG[Agent step with tools and policy]
-    GATE -->|low confidence| RE[Ask caller to repeat]
-    SPEC --> AG
-    AG -->|stable text chunks| TTS[Streaming TTS]
-    TTS --> PLAY[Playback with audio clock]
-    VAD -->|caller speaks during playback| BI[Barge-in]
-    BI -->|stop and cancel| PLAY
-    BI -->|cancel generation| AG
-    PLAY -->|heard prefix only| HIST[(Durable call state)]
-```
-
 ## Implementation
 
 The examples live in `book/projects/examples/ch38/` and import `agentkit`, `toolkit`, and `aie_core` from the shared virtual environment.
@@ -265,7 +267,7 @@ book/projects/examples/ch38/
   fakes.py             FakeClock, FakeTicketSystem, sample tools
   skills/              three sample Northwind skills
   demo.py              crash after commit, recover, one ticket
-  test_ch38_*.py       53 offline tests
+  test_ch38_*.py       offline tests
   pyproject.toml  README.md  conftest.py
 ```
 
@@ -286,19 +288,13 @@ The event store implements agentkit's `EventStore` protocol. A fenced view check
 ```python
 # path: book/projects/examples/ch38/durable.py  (excerpt; full file on disk)
 class SimulatedCrash(BaseException):
-    """Stands in for `kill -9`. It derives from BaseException so that the runtime's
-    `except Exception` around tool execution cannot catch and record it: the process
-    simply stops, exactly where it was."""
+    # ... stands in for `kill -9` (see the Code walkthrough)
 
 
 class LeaseLost(RuntimeError):
     """This worker no longer owns the run; it must stop writing immediately."""
 
-
-class LeaseHeld(RuntimeError):
-    """Another live worker owns the run."""
-
-# --------------------------------------------------------------------------- leases
+# ...
 @dataclass(frozen=True)
 class Lease:
     run_id: str
@@ -341,11 +337,7 @@ class LeaseManager:
                 return False
         return True
 
-    def holder(self, run_id: str) -> Lease | None:
-        rows = self.db.query("SELECT owner, fence, expires_at FROM leases WHERE run_id=?", (run_id,))
-        if not rows or rows[0][2] <= self.clock():
-            return None
-        return Lease(run_id, rows[0][0], rows[0][1], rows[0][2])
+    # ... holder(run_id) returns the live lease or None (on disk)
 
     def check_and_extend(self, c: sqlite3.Connection, lease: Lease) -> None:
         """Called inside the append transaction: the fence check and the write commit together."""
@@ -388,7 +380,7 @@ class SqliteEventStore:
 `ReconcilingTool` wraps any agentkit tool and closes the at-least-once window using Chapter 16's `SQLiteIdempotencyStore` as the outcome ledger.
 
 ```python
-# path: book/projects/examples/ch38/durable.py  (continued)
+# path: book/projects/examples/ch38/durable.py  (excerpt; full file on disk)
 @dataclass
 class ReconcilingTool:
     """Wraps a side-effecting tool so that, under at-least-once execution, the side effect
@@ -456,7 +448,7 @@ class ReconcilingTool:
 The runner owns runs through leases and builds a fresh runtime for every start or resume, so code and configuration are current while state comes only from the log.
 
 ```python
-# path: book/projects/examples/ch38/durable.py  (continued)
+# path: book/projects/examples/ch38/durable.py  (excerpt; full file on disk)
 RuntimeFactory = Callable[[EventStore], AgentRuntime]
 
 
@@ -581,7 +573,6 @@ reconciliation log: [{'key': 'inc-1:2.0', 'outcome': 'reconciled_found'}]
         return self._record_pause(result.run_id, result.state.pending_approval)
 
     def _record_pause(self, run_id: str, rec: Any) -> Interrupt | None:
-        assert rec is not None
         existing = self._find(run_id, rec.request_id)
         if existing is not None:
             return existing
@@ -589,7 +580,6 @@ reconciliation log: [{'key': 'inc-1:2.0', 'outcome': 'reconciled_found'}]
         it = Interrupt(id=uuid.uuid4().hex[:12], run_id=run_id, request_id=rec.request_id, tool=rec.tool,
                        arguments=dict(rec.arguments), status=InterruptStatus.PENDING, created_at=now,
                        kind=InterruptKind.APPROVAL)
-        claimed_early = False
         if rec.tool == WAIT_UNTIL:
             it.kind = InterruptKind.TIMER
         elif rec.tool == WAIT_FOR_EVENT:
@@ -608,33 +598,14 @@ reconciliation log: [{'key': 'inc-1:2.0', 'outcome': 'reconciled_found'}]
                 return self._find(run_id, rec.request_id)
             if it.kind is InterruptKind.TIMER:
                 self._schedule(c, it.id, now + min(float(rec.arguments["seconds"]), self.max_wait_s), "fire")
-            elif it.kind is InterruptKind.EVENT:
-                early = c.execute("SELECT event_id, payload FROM inbox WHERE correlation_key=? "
-                                  "ORDER BY received_at LIMIT 1", (it.correlation_key,)).fetchone()
-                if early is not None and c.execute("DELETE FROM inbox WHERE correlation_key=? AND event_id=?",
-                                                   (it.correlation_key, early[0])).rowcount == 1:
-                    # the event beat the wait: take it from the inbox and resolve at once
-                    self._claim(c, it, {"status": "received", "payload": json.loads(early[1]),
-                                        "event_id": early[0], "at": now}, by="event")
-                    claimed_early = True
-                else:
-                    self._schedule(c, it.id, now + min(float(rec.arguments["timeout_s"]), self.max_wait_s),
-                                   "timeout")
-        if claimed_early:
-            self._resume(it, approve=True, note="event resolved by event")
-            return self._find(run_id, rec.request_id)
+            # ... EVENT: take a matching event from the inbox and resolve at once, or schedule the timeout
         if it.kind is InterruptKind.APPROVAL:
             self.notify(it, "assigned")
         return it
 
     def decide(self, interrupt_id: str, *, approve: bool, by: str, reason: str = "") -> RunResult:
-        """A human decision. Only someone on the chain up to the current level may decide, and
-        only while the run is still paused on exactly this request."""
         it = self.get(interrupt_id)
-        if it.kind is not InterruptKind.APPROVAL:
-            raise ValueError(f"interrupt {interrupt_id} is a {it.kind.value}, not an approval")
-        if it.status is not InterruptStatus.PENDING:
-            raise ValueError(f"interrupt {interrupt_id} is already {it.status.value}")
+        # ... refuse non-approval kinds and interrupts that are no longer pending
         policy = self.policies.get(it.tool, self.default_policy)
         if by not in policy.chain[: it.level + 1]:
             raise PermissionError(f"{by} may not decide {it.tool} at escalation level {it.level}")
@@ -674,11 +645,10 @@ reconciliation log: [{'key': 'inc-1:2.0', 'outcome': 'reconciled_found'}]
             self._try(results, lambda: self._resolve_and_resume(
                 it, {"approved": False, "reason": "expired", "at": now}, by="clock", approve=False,
                 note=f"approval for {it.tool} expired unanswered; treated as denied", status=InterruptStatus.EXPIRED))
-        for (interrupt_id,) in self.db.query("SELECT id FROM interrupts WHERE kind='approval' AND status='pending' "
-                                             "AND escalate_at IS NOT NULL AND escalate_at<=?", (now,)):
-            self._escalate(self.get(interrupt_id), now)
+        # ... escalate approvals past escalate_at, then finish resumes recorded but not completed
         results.extend(self._repair())          # last, so it also sees what failed in this tick
         return results
+
     def _resume(self, it: Interrupt, *, approve: bool, note: str) -> RunResult:
         # request_id binds the resume to this interrupt: if the run has moved on to another
         # request, agentkit refuses rather than approving whatever is pending now.
@@ -759,7 +729,7 @@ def compact_messages(messages: Sequence[Message], *, keep_recent_steps: int, led
 
 ### The coding harness
 
-Patching verifies context before writing anything and reports the real lines on mismatch. Tests run in the sandbox on a copy of the workspace. The Definition of Done reruns them.
+Patching verifies context before writing anything and reports the real lines on mismatch. Tests run in the sandbox on a fresh copy of the workspace (`CodingTools.pytest`, on disk), and the Definition of Done reruns them.
 
 ```python
 # path: book/projects/examples/ch38/coding_harness.py  (excerpt; full file on disk)
@@ -796,18 +766,14 @@ def apply_hunks(original: list[str], hunks: list[Hunk], *, fuzz: int = 3, path: 
                 assert raw is not None
                 target = self.ws.resolve(raw)
                 rel = target.relative_to(self.ws.root).as_posix()   # judge the normalized path, not the raw one
-                if not self.ws.tracked(rel):
-                    return ToolOutput.failure(f"{raw} is a hidden or non-text path; the agent may not write it",
-                                              ErrorClass.PERMISSION)
+                # ... refuse hidden or non-text paths
                 if self.ws.is_protected(rel):
                     return ToolOutput.failure(f"{rel} is protected and cannot be modified by the agent",
                                               ErrorClass.PERMISSION)
                 if not self.ws.is_allowed(rel):
                     return ToolOutput.failure(f"{rel} is outside the paths this task may change: "
                                               f"{list(self.ws.allowed)}", ErrorClass.PERMISSION)
-                if fp.new_path is None:
-                    return ToolOutput.failure("file deletion is not allowed through apply_patch",
-                                              ErrorClass.PERMISSION)
+                # ... refuse deletions
                 if target in staged:            # a second patch to the same file applies on top of the first
                     original = (staged[target] or "").splitlines()
                 else:
@@ -826,19 +792,7 @@ def apply_hunks(original: list[str], hunks: list[Hunk], *, fuzz: int = 3, path: 
         return ToolOutput(content=f"patched {names}; {self.ws.changed_line_count()} changed lines in total",
                           artifacts={"changed_files": self.ws.changed_files()})
 
-    def pytest(self, selector: str = "tests") -> dict[str, Any]:
-        """Run pytest on a fresh copy of the workspace, with a scrubbed environment and the
-        sandbox limits. The copy keeps ordinary writes away from the workspace, but this is
-        not filesystem isolation: test code could still reach the workspace by absolute path.
-        Real isolation needs a container or microVM (Chapter 16)."""
-        res = self.sandbox.run([sys.executable, "-B", "-m", "pytest", "-q", "-p", "no:cacheprovider",
-                                "-o", "addopts=", "--rootdir=.", selector], files=self.ws.snapshot())
-        out = (res.stdout + res.stderr).strip()
-        summary = next((ln for ln in reversed(out.splitlines()) if re.search(r"passed|failed|error", ln)),
-                       "timed out" if res.timed_out else f"exit code {res.exit_code}")
-        tail = "\n".join(out.splitlines()[-25:])
-        return {"ok": res.ok, "summary": summary.strip("= "), "tail": tail, "exit_code": res.exit_code,
-                "timed_out": res.timed_out, "duration_ms": res.duration_ms}
+    # ... pytest(selector) runs the tests in the sandbox on a fresh copy of the workspace (on disk)
 
 def coding_dod(tools: CodingTools, *, max_changed_lines: int = 60, test_selector: str = "tests") -> DefinitionOfDone:
     ws = tools.ws
@@ -890,6 +844,8 @@ def test_premature_done_claim_is_rejected_by_running_the_tests(harness):
 
 ### Skills and the voice gate
 
+The skill selector ranks descriptions lexically, and the lockfile serves only skills whose version and content hash match what was reviewed.
+
 ```python
 # path: book/projects/examples/ch38/skills.py  (excerpt; full file on disk)
 def select_skills(task: str, skills: dict[str, Skill], *, k: int = 2, min_score: float = 0.2) -> list[SkillMatch]:
@@ -927,6 +883,8 @@ def select_skills(task: str, skills: dict[str, Skill], *, k: int = 2, min_score:
         bad = {p.split(":")[0] for p in self.verify(frozen)}
         return {n: s for n, s in frozen.items() if n not in bad}
 ```
+
+The voice gate encodes the two voice rules from part two: what a transcript segment may trigger, and what the history records after barge-in. Chapter 35 builds the rest of the voice design around it.
 
 ```python
 # path: book/projects/examples/ch38/voice_gate.py  (excerpt; full file on disk)
@@ -1011,11 +969,10 @@ class PlaybackController:
 - **Generating idempotency keys at execution time.** A `uuid4()` per attempt is different on retry. Derive keys from the run id and the request's position in the log.
 - **Restarting a crashed run from the goal.** It repeats every model call and every side effect. Resume from the log.
 - **Recovery without leases.** Two workers drive one run, each believing the other is dead.
-- **Treating expiry as approval.** Expiry must deny the call (see Interrupts as first-class states).
+- **Treating expiry as approval.** Expiry must deny the call. The approvals most likely to go unanswered are the ones sent overnight, on holidays, or to the wrong person, so if silence meant yes, the gate would approve exactly the requests no one looked at, and an outage in the notification path would silently turn every approval into a timer.
 - **Sleeping inside a tool.** A tool that sleeps an hour holds a worker, a lease, and a connection, and dies with the pod. Waits are persisted interrupts.
 - **Compacting the log instead of the request.** Audit, replay, and the Definition of Done lose the evidence they need.
 - **Letting the coding agent edit tests or run a raw shell** before the sandbox and policy justify it.
-- **Acting on a voice partial** because the model sounded sure. Stability and confidence are measured, not inferred.
 - **Installing skills from a shared folder without a lockfile.** A one-line edit to a skill changes every agent that loads it.
 
 ## Failure modes
@@ -1036,7 +993,7 @@ class PlaybackController:
 
 | Decision | Option A | Option B | Choose A when |
 |---|---|---|---|
-| Durability engine | Event log in your database (this chapter) | A dedicated workflow engine, for example Temporal-style | You already have an event-sourced loop and modest scale; choose B for many teams, complex timers, and cross-service workflows |
+| Durability engine | Event log in your database (this chapter) | A durable execution engine or library | You already have an event-sourced loop, few run types, and modest scale; choose B for many teams, central timers and signals, and cross-service runs (see Build vs adopt a durable engine) |
 | Granularity | Persist every event | Persist per step or per node | Side effects are frequent; per-step persistence widens the at-least-once window |
 | Unknown outcome | Stop for a human | Retry and accept duplicates | The action is irreversible or customer-visible |
 | Lease TTL | Short (seconds) | Long (minutes) | Fast recovery matters more than tolerance for long pauses; long tools need a heartbeat with short leases |
@@ -1050,11 +1007,28 @@ Test durability by breaking things on purpose. The suite injects crashes before 
 
 For long-horizon context, measure what compaction keeps, not only what it saves: every request under budget, tool-call pairing valid, early literals present in late requests. A useful offline metric is identifier recall, the fraction of identifiers in the final answer that appear in the request the model actually saw. Rehydration is tested by crashing mid-run and rebuilding the ledger in a fresh store.
 
-For coding agents, build a suite of historical tasks with tests from your own repositories. Measure task success under the deterministic Definition of Done, unnecessary-edit rate, steps, tokens, wall-clock time, and review findings, and include tasks where the right outcome is to ask for clarification. For computer-use agents, measure per-action verification failures and wrong-action rate in a recorded staging environment. For skills, measure selection precision and the abstain rate on unrelated tasks, with skill versions pinned per evaluation run. For voice, slice turn latency, interruption success, wrong-action rate, and transfer rate by accent, noise, codec, and call type.
+For coding agents, build a suite of historical tasks with tests from your own repositories. Measure task success under the deterministic Definition of Done, unnecessary-edit rate, steps, tokens, wall-clock time, and review findings, and include tasks where the right outcome is to ask for clarification. For computer-use agents, measure per-action verification failures and wrong-action rate in a recorded staging environment. For skills, measure selection precision and the abstain rate on unrelated tasks, with skill versions pinned per evaluation run. Voice evaluation (latency slices, barge-in success, wrong-action rate) is in Chapter 35, Case 2.
 
 Counterfactual replay ties the evaluation together: before shipping a new prompt, model, or skill version, replay last week's recorded runs, report first divergences and replay misses, and send divergent runs to a judge or a reviewer (Chapter 24).
 
+## Before you ship
+
+- [ ] Every append checks the fence and extends the lease in the same transaction; a test advances the clock past the TTL and asserts a stale append raises `LeaseLost`.
+- [ ] Long tool calls are covered by a lease heartbeat, and every tool call has its own timeout shorter than the time a stuck call may hold a run.
+- [ ] Idempotency keys come from the event log (`<run_id>:<request_id>`), never from `uuid4()` at execution time, and every side-effecting tool sends its key to the external system.
+- [ ] The outcome ledger lives in shared, durable storage; startup refuses an in-memory or pod-local ledger outside tests.
+- [ ] Each side-effecting tool is classified as dedupe-by-key, lookup-by-key, or neither, and the "neither" tools stop for a human on an unknown outcome.
+- [ ] Crash tests run before the remote commit, between commit and acknowledgment, and between ledger write and `ToolResult`, and each asserts the count of external effects, not just completion.
+- [ ] Every approval has an owner chain, an escalation time, and an expiry, and a test asserts that expiry produces `ToolCallDenied`.
+- [ ] Webhook deliveries are deduplicated by event id, early events land in the inbox, and the scheduler runs on at least two replicas in staging without double-firing a timer.
+- [ ] Compaction is measured: every request under budget, tool-call pairs intact, and identifier recall on a long scripted run at or above your threshold.
+- [ ] Event schemas are versioned and the fold reads every shape ever written; a test replays a recording from the previous release.
+- [ ] The coding Definition of Done reruns tests in a sandbox, rejects changes to protected paths, and caps diff size; skills load only from a reviewed lockfile with content hashes.
+- [ ] Dashboards show runs by status, orphaned runs, reconciliation outcomes, pending approvals by age, and timer lag, and an `unknown` reconciliation outcome pages someone.
+
 ## Exercises
+
+**Start here:** K2, K3, E4, P2, D1 (about 4 hours). The rest go deeper.
 
 ### Knowledge questions
 
@@ -1078,17 +1052,17 @@ Counterfactual replay ties the evaluation together: before shipping a new prompt
 
 **E3.** Your agents run on Kubernetes with rolling deploys every hour, and the slowest tool call takes up to four minutes. Choose a lease TTL and heartbeat strategy, and explain the recovery-time and duplicate-execution consequences of your choice.
 
-**E4.** The support team wants the voice agent to begin creating a ticket as soon as the caller says "open a ticket" to save time. Propose a design that captures most of the latency benefit without acting on unstable transcripts.
+**E4.** Northwind's platform team proposes moving the incident agent onto a replay-based durable execution engine. Sketch the port: which parts of the agent loop become steps and which stay in the workflow function, what replaces `DurableRunner`, `LeaseManager`, and the timer table, what `ReconcilingTool` still has to do, and how you would deploy a new policy check while runs are paused on approvals. Name two things that would break silently if done naively.
 
 ### Practical exercises
 
-**P1.** Add `DurableRunner.reopen(run_id, outcome)` for runs stopped on an unknown outcome: an operator records the true outcome in the ledger, and the run continues with that outcome as the observation. Write the tests.
+**P1.** (about 2 hours) Add `DurableRunner.reopen(run_id, outcome)` for runs stopped on an unknown outcome: an operator records the true outcome in the ledger, and the run continues with that outcome as the observation. Write the tests.
 
-**P2.** Extend `InterruptManager` with four-eyes approval for tools tagged `irreversible`: two distinct approvers from the chain, either of whom may reject. Include escalation and expiry behavior in the tests.
+**P2.** (about 2 hours) Extend `InterruptManager` with four-eyes approval for tools tagged `irreversible`: two distinct approvers from the chain, either of whom may reject. Include escalation and expiry behavior in the tests.
 
-**P3.** Replace `digest_observation` for prose-heavy tools with an LLM summarizer through `aie_core`, keeping literal extraction, and add an identifier-recall evaluation comparing it with the extractive digest on a scripted 30-step run.
+**P3.** (about 3 hours) Replace `digest_observation` for prose-heavy tools with an LLM summarizer through `aie_core`, keeping literal extraction, and add an identifier-recall evaluation comparing it with the extractive digest on a scripted 30-step run.
 
-**P4.** Add a `run_linter` tool and a "no new lint errors" check to `coding_dod`, computed against the baseline, so pre-existing lint errors do not block the task but new ones do.
+**P4.** (about 90 min) Add a `run_linter` tool and a "no new lint errors" check to `coding_dod`, computed against the baseline, so pre-existing lint errors do not block the task but new ones do.
 
 ### Debugging exercises
 
@@ -1109,3 +1083,13 @@ Counterfactual replay ties the evaluation together: before shipping a new prompt
 - Long runs need a typed task ledger kept in the event log and compaction of requests that preserves literal identifiers and never splits tool calls from their results.
 - Coding, IDE, computer-use, and voice agents succeed through harness design: narrow tools, sandboxes, verification after every consequential action, and a deterministic Definition of Done that reruns the checks itself.
 - Skills package stable procedure with progressive disclosure and must be versioned, pinned, audited, and evaluated like any dependency.
+- Durable execution engines take over the log, ownership, timers, and recovery, at the price of determinism and versioning rules and payload limits; idempotency at the external system, approval policy, compaction, and verification stay yours either way.
+
+## Further reading
+
+- Kleppmann, *Designing Data-Intensive Applications.* The chapters on logs, delivery guarantees, and fencing tokens are the distributed-systems foundation this chapter builds on.
+- Nygard, *Release It!* Timeouts, bulkheads, and stability patterns for the workers, schedulers, and tool calls of long-running runs.
+- Yang et al., *SWE-agent: Agent-Computer Interfaces Enable Automated Software Engineering.* Evidence that interface and harness design move coding-agent results, the premise of part two.
+- Jimenez et al., *SWE-bench: Can Language Models Resolve Real-World GitHub Issues?* How coding agents are evaluated on real repositories with tests as the verifier.
+- Saltzer and Schroeder, *The Protection of Information in Computer Systems.* Least privilege and fail-safe defaults, the principles behind sandboxes, skill permissions, and expiry as denial.
+- LangGraph documentation. A concrete graph checkpointer with interrupts, useful to compare with the mapping in Build vs adopt a durable engine.

@@ -1,6 +1,16 @@
 # Chapter 29 — Reliability and Scalability
 
-After this chapter you will be able to state service-level objectives for an AI service and turn them into budgets. You will carry one deadline through every stage of a request, and stop retry storms that multiply across layers. You will also be able to isolate failing dependencies with circuit breakers and noisy workloads with bulkheads, recover usable results from malformed model output, and keep multi-step chains useful when one step fails. Finally, you will shed load at the door before queues explode, move long work onto a durable queue with idempotent workers, degrade gracefully along pre-tested plans, and prove all of it with chaos tests. The chapter builds the `reliability` package (`book/projects/reliability/`): deadlines, circuit breakers, bulkheads, an admission controller with per-tenant quotas, a job queue with in-memory and Redis implementations, a worker, degradation policies, malformed-output recovery, a partial-failure chain runner, SLO arithmetic, and a fault injector. A Northwind Assist ticket-triage chain ties them together, and the offline test suite runs that chain under injected outages, rate limits, slowness, and malformed output.
+An AI service fails in more ways than an ordinary web service, because its main dependency is slow, expensive per call, and sometimes returns well-formed garbage. This chapter turns the single-call reliability of Chapter 3 into system-level reliability: budgets, failure domains, overload control, durable background work, and tests that prove the whole thing behaves under injected faults.
+
+**You will be able to:**
+- State SLOs for an AI service (availability, time to first token, latency, task success, degraded share) and turn them into error budgets and burn-rate alerts.
+- Carry one deadline from the edge through every stage, and contain retry amplification with a single retrying layer and a shared retry budget.
+- Isolate failing dependencies with circuit breakers and noisy workloads with bulkheads, and recover usable results from malformed model output.
+- Shed load at the door with admission control, per-tenant quotas, and estimated wait, and degrade along pre-tested plans instead of improvising.
+- Run long work on a leased job queue with idempotent workers, dead letters, and graceful shutdown.
+- Prove all of it with chaos tests that assert invariants, contract tests across queue adapters, and load tests past the knee.
+
+**Prerequisites:** Chapters 3 and 28 (the `ModelGateway`, `RetryPolicy`, and error taxonomy; the job model and ports). | **Code:** `book/projects/reliability/` (run: `cd book/projects/reliability && python -m pytest -q`) | **Builds:** the `reliability` package: deadlines, retry budgets, hedging, circuit breakers, bulkheads, admission control, degradation plans, malformed-output recovery, a partial-failure chain runner, a job queue and worker, SLO arithmetic, and a fault injector, tied together by a Northwind Assist ticket-triage chain.
 
 ## Why this matters
 
@@ -24,6 +34,47 @@ Hold three images while reading.
 
 ## Core concepts
 
+### Overview: failure classes and the patterns that answer them
+
+Every failure an AI service sees falls into one of a handful of classes, and each class has one correct first response. The table is the map for the rest of the chapter: read down the first column to recognize what is happening, across to see what answers it and where that code lives.
+
+| Failure class | Example | First response | Pattern and module | Owner |
+|---|---|---|---|---|
+| Transient | connection reset, 5xx, brief 429 | bounded, jittered retry at one layer, idempotent calls only | `RetryPolicy` in the gateway; `call_with_retry` plus `RetryBudget` (`reliability.retry`) | Ch 3, this chapter |
+| Tail latency | one slow replica or shard | hedge idempotent reads | `ahedged` (`reliability.retry`) | this chapter |
+| Sustained outage | provider returns 503 for ten minutes | fail fast, route to backup, ask less of the survivors | `CircuitBreaker` (`reliability.circuit`), gateway fallback, `DegradePolicy` | Ch 3, Ch 7, this chapter |
+| Slowness | calls take 40 s instead of 4 s | a deadline on every call; slow calls count as breaker failures | `Deadline` (`reliability.deadline`), `slow_call_s` | this chapter |
+| Overload | traffic past capacity, a noisy tenant | reject, defer, or degrade at the door; isolate workloads | `AdmissionController`, `Bulkheads` | this chapter; Ch 30 for spend |
+| Deterministic | bad request, a document that crashes the parser | fail fast; dead-letter background jobs | `is_retryable` (`reliability.errors`), `JobQueue` dead letters | this chapter, Ch 28 |
+| Semantic | HTTP 200 with JSON the schema rejects | repair, fallback model, salvage; never a transport retry | `complete_structured`, `complete_with_recovery` (`reliability.malformed`) | Ch 3, Ch 6, this chapter |
+| Partial | step 2 of 3 fails | defined partial result with per-step status | `run_chain` (`reliability.chain`); agent-loop limits | this chapter, Ch 17, Ch 19 |
+| Crash and redelivery | worker dies after sending a reply | at-least-once delivery with idempotent effects | leases, `once()`, idempotency keys (`reliability.queue`, `reliability.worker`) | this chapter, Ch 16, Ch 38 |
+| Cancellation | user closes the tab | propagate so expensive work stops | `Deadline.cancel` | this chapter, Ch 34 |
+
+Slowness deserves a special mention: it is the most dangerous class because it holds connections, slots, and users while reporting no error at all. Sustained outages are the second most dangerous, because the natural reaction, retrying, makes them worse.
+
+Two terms recur. *Jitter* randomizes retry delays so that clients do not retry in lockstep. A *dead-letter queue* is a holding area for jobs that will never succeed on retry, where an operator can inspect and fix them. `reliability.errors.is_retryable` decides retryable versus final for every dependency, and Chapter 28's bridge uses the same classifier for its jobs table. Errors with a `retryable` attribute (the `aie_core` taxonomy and the reliability errors) decide for themselves, builtin connection errors and timeouts are transient, and everything else is not.
+
+The patterns compose as layers around each call. The outer layers decide whether and how a request runs at all, and the inner layers decide what happens to each call inside it. Each layer handles its own failure class and passes the rest outward, which is why the order matters. The breaker sits inside the retry layer, so it sees every attempt and its open state ends the retries at once; a quota check placed before the load check would charge tenants for requests the system then sheds.
+
+```mermaid
+flowchart TD
+    R[request] --> DL["Deadline: one budget, cancellation"]
+    DL --> AC["Admission: quota, wait, priority"]
+    AC --> DP["DegradePolicy: pick a plan"]
+    DP --> BH["Bulkhead: workload slots"]
+    BH --> CH["run_chain: critical, optional, fallback"]
+    CH --> RL["complete_with_recovery: repair, salvage"]
+    CH --> RT["call_with_retry plus RetryBudget"]
+    RL --> GW["ModelGateway: one retry layer"]
+    GW --> CB1["Breaker per provider client"]
+    RT --> CB2["Breaker per dependency"]
+    CB1 --> P[(Model providers)]
+    CB2 --> V[(Retrieval and tools)]
+```
+
+The sections below take the layers one at a time, after first defining what "reliable enough" means.
+
 ### Service-level objectives for AI services
 
 A service-level indicator (SLI) is a measured ratio of good events to total events. A service-level objective (SLO) is a target for that ratio over a window, for example 99.5% over 30 days, and the error budget is the remaining 0.5% that may be bad. SLOs exist because without them every reliability decision is an argument: whether to add a backup provider, when to shed batch work, whether a degraded answer is acceptable. Northwind Assist commits to five indicators, all with illustrative targets.
@@ -41,19 +92,6 @@ The last row matters most. Degradation is how you keep availability high during 
 Burn rate turns budgets into alerts: the observed bad ratio divided by the budgeted one. With a 99.5% objective, an hour at 2% bad is a burn rate of 4, which would spend a 30-day budget in about a week. Paging on single bad minutes wakes people for blips, and paging on the 30-day number reports outages after they end. The usual compromise pages when both a short and a long window burn above a threshold. A common starting point, and the default of `reliability.slo.should_page`, is a burn rate of 14.4 over both the last hour and the last five minutes, which spends 2% of a 30-day budget in an hour: the long window proves it is not a blip, the short one proves it is still happening. A second rule, a burn rate of 6 over both the last six hours and the last thirty minutes, opens a ticket for slower leaks. `reliability.slo` implements the arithmetic, and Chapter 31 turns it into metrics and alert rules.
 
 Two cautions apply to AI. State latency SLOs per route or output length, because a long report legitimately takes longer than a one-line answer. And treat quality SLOs, which are measured on delayed samples, as release gates and drift detectors rather than paging signals.
-
-### Where failures come from
-
-Each class of failure has one correct first response.
-
-- **Transient failures** (connection resets, 5xx, brief 429s) pass on their own. Respond with a bounded retry at one layer, with jitter (randomized delays so clients do not retry in lockstep), for idempotent operations only.
-- **Sustained outages** are the same errors lasting minutes, and retries make them worse. Detect them with a circuit breaker (a switch that stops calls to a failing dependency, covered below), route around them to a backup, and ask less of the survivors with a degraded plan.
-- **Slowness** is the most dangerous class because it holds connections, slots, and users. Respond with a deadline on every call and count slow calls as breaker failures.
-- **Deterministic failures** (bad request, unknown tool, a document that crashes the parser) should fail fast and, for background work, go to a dead-letter queue: a holding area for jobs that will never succeed on retry, where an operator can inspect and fix them.
-- **Semantic failures** arrive with a 200 but cannot be used. Respond with repair, fallback, or salvage, never a transport retry.
-- **Cancellation** by a user who leaves or interrupts must propagate so that expensive work stops.
-
-`reliability.errors.is_retryable` decides retryable versus final for every dependency, and Chapter 28's bridge uses the same classifier for its jobs table. Errors with a `retryable` attribute (the `aie_core` taxonomy and the reliability errors) decide for themselves, builtin connection errors and timeouts are transient, and everything else is not.
 
 ### Retries at system level: amplification and budgets
 
@@ -130,7 +168,7 @@ Place breakers by failure domain. For model calls, wrap each client inside the g
 
 ### Bulkheads
 
-A bulkhead partitions concurrency so that one workload cannot take capacity another needs. In Northwind Assist, chat, batch classification, ingestion, and evaluation share one provider. Without partitions, a 2,000-case evaluation run that starts at 8:55 holds every gateway slot when employees arrive. `Bulkheads({"interactive": 32, "batch": 8, "ingestion": 4, "eval": 2})` gives each workload running slots and a waiting room bounded in count and time. A full pool raises `BulkheadFullError` at once and never borrows from a neighbor, since borrowing is the coupling bulkheads exist to prevent. An unbounded waiting room is just a queue that hides overload until every waiter times out together. `Bulkhead` serves threads and `AsyncBulkhead` an event loop, kept separate because a release in one cannot wake a waiter in the other. Strict pools waste capacity at night, so give batch a larger pool and let admission control defer batch work when interactive load rises: the bulkhead guarantees isolation and the controller recovers utilization.
+A bulkhead partitions concurrency so that one workload cannot take capacity another needs. In Northwind Assist, chat, batch classification, ingestion, and evaluation share one provider. Without partitions, a 2,000-case evaluation run that starts at 8:55 holds every gateway slot when employees arrive. `Bulkheads({"interactive": 32, "batch": 8, "ingestion": 4, "eval": 2})` gives each workload running slots and a waiting room bounded in count and time. A full pool raises `BulkheadFullError` at once and never borrows from a neighbor, since borrowing is the coupling bulkheads exist to prevent. An unbounded waiting room is just a queue that hides overload until every waiter times out together. Strict pools waste capacity at night, so give batch a larger pool and let admission control defer batch work when interactive load rises: the bulkhead guarantees isolation and the controller recovers utilization.
 
 ### Malformed responses
 
@@ -187,7 +225,7 @@ The worker leases a job, runs the handler under a deadline derived from the leas
 
 On SIGTERM (the signal a deploy sends before stopping a pod) the worker stops leasing, the current handler reaches its next `ctx.checkpoint()`, which raises `ShutdownRequested`, and the job is *released* without consuming an attempt, because a deploy is not the job's fault. A handler that never checkpoints is still safe, since the lease expires and the job is redelivered.
 
-`InMemoryJobQueue` serves tests. `RedisJobQueue` provides the same semantics across processes, with each state change in one Lua script, so reclaiming expired leases and leasing the next ready job are atomic. Both pass one contract suite, run offline against fakeredis with Lua and against a real server under the `integration` marker.
+The queue comes in an in-memory implementation for tests and a Redis implementation for production, and both must pass the same contract suite (see the Code walkthrough).
 
 ### Rate limits and quotas per tenant
 
@@ -338,7 +376,7 @@ book/projects/reliability/
   examples/
     ticket_chain.py       Northwind triage chain using every primitive
     worker_main.py        worker process entry point
-  tests/                  99 offline tests; Redis contract tests also run against a real server with -m integration
+  tests/                  offline suite; Redis contract tests also run against a real server with -m integration
 ```
 
 Install and run:
@@ -391,12 +429,16 @@ def is_retryable(exc: BaseException) -> bool:
 The deadline, with child budgets, cancellation inherited from parents, and propagation into requests and headers:
 
 ```python
-# path: book/projects/reliability/reliability/deadline.py  (condensed excerpt)
+# path: book/projects/reliability/reliability/deadline.py (excerpt; full file on disk)
 class Deadline:
     def __init__(self, expires_at: float, *, name: str = "request", clock: Clock = time.monotonic,
                  parent: "Deadline | None" = None) -> None:
-        self.expires_at, self.name, self._clock, self._parent = expires_at, name, clock, parent
-        self._cancelled, self._reason = False, None
+        self.expires_at = expires_at
+        self.name = name
+        self._clock = clock
+        self._parent = parent
+        self._cancelled = False
+        self._reason: str | None = None
 
     @classmethod
     def after(cls, seconds: float, *, name: str = "request", clock: Clock = time.monotonic) -> "Deadline":
@@ -427,10 +469,11 @@ class Deadline:
     def apply(self, req: CompletionRequest) -> CompletionRequest:
         self.check("model")
         left = self.remaining()
-        return req.model_copy(update={"timeout_s": left if req.timeout_s is None else min(req.timeout_s, left)})
+        timeout = left if req.timeout_s is None else min(req.timeout_s, left)
+        return req.model_copy(update={"timeout_s": timeout})
 
     def to_header(self) -> dict[str, str]:
-        return {HEADER: str(int(self.remaining() * 1000))}   # relative budget, immune to clock skew
+        return {HEADER: str(int(self.remaining() * 1000))}
 ```
 
 The breaker's core is the recording path: half-open probes decide the next state, and the closed state trips on a rate over a minimum volume in the bucket ring. Every transition bumps a generation number, and each call carries the generation it was admitted in, so a slow call admitted before the trip cannot close a half-open circuit by finishing late. Cancellations (a hedge loser, a deadline, a disconnected stream) count as neutral, never as dependency failures.
@@ -493,7 +536,7 @@ def build_gateway(primary: LLMClient, backup: LLMClient, breakers: CircuitBreake
 The retry budget and the system-level retry helper for non-LLM dependencies; the delay itself comes from `aie_core`'s `RetryPolicy`:
 
 ```python
-# path: book/projects/reliability/reliability/retry.py  (condensed excerpt)
+# path: book/projects/reliability/reliability/retry.py (excerpt; full file on disk)
 class RetryBudget:
     def record_request(self) -> None:
         with self._lock:
@@ -512,9 +555,20 @@ class RetryBudget:
             self.retries_allowed += 1
             return True
 
-def call_with_retry(fn, *, policy=None, budget=None, deadline=None, classify=is_retryable,
-                    sleep=time.sleep, rng=None, on_retry=None):
-    policy, rng, attempt = policy or RetryPolicy(), rng or random.Random(), 0
+def call_with_retry(
+    fn: Callable[[], T],
+    *,
+    policy: RetryPolicy | None = None,
+    budget: RetryBudget | None = None,
+    deadline: Deadline | None = None,
+    classify: Callable[[BaseException], bool] = is_retryable,
+    sleep: Sleep = time.sleep,
+    rng: random.Random | None = None,
+    on_retry: Callable[[int, BaseException, float], None] | None = None,
+) -> T:
+    policy = policy or RetryPolicy()
+    rng = rng or random.Random()
+    attempt = 0
     if budget is not None:
         budget.record_request()
     while True:
@@ -527,7 +581,9 @@ def call_with_retry(fn, *, policy=None, budget=None, deadline=None, classify=is_
             if isinstance(exc, DeadlineExceeded):
                 raise
             delay = _plan(policy, exc, attempt, rng, classify)
-            if delay is None or (deadline is not None and not deadline.fits(delay)):
+            if delay is None:
+                raise
+            if deadline is not None and not deadline.fits(delay):
                 raise
             if budget is not None and not budget.try_spend():
                 raise
@@ -539,7 +595,7 @@ def call_with_retry(fn, *, policy=None, budget=None, deadline=None, classify=is_
 The admission decision. Note the order: load checks, then quota, then the degrade level.
 
 ```python
-# path: book/projects/reliability/reliability/admission.py  (condensed excerpt: AdmissionController.admit)
+# path: book/projects/reliability/reliability/admission.py (excerpt: AdmissionController.admit; full file on disk)
     def admit(self, req: AdmissionRequest) -> AdmissionDecision:
         cfg = self.config
         with self._lock:
@@ -570,8 +626,8 @@ The admission decision. Note the order: load checks, then quota, then the degrad
             ticket = next(self._tickets)
             self._in_flight[ticket] = req.priority
             action = Action.DEGRADE if level > 0 else Action.ADMIT
-            return self._decide(action, "degraded_under_load" if level else "ok", req,
-                                degrade_level=level, est_wait_s=wait, ticket=ticket)
+            reason = "degraded_under_load" if level > 0 else "ok"
+            return self._decide(action, reason, req, degrade_level=level, est_wait_s=wait, ticket=ticket)
 ```
 
 The queue protocol, and the Redis lease script that reclaims expired leases (dead-lettering poison jobs) and leases the next ready job in one atomic step:
@@ -718,11 +774,44 @@ The classify step calls `complete_with_recovery(svc.gateway, deadline.apply(plan
 
 ## Code walkthrough
 
-Read `examples/ticket_chain.py` first; it is the map. `build_gateway` shows the breaker placement. `triage_ticket` shows the order of decisions: plan first (from admission level and open circuits), static short-circuit second, chain third. The three step factories each close over the plan, so a degraded request is degraded consistently in every step.
+Read the package in the order a request meets it, starting from the example that composes everything.
 
-Then follow a failure. In `tests/test_chaos_chain.py`, `make_env` wraps two `FakeLLM`s in `ChaosLLM` with a `FaultPlan` and wraps the retriever in `ChaosFunction`. All of them share one `ManualClock` with the gateway, the breakers, and the deadlines. `test_primary_outage_is_absorbed_by_backup_and_breaker_stops_the_bleeding` runs ten tickets through a primary outage. All ten complete through the backup, the primary sees at most four calls before its circuit opens (the test sets `min_calls=4`; the default is 20), and the last plan carries the reason `open:llm:primary`. `test_random_fault_soak_preserves_invariants` runs 200 tickets with probabilistic outages, malformed output, and retrieval failures under three seeds. It asserts properties rather than outputs: nothing raises, no request makes more than 13 model calls, a failed classification always skips drafting, a `COMPLETE` result always has every step `OK`, and retries stay inside the budget.
+**1. The map: `examples/ticket_chain.py`.** `build_gateway` shows the breaker placement. `triage_ticket` shows the order of decisions: plan first (from admission level and open circuits), static short-circuit second, chain third. The three step factories each close over the plan, so a degraded request is degraded consistently in every step. Adding a new dependency means three changes in this file and nowhere else: give its `Step` a `dependency` name (the chain runner then takes that breaker from the registry and calls through it), mark it `idempotent` only if a repeat is harmless, and, if its outage should change the plan, name it in `DegradePolicy` the way `retrieval_dependency` and `rerank_dependency` are named.
 
-The queue tests in `tests/test_queue.py` are one suite parametrized over three adapters: in-memory, Redis through fakeredis with Lua, and real Redis behind the `integration` marker. This is the contract-test pattern from Chapter 28 applied to the port this chapter owns. Writing them caught a real bug while the package was built. The first version accepted an `ack` on an expired lease as long as nobody had re-leased the job yet, which `test_lost_lease_detected_at_checkpoint_and_on_ack` in `tests/test_worker.py` now pins down for the in-memory queue.
+**2. Breakers: `reliability/circuit.py`.** `CircuitBreakerClient` (on disk) is a thin `LLMClient` wrapper: `complete` goes through `breaker.call`, and `stream` admits once, records a failure if the stream raises, and records a success only when the stream finishes. It translates an open circuit into the retryable `CircuitOpenError` from `errors.py`, which is all the gateway needs to fail over. The generation check in `_record` is the subtle part; `test_stragglers_from_before_the_trip_do_not_close_a_half_open_circuit` and `test_cancellation_is_not_a_dependency_failure` in `tests/test_hardening.py` pin it down.
+
+**3. Bulkheads: `reliability/bulkhead.py`.** `Bulkhead` serves threads and `AsyncBulkhead` serves one event loop. They are separate classes with the same semantics because a release in one world cannot wake a waiter in the other: a thread blocked on a lock never hears an `asyncio.Condition` notify. `Bulkheads(..., use_async=True)` builds the async kind, and an unknown workload name raises `KeyError`, because a typo that silently fell back to a shared pool would remove the isolation.
+
+**4. Queue and worker: `reliability/queue.py`, `reliability/worker.py`.** `InMemoryJobQueue` serves tests. `RedisJobQueue` provides the same semantics across processes, with each state change in one Lua script, so reclaiming expired leases and leasing the next ready job are atomic: two workers polling at once cannot both take the same job. The worker derives the job's deadline from the lease (80% of the visibility timeout unless `job_timeout_s` is set), installs SIGTERM and SIGINT handlers that request shutdown, and gives handlers `ctx.heartbeat()` and `ctx.checkpoint()`, both of which raise `LeaseLost` when the lease is gone. `once()` sits at the bottom of `worker.py`, and its docstring names the irreducible gap between the effect and the record.
+
+The queue tests in `tests/test_queue.py` are one suite parametrized over three adapters: in-memory, Redis through fakeredis with Lua scripting, and real Redis behind the `integration` marker. This is the contract-test pattern from Chapter 28 applied to the port this chapter owns. The subtle case is an `ack` on an expired lease that nobody has re-leased yet. It is tempting to accept it, since no other worker has the job, but the moment the lease expired another worker was entitled to take it. `test_lost_lease_detected_at_checkpoint_and_on_ack` in `tests/test_worker.py` pins the refusal.
+
+**5. Chaos: `reliability/chaos.py` and `tests/test_chaos_chain.py`.** `FaultPlan` holds time windows of `outage`, `rate_limited`, `slow`, `timeouts`, and `malformed` faults, and `ChaosLLM` and `ChaosFunction` consult it before each call. In the test file, `make_env` wraps two `FakeLLM`s in `ChaosLLM` and the retriever in `ChaosFunction`, all sharing one `ManualClock` with the gateway, the breakers, and the deadlines. `test_primary_outage_is_absorbed_by_backup_and_breaker_stops_the_bleeding` runs ten tickets through a primary outage. All ten complete through the backup, the primary sees at most four calls before its circuit opens (the test sets `min_calls=4`; the default is 20), and the last plan carries the reason `open:llm:primary`. The soak test asserts properties rather than outputs:
+
+```python
+# path: book/projects/reliability/tests/test_chaos_chain.py (excerpt; full file on disk)
+@pytest.mark.parametrize("seed", [1, 2, 3])
+def test_random_fault_soak_preserves_invariants(seed):
+    env = make_env(
+        primary=[outage(0, 10_000, probability=0.3), malformed(0, 10_000, probability=0.1)],
+        backup=[outage(0, 10_000, probability=0.1)],
+        retrieval=[outage(0, 10_000, probability=0.2)],
+        seed=seed,
+    )
+    statuses = []
+    for _ in range(200):
+        before = env.model_calls()
+        r = env.run()                                    # never raises
+        statuses.append(r.status)
+        assert env.model_calls() - before <= 13          # bounded amplification per request
+        if r.step("classify").status is StepStatus.FAILED:
+            assert r.step("draft").status is StepStatus.SKIPPED
+        if r.status is ChainStatus.COMPLETE:
+            assert r.state["draft"] and all(s.status is StepStatus.OK for s in r.steps)
+    assert ChainStatus.COMPLETE in statuses and ChainStatus.PARTIAL in statuses
+```
+
+The bound of 13 model calls is the worst case the configuration allows. One gateway call can make four calls (two attempts on each of two clients). Classification can make nine: the first gateway call, one repair through the gateway, and one call to the small fallback model. Drafting can make four more. A change that adds a hidden retry layer breaks the bound and fails this test before it reaches production.
 
 ## Production considerations
 
@@ -736,7 +825,6 @@ The queue tests in `tests/test_queue.py` are one suite parametrized over three a
 
 ## Common mistakes
 
-- **Retrying at every layer.** Client, API, chain, and gateway each make up to three attempts. The fix is one retrying layer per dependency, plus a budget.
 - **Timeouts without a deadline.** Each call has a reasonable timeout, but the sum is minutes. Create the deadline at the edge and derive everything from it.
 - **A breaker that counts caller errors.** One client sending malformed requests opens the circuit for everyone. Count dependency faults only.
 - **A breaker on consecutive failures.** It trips on noise at low traffic and never trips at high traffic. Use a rate over a minimum volume in a time window.
@@ -744,20 +832,18 @@ The queue tests in `tests/test_queue.py` are one suite parametrized over three a
 - **Shedding on GPU or CPU utilization.** Devices look busy or idle independently of user wait. Shed on queue length and estimated wait.
 - **Fallbacks tested only in incidents.** The backup provider's quota is too small, or its outputs fail evaluation. Exercise every fallback on a schedule.
 - **Silent capability-changing fallback in the gateway.** The request lands on a model without tool support or with a smaller context. Route those through the router's compatibility checks.
-- **Non-idempotent handlers under at-least-once delivery.** Duplicate emails and tickets follow. Key effects by job and step, and use downstream idempotency keys.
-- **Not counting expired leases as attempts.** Poison jobs cycle forever and take a worker down on every pass.
 
 ## Failure modes
 
-**Retry storm during a provider brownout.** Symptom: provider error rate rises, then your outbound request rate rises faster, cost spikes, and recovery lags the provider's. Telemetry: spans with `attempt > 1` dominate, retry-budget denials are absent (no budget) or soaring (budget working), and the breaker never opened because errors were spread across replicas below `min_calls`. Test: the amplification test with and without a shared budget, plus a chaos run asserting a maximum of calls per request.
+**Retry storm during a provider brownout.** Cause: client, API, chain, and gateway each retry, with no shared budget. Symptom: provider error rate rises, then your outbound request rate rises faster, cost spikes, and recovery lags the provider's. Telemetry: spans with `attempt > 1` dominate, retry-budget denials are absent (no budget) or soaring (budget working), and the breaker never opened because errors were spread across replicas below `min_calls`. Fix: one retrying layer per dependency plus a `RetryBudget`. Test: the amplification test with and without a shared budget, plus a chaos run asserting a maximum of calls per request.
 
 **Slow-dependency resource exhaustion.** Symptom: no errors at first, then p99 latency climbs, worker or thread pools fill, and health checks fail. Telemetry: in-flight count at its cap, `queue_ms` rising, breaker closed because slow calls were not counted. Test: a `slow()` fault window with latency above `slow_call_s`, asserting the circuit opens and in-flight stays bounded.
 
 **Fallback overload cascade.** Symptom: the primary goes down, the backup takes all traffic and starts returning 429s, and both circuits open. Telemetry: backup 429 rate rises right after the primary breaker opens, and no `REDUCED` plan appears in traces. Test: a chaos run with the primary out and a rate-limited backup, asserting the degrade policy reduces load.
 
-**Poison job.** Symptom: a worker pod restarts every few minutes and queue throughput drops. Telemetry: the same job id appears in consecutive `job.process` spans with increasing attempts and no outcome, then dead-letter growth. Test: `test_poison_job_that_kills_workers_is_dead_lettered`.
+**Poison job.** Cause: expired leases are not counted as attempts, so a job that kills its worker never reaches `nack` and cycles forever. Symptom: a worker pod restarts every few minutes and queue throughput drops. Telemetry: the same job id appears in consecutive `job.process` spans with increasing attempts and no outcome, then dead-letter growth. Test: `test_poison_job_that_kills_workers_is_dead_lettered`.
 
-**Duplicate side effects after redelivery.** Symptom: customers receive two replies. Telemetry: `lease_lost` outcomes on `send_reply` jobs and two `job.process` spans for one job id that both succeeded. Test: `test_redelivered_job_does_not_repeat_side_effect`.
+**Duplicate side effects after redelivery.** Cause: a non-idempotent handler under at-least-once delivery. Symptom: customers receive two replies. Telemetry: `lease_lost` outcomes on `send_reply` jobs and two `job.process` spans for one job id that both succeeded. Fix: key effects by job and step with `once()`, and pass downstream idempotency keys. Test: `test_redelivered_job_does_not_repeat_side_effect`.
 
 **Queue past the knee.** Symptom: p95 latency jumps from 6 to 40 seconds with only 10% more traffic (illustrative). Telemetry: estimated wait rising faster than offered load, timeouts at the edge, zero admission rejections, which means the controller is missing or its capacity is set too high. Test: the load test under Evaluation and testing.
 
@@ -787,15 +873,26 @@ Reliability claims are tested at four levels.
 
 *Load and game-day tests on the real system.* Ramp offered load past capacity and plot p95 latency and shed rate against offered load. A working admission controller produces a flat latency line and a rising rejection line past the knee. A missing one produces a latency curve that bends toward vertical. Then run a game day: block the primary provider at the network layer in staging and watch the dashboards for the sequence described under provider outages. Measure time to circuit open, time to plan change, and the SLO burn during the event. Repeat after every significant architecture change.
 
-The pytest summary for the package:
+The whole package suite runs offline in about a second, because time is injected everywhere. The deselected tests are the real-Redis contract parameters, which run with `REDIS_URL` set and `-m integration`.
 
-```
-108 passed, 10 deselected in 0.92s
-```
+## Before you ship
 
-The ten deselected tests are the real-Redis contract parameters, which run with `REDIS_URL` set and `-m integration`.
+- [ ] SLOs are written per route for availability, time to first token, completion latency, task success, and degraded share, and the multi-window burn-rate alerts (page and ticket) are deployed and have fired in a test.
+- [ ] Each dependency has exactly one retrying layer, every retrying layer draws on a shared `RetryBudget`, and a chaos test asserts a maximum number of model calls per request.
+- [ ] A `Deadline` is created at the edge and capped at the route's SLO, every internal call carries the remaining-time header, and every receiver caps what it accepts.
+- [ ] A client disconnect cancels the deadline, and a test asserts that downstream steps are skipped and make no model calls.
+- [ ] Every failure domain has its own breaker that trips on a failure rate over a minimum volume, with `slow_call_s` below the call timeout; breaker state is exported as a metric and a primary-provider breaker opening pages someone.
+- [ ] Side-effecting calls carry idempotency keys or run with `retry_on_timeout=False`, and nothing with a side effect, and no model generation, is hedged.
+- [ ] Per-replica admission capacity times the maximum replica count, plus worker concurrency, stays within the provider's concurrency limit.
+- [ ] Every queue and waiting room has a maximum length, and a load test past capacity shows flat p95 latency with a rising shed rate.
+- [ ] The backup provider's peak-traffic quota is confirmed in writing, its outputs pass the evaluation set, and its data handling is approved for every tenant routed to it.
+- [ ] Every `DegradedPlan` has a passing evaluation run on file, and each operator switch (forced level, read-only mode, batch pause) is in the runbook and has been flipped in staging.
+- [ ] Expired leases count as attempts, the dead-letter queue has a dashboard, an owner, access control, and retention, and `redrive` has been exercised.
+- [ ] The worker's termination grace period exceeds its checkpoint interval, the visibility timeout exceeds p99 handler time (or handlers heartbeat), and a game day has blocked the primary provider in staging.
 
 ## Exercises
+
+**Start here:** K2, K3, E1, P4, D1 (about 3 hours). The rest go deeper.
 
 ### Knowledge questions
 
@@ -823,13 +920,13 @@ The ten deselected tests are the real-Redis contract parameters, which run with 
 
 ### Practical exercises
 
-**P1.** Add per-dependency latency tracking to `CircuitBreaker.snapshot()`: p50 and p95 over the rolling window, computed from bucketed histograms rather than stored samples. Add tests that drive known latencies through a `ManualClock`.
+**P1.** (about 2 hours) Add per-dependency latency tracking to `CircuitBreaker.snapshot()`: p50 and p95 over the rolling window, computed from bucketed histograms rather than stored samples. Add tests that drive known latencies through a `ManualClock`.
 
-**P2.** Implement an `AsyncWorker` that runs up to N handlers concurrently on one event loop, preserves graceful shutdown (drain all in-flight jobs, release those that checkpoint), and heartbeats leases automatically at a third of the visibility timeout. Reuse the queue contract tests and add concurrency tests.
+**P2.** (about 4 hours) Implement an `AsyncWorker` that runs up to N handlers concurrently on one event loop, preserves graceful shutdown (drain all in-flight jobs, release those that checkpoint), and heartbeats leases automatically at a third of the visibility timeout. Reuse the queue contract tests and add concurrency tests.
 
-**P3.** Extend `AdmissionController` to count estimated KV-cache memory instead of request count for a self-hosted model (Chapter 34): each request reserves memory proportional to prompt plus maximum output tokens, and capacity is a memory budget. Show with a test that one 64k-token request blocks as much as sixteen 4k-token requests.
+**P3.** (about 2 hours) Extend `AdmissionController` to count estimated KV-cache memory instead of request count for a self-hosted model (Chapter 34): each request reserves memory proportional to prompt plus maximum output tokens, and capacity is a memory budget. Show with a test that one 64k-token request blocks as much as sixteen 4k-token requests.
 
-**P4.** Write a chaos test for the fallback overload cascade: primary out, backup rate-limited above a threshold of concurrent calls. Make the test fail on the current code if the degrade policy does not reduce load, then make it pass.
+**P4.** (about 90 min) Write a chaos test for the fallback overload cascade: primary out, backup rate-limited above a threshold of concurrent calls. Make the test fail on the current code if the degrade policy does not reduce load, then make it pass.
 
 ### Debugging exercises
 
@@ -850,3 +947,11 @@ The ten deselected tests are the real-Redis contract parameters, which run with 
 - Design for at-least-once: idempotent enqueue, leases that count as attempts, dead letters with redrive, idempotent handlers, and `once()` plus downstream keys for side effects.
 - Shed load at the door using tenant quotas, priority classes, and estimated wait. Keep every queue bounded, and degrade before rejecting when a degraded plan exists.
 - Prove reliability with chaos tests that assert invariants under injected faults, contract tests across adapters, and load tests that show flat latency past capacity.
+
+## Further reading
+
+- *Site Reliability Engineering* (Beyer, Jones, Petoff, and Murphy, eds.). The reference for SLOs, error budgets, and handling overload; its companion books cover burn-rate alerting.
+- *Timeouts, retries, and backoff with jitter* (Amazon Builders' Library). The practitioner's account of retry amplification, jitter, and why only one layer should retry.
+- *The Tail at Scale* (Dean and Barroso). Where tail latency comes from and the original argument for hedged requests.
+- *Release It! Design and Deploy Production-Ready Software* (Nygard). Circuit breakers, bulkheads, timeouts, and the stability anti-patterns this chapter guards against.
+- *Designing Data-Intensive Applications* (Kleppmann). Delivery guarantees, idempotence, and why exactly-once is so expensive.

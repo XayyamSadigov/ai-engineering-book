@@ -1,6 +1,16 @@
 # Chapter 17 — AI Workflows and Orchestration
 
-After this chapter you will be able to place any proposed AI feature on the spectrum from deterministic workflow to multi-agent system, justify the placement with a short written argument, and implement the chosen design as an explicit graph with typed state, per-step error policy, checkpoints, and a human-approval pause that survives a process restart. The code is a plain-Python workflow engine of about 250 lines and the Northwind ticket-triage workflow built twice on top of it: once as a fixed pipeline, once as a graph with conditional edges. Everything runs offline against a scripted fake model (`book/projects/examples/ch17/`).
+This chapter is about the layer between model calls: deciding how much of the control flow the model should own, and building the retries, checkpoints, and approvals that make a multi-step AI feature reliable.
+
+**You will be able to:**
+- Place a proposed AI feature on the spectrum from LLM-enhanced application to multi-agent system and defend the placement with a written argument.
+- Estimate what a chain of model calls costs in latency, money, and end-to-end success rate before building it.
+- Build a workflow as an explicit graph with typed state, conditional edges, and a retry policy per node that distinguishes transient, validation, and fatal errors.
+- Make runs resumable with checkpoints, and implement human approval as a paused state bound to the exact state the approver saw.
+- Keep side-effecting steps safe under at-least-once execution with stable idempotency keys.
+- Choose between plain code, a graph library, and a durable execution engine, and measure orchestration overhead separately from model quality.
+
+**Prerequisites:** Chapters 3 (the gateway client and its per-call retries) and 16 (idempotency keys and approvals bound to arguments). | **Code:** `book/projects/examples/ch17/` (run: `cd book/projects/examples/ch17 && pytest -q`) | **Builds:** a plain-Python workflow engine of about 250 lines and the Northwind ticket-triage workflow on top of it, once as a fixed pipeline and once as a graph, all running offline against a scripted fake model.
 
 ## Why this matters
 
@@ -99,7 +109,7 @@ Every model call you add has three costs that compound: latency, money, and a ne
 
 **Latency adds.** A chain of four sequential calls, each with a median of 1.5 s, has a median near 6 s. The tail is worse than the sum of medians suggests, because each call's tail is independent and the chain's p95 is dominated by whichever call happened to be slow. If a single-call feature meets an 8 s p95 target with room to spare, the same model in a four-step chain usually does not.
 
-**Cost adds, and context grows.** In a chain the input of step k includes outputs of earlier steps, so tokens per call grow along the chain. In an agent loop the growth is worse: the whole history is replayed at every iteration, so total tokens grow roughly with the square of the number of steps until compaction (Chapter 5) kicks in.
+**Cost adds, and context grows.** In a chain the input of step k includes outputs of earlier steps, so tokens per call grow along the chain. In an agent loop the growth is worse: the whole history is replayed at every iteration, so total tokens grow roughly with the square of the number of steps. Chapter 19 works through that arithmetic; for this chapter the point is that a workflow's token count is fixed by its graph, while an agent's grows with every step it decides to take.
 
 **Reliability multiplies.** If each step independently succeeds with probability p, the whole chain succeeds with probability p^n. The table assumes independence, which is optimistic because a mediocre draft makes validation harder.
 
@@ -116,7 +126,7 @@ Decomposition is still often right, because narrowing a task raises its per-step
 
 ### Orchestration patterns in plain Python
 
-Every workflow in practice is composed of seven patterns. Naming them lets a reviewer see at a glance what a design costs. The implementations below are from `patterns.py`; the engine in the next section uses the same ideas with checkpoints added.
+Every workflow in practice is composed of seven patterns. Naming them lets a reviewer see at a glance what a design costs. The listing after the list shows the two concurrent patterns from `patterns.py`, because their failure semantics are the least obvious; `sequence`, `branch`, `retry`, and `fallback` are a few lines each and are on disk. The engine in the next section uses the same ideas with checkpoints added.
 
 **Sequence.** Steps run in order, each consuming the previous output. Cost: n calls, n failure points, latency is the sum. Use when the order is fixed and each step needs the previous result.
 
@@ -128,55 +138,12 @@ Every workflow in practice is composed of seven patterns. Naming them lets a rev
 
 **Retry with policy.** Bounded attempts, backoff, and above all a list of which errors are retryable. Retrying a validation failure with the same input is a common waste in production workflows. Chapter 29 covers backoff and circuit breakers in depth; here the pattern is the per-step policy object.
 
-**Fallback.** A second path when the primary fails for a listed reason: a cheaper model, a cached answer, a deterministic template, or a human. The listed reasons matter. Falling back on a bug in your own code hides the bug. (The `retry` and `fallback` helpers below default to catching every exception to keep the listing short; in production, pass the retryable classes explicitly.)
+**Fallback.** A second path when the primary fails for a listed reason: a cheaper model, a cached answer, a deterministic template, or a human. The listed reasons matter. Falling back on a bug in your own code hides the bug. The `retry` and `fallback` helpers in `patterns.py` default to catching every exception to stay short; in production, pass the retryable classes explicitly.
 
 **Human approval as a paused state.** The workflow reaches a state, persists it, and stops. A person decides later, in another process, and the workflow resumes from the persisted state. This cannot be done with a function call that blocks until someone clicks, because the process may not live that long. It is the pattern that forces the state-machine view, and it is why the triage pipeline cannot do it and the triage graph can.
 
 ```python
-# path: book/projects/examples/ch17/patterns.py
-"""Orchestration patterns as plain Python functions.
-
-Each pattern is a few lines. The value is not the code; it is naming the
-pattern so that a reviewer can see which one a workflow uses and what it
-costs: sequence (n calls, n failure points), branch (one extra decision),
-fan-out (latency of the slowest branch), map-reduce (n maps + 1 reduce),
-retry (bounded attempts), fallback (second path, usually cheaper).
-"""
-from __future__ import annotations
-
-import asyncio
-from collections.abc import Awaitable, Callable, Iterable, Sequence
-from typing import Any, TypeVar
-
-T = TypeVar("T")
-R = TypeVar("R")
-
-
-def sequence(*steps: Callable[[T], T]) -> Callable[[T], T]:
-    """Run steps in order, feeding each output into the next."""
-
-    def run(state: T) -> T:
-        for step in steps:
-            state = step(state)
-        return state
-
-    return run
-
-
-def branch(router: Callable[[T], str], routes: dict[str, Callable[[T], T]],
-           default: Callable[[T], T] | None = None) -> Callable[[T], T]:
-    """Pick one of several steps based on a decision function."""
-
-    def run(state: T) -> T:
-        key = router(state)
-        step = routes.get(key, default)
-        if step is None:
-            raise KeyError(f"no route for {key!r} and no default")
-        return step(state)
-
-    return run
-
-
+# path: book/projects/examples/ch17/patterns.py (excerpt; full file on disk)
 async def fan_out(tasks: Sequence[Callable[[], Awaitable[R]]], *,
                   max_concurrency: int = 8) -> list[R | BaseException]:
     """Run independent coroutines concurrently; return results in input order.
@@ -205,31 +172,6 @@ async def map_reduce(items: Iterable[T], mapper: Callable[[T], Awaitable[R]],
     if failures:
         raise failures[0]
     return reducer(results)  # type: ignore[arg-type]
-
-
-def retry(fn: Callable[[], R], *, attempts: int = 3,
-          retry_on: tuple[type[BaseException], ...] = (Exception,),
-          sleep: Callable[[float], None] | None = None, base_delay_s: float = 0.0) -> R:
-    """Call fn up to `attempts` times; only `retry_on` errors are retried."""
-    last: BaseException | None = None
-    for attempt in range(1, attempts + 1):
-        try:
-            return fn()
-        except retry_on as exc:
-            last = exc
-            if attempt < attempts and sleep is not None:
-                sleep(base_delay_s * 2 ** (attempt - 1))
-    assert last is not None
-    raise last
-
-
-def fallback(primary: Callable[[], R], secondary: Callable[[], R],
-             on: tuple[type[BaseException], ...] = (Exception,)) -> R:
-    """Try the primary path; on a listed error use the secondary path."""
-    try:
-        return primary()
-    except on:
-        return secondary()
 ```
 
 ### Workflows as explicit state machines with typed state
@@ -246,7 +188,7 @@ Rules for designing the state record:
 
 ### Checkpointing and resumption
 
-A checkpoint is the serialized state plus two pieces of control information: which node just ran and which node runs next. The engine writes one after every node. That cadence gives three capabilities.
+A checkpoint is the serialized state plus two pieces of control information: which node just ran and which node runs next. The engine writes one after every node. That cadence gives three capabilities. (Saving state after each step is one of two styles of durable execution; Chapter 38 covers the other, an event log replayed to rebuild state, and the leases that keep two workers off the same run.)
 
 **Resume after a crash.** If the process dies between nodes, a new process loads the latest checkpoint and continues from `next_node`. Earlier steps, including their model calls, are not repeated. If the process dies inside a node, the node is repeated. This is at-least-once execution: a node may run more than once, but never zero times, which is harmless for pure steps and dangerous for side effects. Side-effecting nodes must therefore be idempotent, exactly as Chapter 16 describes for tool calls.
 
@@ -356,38 +298,10 @@ Run from the repository root:
 
 ### The engine
 
-Read it in the order of the run loop above: the error classes, the idempotency key, the retry policy, checkpoints, then `Graph` itself.
+The engine is shown in two excerpts. The first holds its vocabulary: the error classes, the idempotency key, the retry policy, the checkpoint record with the `Checkpointer` protocol a durable store implements, and the resume handle.
 
 ```python
-# path: book/projects/examples/ch17/workflow_engine.py
-"""A small, explicit workflow engine: typed state, nodes, conditional edges,
-per-node retry policy, checkpoints, and pause/resume for human approval.
-
-The engine is deliberately plain Python. Everything a library such as LangGraph
-does for you is visible here in about 250 lines of code.
-"""
-from __future__ import annotations
-
-import asyncio
-import contextlib
-import contextvars
-import hashlib
-import inspect
-import json
-import time
-import uuid
-from collections import Counter
-from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable, Generic, Literal, Protocol, TypeVar
-
-from pydantic import BaseModel
-
-END = "__end__"
-S = TypeVar("S", bound=BaseModel)
-Status = Literal["completed", "paused", "failed"]
-
-
-# --- error classes a step may raise ---------------------------------------
+# path: book/projects/examples/ch17/workflow_engine.py (excerpt; full file on disk)
 class StepError(Exception):
     """Base class. `retryable` documents whether a retry can help; a node's `retry_on` decides."""
 
@@ -409,14 +323,7 @@ class FatalError(StepError):
     """Do not retry, do not continue. Preserve state for a human."""
 
 
-class StaleHandleError(ValueError):
-    """The handle no longer matches the paused checkpoint: refuse to apply the decision."""
-
-
-# --- idempotency key for side-effecting nodes -------------------------------
-_STEP_KEY: contextvars.ContextVar[str] = contextvars.ContextVar("workflow_step_key")
-
-
+# ...
 def step_key() -> str:
     """Stable key for the node now running: `run_id:node:visit`.
 
@@ -427,15 +334,7 @@ def step_key() -> str:
     return _STEP_KEY.get()
 
 
-def state_hash(state: dict[str, Any]) -> str:
-    return hashlib.sha256(json.dumps(state, sort_keys=True).encode()).hexdigest()[:16]
-
-
-# --- step and policy ------------------------------------------------------
-class Step(Protocol[S]):
-    def __call__(self, state: S) -> S | Awaitable[S]: ...
-
-
+# ...
 @dataclass(frozen=True)
 class RetryPolicy:
     max_attempts: int = 1
@@ -447,7 +346,6 @@ class RetryPolicy:
         return min(self.max_delay_s, self.base_delay_s * (2 ** (attempt - 1)))
 
 
-# --- checkpoints ----------------------------------------------------------
 @dataclass(frozen=True)
 class Checkpoint:
     run_id: str
@@ -465,125 +363,21 @@ class Checkpointer(Protocol):
     def history(self, run_id: str) -> list[Checkpoint]: ...
 
 
-class InMemoryCheckpointer:
-    def __init__(self) -> None:
-        self._log: dict[str, list[Checkpoint]] = {}
-
-    def save(self, cp: Checkpoint) -> None:
-        self._log.setdefault(cp.run_id, []).append(cp)
-
-    def latest(self, run_id: str) -> Checkpoint | None:
-        log = self._log.get(run_id)
-        return log[-1] if log else None
-
-    def history(self, run_id: str) -> list[Checkpoint]:
-        return list(self._log.get(run_id, []))
-
-
-# --- run result -----------------------------------------------------------
-@dataclass
-class StepRecord:
-    node: str
-    attempts: int
-    duration_ms: float
-    error: str | None = None
-
-
+# ...
 @dataclass(frozen=True)
 class ResumeHandle:
     run_id: str
     node: str                       # the approval node waiting for a decision
     seq: int | None = None          # seq of the paused checkpoint the human saw
     state_hash: str | None = None   # hash of the state the human saw
+```
 
+The second half is the run loop. `aresume` checks the handle before anything runs, `_execute` is the loop from "How it works," and `_run_node` is the per-node retry policy. The synchronous wrappers, `aresume_from_checkpoint`, `replay`, the builder methods, and `InMemoryCheckpointer` are on disk.
 
-@dataclass
-class RunResult(Generic[S]):
-    run_id: str
-    status: Status
-    state: S
-    trace: list[StepRecord]
-    handle: ResumeHandle | None = None
-    error: str | None = None
-
-
-# --- graph ----------------------------------------------------------------
-@dataclass
-class _Node:
-    fn: Step
-    retry: RetryPolicy
-    pause_before: bool
-    on_decision: Callable[[Any, Any], Any] | None
-
-
+```python
+# path: book/projects/examples/ch17/workflow_engine.py (excerpt; full file on disk)
 class Graph(Generic[S]):
-    """Directed graph of steps over one pydantic state type.
-
-    Nodes receive the state and return a new state (or mutate and return it).
-    Edges are static (`add_edge`) or conditional (`add_router`: a function of
-    the state that returns the next node name or END).
-    """
-
-    def __init__(self, state_type: type[S], checkpointer: Checkpointer | None = None,
-                 max_steps: int = 50, tracer: Any | None = None) -> None:
-        self.state_type = state_type
-        self.checkpointer = checkpointer or InMemoryCheckpointer()
-        self.max_steps = max_steps
-        self.tracer = tracer   # anything with .span(name, **attrs), e.g. an aie_core Tracer
-        self._nodes: dict[str, _Node] = {}
-        self._edges: dict[str, str | Callable[[S], str]] = {}
-        self._entry: str | None = None
-
-    # building --------------------------------------------------------
-    def add_node(self, name: str, fn: Step, *, retry: RetryPolicy = RetryPolicy(),
-                 pause_before: bool = False,
-                 on_decision: Callable[[S, Any], S] | None = None) -> "Graph[S]":
-        if name in self._nodes or name == END:
-            raise ValueError(f"duplicate or reserved node name: {name}")
-        self._nodes[name] = _Node(fn, retry, pause_before, on_decision)
-        if self._entry is None:
-            self._entry = name
-        return self
-
-    def add_edge(self, src: str, dst: str) -> "Graph[S]":
-        self._check(src); self._check(dst)
-        self._edges[src] = dst
-        return self
-
-    def add_router(self, src: str, router: Callable[[S], str]) -> "Graph[S]":
-        self._check(src)
-        self._edges[src] = router
-        return self
-
-    def set_entry(self, name: str) -> "Graph[S]":
-        self._check(name)
-        self._entry = name
-        return self
-
-    def _check(self, name: str) -> None:
-        if name != END and name not in self._nodes:
-            raise ValueError(f"unknown node: {name}")
-
-    def _next(self, node: str, state: S) -> str:
-        edge = self._edges.get(node, END)
-        target = edge(state) if callable(edge) else edge
-        self._check(target)
-        return target
-
-    # running ----------------------------------------------------------
-    def run(self, state: S, run_id: str | None = None) -> RunResult[S]:
-        return asyncio.run(self.arun(state, run_id))
-
-    async def arun(self, state: S, run_id: str | None = None) -> RunResult[S]:
-        if self._entry is None:
-            raise ValueError("graph has no nodes")
-        run_id = run_id or uuid.uuid4().hex[:12]
-        return await self._execute(run_id, self._entry, state, seq=0, trace=[])
-
-    def resume(self, handle: ResumeHandle, decision: Any) -> RunResult[S]:
-        """Continue a paused run with a human decision."""
-        return asyncio.run(self.aresume(handle, decision))
-
+    # ...
     async def aresume(self, handle: ResumeHandle, decision: Any) -> RunResult[S]:
         cp = self.checkpointer.latest(handle.run_id)
         if cp is None or cp.status != "paused" or cp.next_node != handle.node:
@@ -599,24 +393,7 @@ class Graph(Generic[S]):
         return await self._execute(handle.run_id, handle.node, state,
                                    seq=cp.seq + 1, trace=[], skip_pause=True)
 
-    def resume_from_checkpoint(self, run_id: str) -> RunResult[S]:
-        """Continue after a crash from the last durable checkpoint."""
-        return asyncio.run(self.aresume_from_checkpoint(run_id))
-
-    async def aresume_from_checkpoint(self, run_id: str) -> RunResult[S]:
-        cp = self.checkpointer.latest(run_id)
-        if cp is None:
-            raise ValueError(f"no checkpoint for run {run_id}")
-        if cp.status == "completed":
-            return RunResult(run_id, "completed", self.state_type.model_validate(cp.state), [])
-        state = self.state_type.model_validate(cp.state)
-        return await self._execute(run_id, cp.next_node, state, seq=cp.seq + 1, trace=[])
-
-    def replay(self, run_id: str) -> list[tuple[str, S]]:
-        """States as they were after each node, from the checkpoint log."""
-        return [(cp.node, self.state_type.model_validate(cp.state))
-                for cp in self.checkpointer.history(run_id)]
-
+    # ...
     async def _execute(self, run_id: str, current: str, state: S, *, seq: int,
                        trace: list[StepRecord], skip_pause: bool = False) -> RunResult[S]:
         steps = 0
@@ -652,11 +429,7 @@ class Graph(Generic[S]):
             seq += 1; steps += 1; current = nxt
         return RunResult(run_id, "completed", state, trace)
 
-    def _span(self, run_id: str, node: str) -> Any:
-        if self.tracer is None:
-            return contextlib.nullcontext(None)
-        return self.tracer.span("workflow.node", run_id=run_id, node=node)
-
+    # ...
     async def _run_node(self, name: str, node: _Node, state: S) -> tuple[StepRecord, S, str | None]:
         started = time.perf_counter()
         attempt = 0
@@ -676,56 +449,14 @@ class Graph(Generic[S]):
                     ms = (time.perf_counter() - started) * 1000
                     return StepRecord(name, attempt, ms, error=repr(exc)), state, repr(exc)
                 await asyncio.sleep(node.retry.delay(attempt))
-
-    def _save(self, run_id: str, seq: int, node: str, nxt: str, status: Any, state: S) -> Checkpoint:
-        cp = Checkpoint(run_id, seq, node, nxt, status, state.model_dump(mode="json"))
-        self.checkpointer.save(cp)
-        return cp
 ```
 
 ### The domain: state, steps, and a scripted model
 
-The step functions take the state and a `Model`, which in this chapter is any callable `(task, prompt) -> str`. In the full Northwind stack the callable wraps `ModelGateway.complete` from `aie_core` (Chapter 3) and the fake is `FakeLLM(handler=...)`; the step functions do not change. Policies are a dictionary standing in for the retrieval layer of Part IV.
+The step functions take the state and a `Model`, which in this chapter is any callable `(task, prompt) -> str`. In the full Northwind stack the callable wraps `ModelGateway.complete` from `aie_core` (Chapter 3) and the fake is `FakeLLM(handler=...)`; the step functions do not change. Policies are a dictionary standing in for the retrieval layer of Part IV. The excerpt shows the state, the validator, the approval rule, and the irreversible `send`; `classify`, `retrieve_policy`, `draft_reply`, `escalate`, the policy table, and the scripted `FakeModel` are on disk.
 
 ```python
-# path: book/projects/examples/ch17/triage_domain.py
-"""Shared domain for the Northwind ticket-triage example.
-
-Both the fixed pipeline and the graph import from here, so the comparison
-between the two is about orchestration only, not about step logic.
-"""
-from __future__ import annotations
-
-import json
-import time
-from collections.abc import Callable
-from dataclasses import dataclass, field
-from typing import Literal
-
-from pydantic import BaseModel, Field
-
-Category = Literal["refund", "shipping", "account", "other"]
-Verdict = Literal["ok", "fixable", "escalate"]
-
-# A model is just a callable in this chapter. In the full stack this is
-# `gateway.complete(CompletionRequest(...))` from aie_core; see Chapter 3.
-Model = Callable[[str, str], str]  # (task, prompt) -> text
-
-POLICIES: dict[str, str] = {
-    "refund": "Retail refund policy: full refund within 30 days with receipt; "
-              "store credit up to 90 days. Never promise a refund for opened software.",
-    "shipping": "Logistics policy: standard delivery 3-5 business days; "
-                "delays over 7 days qualify for free re-shipment.",
-    "account": "Account policy: identity must be verified before any account change; "
-               "never share account details in a reply.",
-}
-
-
-class ValidationReport(BaseModel):
-    verdict: Verdict
-    reasons: list[str] = Field(default_factory=list)
-
-
+# path: book/projects/examples/ch17/triage_domain.py (excerpt; full file on disk)
 class TriageState(BaseModel):
     ticket_id: str
     tenant: Literal["retail", "logistics"]
@@ -742,61 +473,7 @@ class TriageState(BaseModel):
     log: list[str] = Field(default_factory=list)
 
 
-@dataclass
-class ModelCall:
-    task: str
-    duration_ms: float
-
-
-@dataclass
-class FakeModel:
-    """Scripted model. `scripts[task]` is a list of replies consumed in order;
-    the last reply is repeated when the list is exhausted."""
-
-    scripts: dict[str, list[str]]
-    simulated_latency_ms: float = 0.0
-    calls: list[ModelCall] = field(default_factory=list)
-    _cursor: dict[str, int] = field(default_factory=dict)
-
-    def __call__(self, task: str, prompt: str) -> str:
-        started = time.perf_counter()
-        replies = self.scripts[task]
-        idx = min(self._cursor.get(task, 0), len(replies) - 1)
-        self._cursor[task] = idx + 1
-        if self.simulated_latency_ms:
-            time.sleep(self.simulated_latency_ms / 1000)
-        self.calls.append(ModelCall(task, (time.perf_counter() - started) * 1000))
-        return replies[idx]
-
-
-# --- the six steps, as pure functions of (state, model) ---------------------
-def classify(state: TriageState, model: Model) -> TriageState:
-    raw = model("classify", f"Classify this support ticket into refund/shipping/account/other:\n{state.text}")
-    category = raw.strip().lower()
-    if category not in ("refund", "shipping", "account", "other"):
-        raise ValueError(f"classifier returned an unknown label: {raw!r}")
-    state.category = category  # type: ignore[assignment]
-    state.log.append(f"classified as {category}")
-    return state
-
-
-def retrieve_policy(state: TriageState) -> TriageState:
-    """Deterministic step: no model involved. A dict stands in for retrieval."""
-    assert state.category is not None
-    state.policy = POLICIES.get(state.category, "No specific policy; answer generically and offer escalation.")
-    state.log.append("policy retrieved")
-    return state
-
-
-def draft_reply(state: TriageState, model: Model) -> TriageState:
-    prompt = (f"Policy:\n{state.policy}\n\nTicket:\n{state.text}\n\n"
-              f"Write a short reply. Previous validation: {state.report.model_dump() if state.report else 'none'}")
-    state.draft = model("draft", prompt)
-    state.draft_attempts += 1
-    state.log.append(f"draft #{state.draft_attempts}")
-    return state
-
-
+# ...
 def validate(state: TriageState, model: Model) -> TriageState:
     """Two layers: deterministic checks first, model judgment second."""
     reasons: list[str] = []
@@ -822,6 +499,7 @@ def needs_human(state: TriageState) -> bool:
     return state.category in ("account", "refund")
 
 
+# ...
 # (ticket_id, body, idempotency_key): the sender must deliver at most once per key.
 Sender = Callable[[str, str, str], None]
 
@@ -835,63 +513,18 @@ def send(state: TriageState, sender: Sender, key: str | None = None) -> TriageSt
     state.outcome = "sent"
     state.log.append("sent")
     return state
-
-
-def escalate(state: TriageState) -> TriageState:
-    state.outcome = "escalated"
-    state.log.append("escalated to a human agent")
-    return state
 ```
 
 ### The same workflow as a fixed pipeline
 
-Watch where approval happens; it is the one thing this version cannot do well.
+Watch where approval happens; it is the one thing this version cannot do well. The `PipelineMetrics` class that splits model time from the rest is on disk.
 
 ```python
-# path: book/projects/examples/ch17/triage_pipeline.py
-"""Ticket triage as a fixed pipeline: classify -> retrieve policy -> draft ->
-validate -> approve/send. Control flow is ordinary Python. There is no
-engine, no graph, and therefore no way to pause: the approver must answer
-synchronously, inside the request.
-"""
-from __future__ import annotations
-
-import time
-from collections.abc import Callable
-from dataclasses import dataclass, field
-
-from triage_domain import (FakeModel, Model, Sender, TriageState, classify, draft_reply, escalate,
-                           needs_human, retrieve_policy, send, validate)
-
-MAX_DRAFTS = 2
-
-
-@dataclass
-class PipelineMetrics:
-    step_ms: dict[str, float] = field(default_factory=dict)
-    model_ms: float = 0.0
-
-    @property
-    def total_ms(self) -> float:
-        return sum(self.step_ms.values())
-
-    @property
-    def orchestration_overhead_ms(self) -> float:
-        """Wall time not spent waiting on the model: our code, serialization, I/O."""
-        return self.total_ms - self.model_ms
-
-
+# path: book/projects/examples/ch17/triage_pipeline.py (excerpt; full file on disk)
 def run_pipeline(state: TriageState, model: Model, approver: Callable[[TriageState], bool],
                  sender: Sender,
                  metrics: PipelineMetrics | None = None) -> TriageState:
-    metrics = metrics if metrics is not None else PipelineMetrics()
-
-    def timed(name: str, fn: Callable[[], TriageState]) -> TriageState:
-        t0 = time.perf_counter()
-        result = fn()
-        metrics.step_ms[name] = metrics.step_ms.get(name, 0.0) + (time.perf_counter() - t0) * 1000
-        return result
-
+    # ... (metrics setup and `timed`, which records each step's wall time)
     state = timed("classify", lambda: classify(state, model))
     state = timed("retrieve_policy", lambda: retrieve_policy(state))
 
@@ -912,12 +545,6 @@ def run_pipeline(state: TriageState, model: Model, approver: Callable[[TriageSta
     if isinstance(model, FakeModel):
         metrics.model_ms = sum(c.duration_ms for c in model.calls)
     return timed("send", lambda: send(state, sender))
-
-
-def _apply_decision(state: TriageState, approved: bool) -> TriageState:
-    state.approved = approved
-    state.log.append(f"approval: {'yes' if approved else 'no'}")
-    return state
 ```
 
 ### The same workflow as a graph
@@ -925,20 +552,7 @@ def _apply_decision(state: TriageState, approved: bool) -> TriageState:
 Compare the approval node and the two routers with the pipeline's inline branches.
 
 ```python
-# path: book/projects/examples/ch17/triage_graph.py
-"""The same triage workflow as an explicit graph with conditional edges.
-
-What changes compared with the pipeline: the approval step is a paused
-state with a resumable handle, retries are a per-node policy instead of
-try/except, every transition is checkpointed, and the branching rules are
-one routing function you can unit-test without running any step.
-"""
-from __future__ import annotations
-
-from triage_domain import (Model, Sender, TriageState, classify, draft_reply, escalate, needs_human,
-                           retrieve_policy, send, validate)
-from workflow_engine import END, Checkpointer, Graph, RetryPolicy, step_key
-
+# path: book/projects/examples/ch17/triage_graph.py (excerpt; full file on disk)
 MAX_DRAFTS = 2
 
 
@@ -990,10 +604,10 @@ def build_triage_graph(model: Model, sender: Sender,
 
 ### Tests
 
-The full test file is on disk; the tests below are the ones that demonstrate the chapter's claims: pause and resume across "processes," checkpoint replay after a crash, routers tested without running steps, refusal of a stale approval, and at-most-once delivery when `send` is re-executed. `Sent` is a sender fake that records every key and delivers at most once per key.
+The full test file is on disk, including a router test that never runs a step and `test_resume_refuses_a_stale_approval_handle`. The three tests below demonstrate the chapter's central claims: pause and resume across "processes," resume after a crash without repeating completed nodes, and at-most-once delivery when `send` is re-executed. `Sent` is a sender fake that records every key and delivers at most once per key.
 
 ```python
-# path: book/projects/examples/ch17/test_ch17.py  (excerpt; full file on disk)
+# path: book/projects/examples/ch17/test_ch17.py (excerpt; full file on disk)
 def test_graph_pauses_for_approval_and_resumes() -> None:
     model = FakeModel({"classify": ["refund"], "draft": ["Refund issued within 30 days."], "validate": [OK]})
     sent = Sent()
@@ -1036,30 +650,7 @@ def test_checkpoint_replay_and_resume_after_crash() -> None:
     second = g2.resume_from_checkpoint("run-crash")
     assert second.status == "completed" and second.state.outcome == "sent"
     assert [c.task for c in model.calls] == ["classify", "draft", "validate"], "classify was not re-run"
-
-
-def test_graph_branch_rules_are_testable_without_running_steps() -> None:
-    s = refund_ticket()
-    s.category = "refund"; s.draft_attempts = 1
-    s.report = ValidationReport(verdict="ok")
-    assert route_after_validate(s) == "approval"
-    s.report = ValidationReport(verdict="fixable")
-    assert route_after_validate(s) == "draft"
-    s.draft_attempts = 2
-    assert route_after_validate(s) == "escalate"
-
-
-def test_resume_refuses_a_stale_approval_handle() -> None:
-    model = FakeModel({"classify": ["refund"], "draft": ["Refund issued within 30 days."], "validate": [OK]})
-    sent, cps = Sent(), InMemoryCheckpointer()
-    g = build_triage_graph(model, sent, checkpointer=cps)
-    paused = g.run(refund_ticket(), run_id="run-stale")
-    assert paused.handle is not None and paused.handle.state_hash is not None
-    cps.latest("run-stale").state["draft"] = "Refund guaranteed, no receipt needed."  # changed after review
-    with pytest.raises(StaleHandleError):
-        g.resume(paused.handle, {"approved": True})
-    assert sent.messages == [], "the human approved a draft that is no longer the one to send"
-
+    # ...
 
 def test_send_reexecuted_after_ambiguous_failure_delivers_once() -> None:
     model = FakeModel({"classify": ["shipping"], "draft": ["Re-shipping now."], "validate": [OK]})
@@ -1077,7 +668,7 @@ def test_send_reexecuted_after_ambiguous_failure_delivers_once() -> None:
 
 **Steps are state-to-state functions; the model is a parameter.** `classify(state, model)` and friends take the model explicitly instead of importing a client. That is what makes the fake trivial and what lets the pipeline and the graph share them unchanged. The graph wraps them in lambdas to bind the model, because the engine's `Step` protocol takes only the state.
 
-**Routers are the whole branching logic, and they are pure.** `route_after_validate` reads three fields and returns a node name. The test that exercises every branch builds states by hand and never calls the model. When product asks "what happens to a refund whose second draft is still not acceptable," the answer is one function, not a trace.
+**Routers are the whole branching logic, and they are pure.** `route_after_validate` reads three fields and returns a node name. The test that exercises every branch (`test_graph_branch_rules_are_testable_without_running_steps`, on disk) builds states by hand and never calls the model. When product asks "what happens to a refund whose second draft is still not acceptable," the answer is one function, not a trace.
 
 **Validation layers code before the model.** `validate` runs deterministic checks first (no promises, no account data), then asks the model for a judgment, then merges: if code found a reason, a model verdict of `ok` is downgraded to `fixable`. The model cannot overrule a rule. The parsed verdict is typed as a `Literal`, so an unexpected value fails at the pydantic boundary when the `ValidationReport` is built.
 
@@ -1085,7 +676,7 @@ def test_send_reexecuted_after_ambiguous_failure_delivers_once() -> None:
 
 **Retry is a policy on model nodes only.** `classify`, `draft`, and `validate` get `RetryPolicy(max_attempts=3)` with the default `retry_on=(TransientError,)`. `retrieve_policy` is a dictionary lookup and needs none. `send` has none on purpose: a transient error after a message may have gone out must not be answered with a second message. The right fix for `send` is idempotency inside the sender, not retry in the engine, so the node passes `step_key()` to the sender, whose contract is at most one delivery per key. `test_send_reexecuted_after_ambiguous_failure_delivers_once` makes the sender time out after delivering, resumes the run, and asserts that both executions carried `run-dup:send:0` and that one message went out.
 
-**Checkpoints carry `next_node`, and a failed checkpoint points at the failing node.** This is what makes `resume_from_checkpoint` correct after a crash: the engine redoes the node that did not complete and nothing before it. The replay test shows `classify` called exactly once across the crash and the resume.
+**Checkpoints carry `next_node`, and a failed checkpoint points at the failing node.** This is what makes `resume_from_checkpoint` correct after a crash: the engine redoes the node that did not complete and nothing before it. The crash test shows `classify` called exactly once across the crash and the resume.
 
 **The pipeline blocks on approval.** `run_pipeline` takes an `approver` callable and waits for it. In a test that is a lambda; in production it would have to be a blocking HTTP call to a human, which is absurd for anything that takes longer than a request timeout. The pipeline is not wrong for the shipping path, which has no approval, and it is simpler to read. It is wrong for the refund path, and the fix is the graph.
 
@@ -1120,11 +711,40 @@ Collect a few weeks of runs and classify every failure. Two buckets matter. In t
 
 Then run a comparison. Implement the open-ended part as a bounded agent (Chapter 19) inside one node, keep the rest of the graph, and measure against the fixed version on the same cases: success rate, average model calls per case, p95 latency, cost per successful case, and the time your team spends diagnosing a failure. The last one is rarely measured and usually decisive; a trace of a graph run reads top to bottom, while a trace of an agent run has to be reconstructed. Graduate only if the agent wins on success rate by enough to pay for what it loses on the other four, and graduate the smallest possible part. A triage workflow that needs an agent to gather context from three systems in a case-dependent order still does not need an agent to send the reply.
 
-## How LangGraph-style libraries map onto this
+## Graph libraries and durable execution engines
 
-Graph-based orchestration libraries, of which LangGraph is the best known at the time of writing, are this chapter's engine with a persistence layer, streaming, and tooling attached. The mapping is nearly one to one. A typed state with reducers (functions that merge a node's partial update into the state) corresponds to `TriageState`; nodes are functions from state to state updates; static and conditional edges correspond to this engine's `add_edge` and `add_router`; a checkpointer with pluggable backends is the `Checkpointer` protocol; an interrupt before a node is `pause_before`, and resuming with a command is `resume` with a decision. What a library adds is real: durable checkpoint stores, token streaming out of nodes, parallel branches with state merging, subgraphs, visualization, and time-travel debugging over the checkpoint log.
+The engine in this chapter is a teaching tool and a reasonable production starting point for short workflows. Two families of off-the-shelf systems do the same job with more machinery, and having built the small version, you can map both onto it.
+
+### Graph libraries
+
+Graph-based orchestration libraries (for example LangGraph, the best known as of 2026) are this chapter's engine with a persistence layer, streaming, and tooling attached. The mapping is nearly one to one. A typed state with reducers (functions that merge a node's partial update into the state) corresponds to `TriageState`; nodes are functions from state to state updates; static and conditional edges correspond to this engine's `add_edge` and `add_router`; a checkpointer with pluggable backends is the `Checkpointer` protocol; an interrupt before a node is `pause_before`, and resuming with a command is `resume` with a decision. What a library adds is real: durable checkpoint stores, token streaming out of nodes, parallel branches with state merging, subgraphs, visualization, and time-travel debugging over the checkpoint log. A graph library runs inside your process, so it fits workflows that sit in or near a request and finish in seconds to minutes.
 
 What a library does not change is where the decisions live. If a node lets model output name the next node directly, the graph is an agent with extra steps, no matter what the library calls it. Evaluate any such library on five criteria: whether you can see the state, the prompts, and the retry behavior; whether checkpoints are durable and portable; how it tests; how it deploys; and how hard it is to leave. Chapter 23 applies those criteria across the major frameworks. Having built the 250-line version, you can read a framework's checkpoint schema and know whether it is doing something you could not.
+
+### Durable execution engines
+
+Durable execution engines solve the same problem from the other end. Instead of a library inside your process, they are a separate service that owns the run: it records progress, schedules work onto your workers, fires timers, and delivers external messages to waiting runs. Two styles are common.
+
+**Code-first workflow engines** (for example Temporal, or Azure Durable Functions) let you write the workflow as an ordinary function. Every call with side effects, including every model call, is an *activity*: a function the engine schedules, retries under a per-activity policy, and whose result it records in an event history. After a crash, a worker re-runs the workflow function from the top against that history, and completed activities return their recorded results instead of running again. The price is a determinism rule: the workflow function itself may not call the model, read the clock, draw random numbers, or do I/O, because replay must take the same path every time. All of that moves into activities.
+
+**Step-function services** (for example AWS Step Functions) define the workflow as a state machine in a JSON or YAML document. Each state invokes a function or a service, carries its own retry and catch rules matched on error names, and choice states route on fields of the state. The service stores the execution history and state between steps.
+
+Both map onto the three mechanisms this chapter built:
+
+| This chapter | Graph library | Code-first workflow engine | Step-function service |
+|---|---|---|---|
+| Checkpoint after each node | Checkpoint after each node or step | Event history of activity results; state rebuilt by replay | Managed execution history per state transition |
+| `RetryPolicy` with `retry_on` | Per-node retry policy | Per-activity retry policy with non-retryable error types | Retry and catch clauses per state, matched on error names |
+| `step_key()` (`run_id:node:visit`) | You build it from the thread or run id and the node | Workflow id plus activity id, stable across retries of one activity | You build it from the execution id and the state name |
+| `pause_before` plus `ResumeHandle` | Interrupt, then resume with a command | Workflow waits for a signal (an external message to a running workflow), with a durable timer as its timeout | A callback task that waits for a token to be returned, with a timeout |
+| Router function | Conditional edge | Ordinary `if` in the workflow function over a validated value | Choice state |
+| Graph version in the checkpoint | Same problem, same fix | Versioned workflow code; old runs must still replay deterministically | Versioned state machine definitions |
+
+Two things do not change. Activities and tasks still execute at least once, so `send` still needs an idempotency key that the receiving side honors; the engine gives you a stable identity to build it from, not exactly-once delivery. And routing on model output still has to go through a validated, enumerated value.
+
+LLM workloads add three costs that are easy to miss. Model outputs become part of the engine's history, so drafts and ticket text inherit the engine's retention and access rules, and large outputs run into history and payload size limits; store them elsewhere and keep a reference, exactly as the state-design rules above say. Each step is a round trip through the engine service, which is negligible for a background job and noticeable in a request path. And streaming tokens from inside an activity to a waiting user is awkward, so these engines fit background and long-running work better than the interactive hot path.
+
+**When to adopt one.** Adopt a durable engine when runs wait for hours or days (approvals, timers, external events), when many workers share the runs, or when steps span several services and you want the operational tooling (visibility, cancellation, timeouts) without building it. Stay with plain code or a graph library when runs finish within a request or a few minutes, live in one service, and a checkpoint table is enough. The concepts these engines are built on (the event log as the source of truth, leases on runs, durable timers, and signals) are Chapter 38's subject, along with when building your own is justified.
 
 ## Production considerations
 
@@ -1134,17 +754,17 @@ What a library does not change is where the decisions live. If a node lets model
 
 **Security.** The model's text becomes control flow only through validated enums. Tool-like nodes (`send`) enforce authorization in code and bind approvals to a persisted state that includes the exact arguments; the approver sees the same draft the sender will send. Tenant identity travels in the state and is checked by every node that reads or writes tenant data; a checkpoint is data, and resuming it must re-establish the caller's identity, not trust the stored one. Checkpoint stores contain drafts and ticket text, so they inherit the retention and access rules of the source data. Chapter 26 covers the injection paths through retrieved policy text; a validator node is a reasonable place for an output guardrail from Chapter 27.
 
-**Operations.** Replace `InMemoryCheckpointer` with a durable store keyed by `run_id` (a relational table is enough: run_id, seq, node, next_node, status, state JSON, timestamp). Give every run an idempotency key at submission (a client-supplied key, distinct from the per-node `step_key`) so a retried HTTP request does not start two runs. Version the graph definition and store the version in the checkpoint; resuming a run paused under graph version 3 with graph version 4 must be a deliberate decision with a migration, because node names and state fields may have changed. Expire paused runs and route expired ones to a dead-letter queue (a holding table for runs that need manual attention) with the state attached. Emit one span per node with the attributes listed in the measurement section (the engine's `workflow.node` span is the starting point), and a run-level span that carries the path. Two concurrency rules apply once runs live in a shared store. Make `(run_id, seq)` unique, so two workers resuming the same paused run cannot both write the next checkpoint: the loser's insert fails and it abandons the run. And compute the visit counts behind `step_key()` from the store, as the engine does from `history`, never from process memory.
+**Operations.** Replace `InMemoryCheckpointer` with a durable store keyed by `run_id` (a relational table is enough: run_id, seq, node, next_node, status, state JSON, timestamp). Give every run an idempotency key at submission (a client-supplied key, distinct from the per-node `step_key`) so a retried HTTP request does not start two runs. Version the graph definition and store the version in the checkpoint; resuming a run paused under graph version 3 with graph version 4 must be a deliberate decision with a migration, because node names and state fields may have changed.
+
+Expire paused runs and route expired ones to a dead-letter queue (a holding table for runs that need manual attention) with the state attached. Emit one span per node with the attributes listed in the measurement section (the engine's `workflow.node` span is the starting point), and a run-level span that carries the path. Two concurrency rules apply once runs live in a shared store. Make `(run_id, seq)` unique, so two workers resuming the same paused run cannot both write the next checkpoint: the loser's insert fails and it abandons the run. And compute the visit counts behind `step_key()` from the store, as the engine does from `history`, never from process memory. If these requirements start to look like a project of their own, that is the signal to consider a durable execution engine (see the previous section).
 
 ## Common mistakes
 
 - **Building an agent for a fixed sequence.** The model rediscovers the pipeline on every request, with variable order and skipped validation. The telltale is a system prompt that describes the steps in order.
 - **Letting the model name the next node.** A router that returns whatever string the model emitted turns a graph into an agent without any of an agent's safeguards. Routers map validated values to a closed set of edges.
 - **One `except Exception` with a retry.** Validation and fatal errors get retried with the same input; cost climbs and nothing improves. Classify errors and retry only transient ones.
-- **Retrying side effects.** A `send` wrapped in a retry policy double-sends on a timeout after delivery. Make the sender idempotent and give the node no retry.
 - **Approval as a blocking call.** It works in tests and in demos and fails as soon as a reviewer takes longer than the request timeout. Approval is a persisted paused state.
 - **Writing the checkpoint before the step.** The log claims progress that did not happen, and a resume skips the step. Checkpoint after completion; pause is the only exception.
-- **Reporting one latency number.** Model time and orchestration time have different owners and different fixes.
 - **Unbounded cycles.** A redraft loop with no counter in the router and no ceiling in the engine runs until the budget is gone. Use both.
 
 ## Failure modes
@@ -1153,7 +773,7 @@ Each entry names the failure, how it appears in telemetry, and the test that cat
 
 **Path drift after a prompt change.** The validator prompt is edited and the fraction of runs taking the `fixable` edge doubles. Per-step metrics stay green because every step "succeeded." Telemetry: path label distribution per graph version; alert on the escalate and redraft fractions. Test: a golden set with expected paths, run in CI on every prompt change, asserting the path and not just the final output.
 
-**Double side effect after resume.** A crash inside `send` after delivery and before the checkpoint; the resume re-runs `send`. Telemetry: sender idempotency-key collisions, customer complaints about duplicate messages. Test: `test_send_reexecuted_after_ambiguous_failure_delivers_once`, a sender fake that records keys, fails after delivery, and is resumed; it asserts exactly one message for that key.
+**Double side effect after resume or retry.** A crash inside `send` after delivery and before the checkpoint; the resume re-runs `send`. A retry policy on `send` produces the same duplicate from a timeout after delivery, which is why the node has none and the sender deduplicates by key. Telemetry: sender idempotency-key collisions, customer complaints about duplicate messages. Test: `test_send_reexecuted_after_ambiguous_failure_delivers_once`, a sender fake that records keys, fails after delivery, and is resumed; it asserts exactly one message for that key.
 
 **Stale approval.** The draft is regenerated between pause and resume (for example a redeploy re-runs the draft node) and the human's "yes" is applied to text they never saw. Telemetry: `StaleHandleError` count on resume, and the state hash recorded at pause next to the one presented at resume. Test: `test_resume_refuses_a_stale_approval_handle` pauses, mutates the stored draft, resumes, and asserts the refusal and that nothing was sent.
 
@@ -1189,7 +809,24 @@ Test the three layers separately, because they fail separately.
 
 Quality of the model steps is evaluated separately, with the evaluation harness from Chapter 24 and the task-specific evaluators from Chapter 25, against real or synthetic tickets and a real model, marked `@pytest.mark.integration` and skipped by default. Orchestration overhead is measured with the method from the measurement section and tracked as a latency budget line, not as a quality metric.
 
+## Before you ship
+
+- [ ] Every edge chosen by model output goes through a router that maps a validated, enumerated value onto a closed set of nodes, and every router edge (including the attempt-counter boundary) has a unit test.
+- [ ] Every node has an explicit retry policy: model nodes retry only transient errors with bounded attempts, backoff with jitter, and a delay cap; side-effecting nodes have no engine retry.
+- [ ] Total attempts per run (gateway retries times engine retries times model nodes) are written down, and a circuit breaker fails fast during a provider incident.
+- [ ] Every irreversible node passes a stable idempotency key to a receiver that suppresses duplicates, and a test re-executes the node after a failure that follows delivery and asserts exactly one effect.
+- [ ] Checkpoints go to a durable store with `(run_id, seq)` unique; the crash-and-resume test passes against that store, not only in memory.
+- [ ] Approvals are paused states whose handle carries the state hash; resuming after the stored state changes is refused, and a test proves it.
+- [ ] Paused runs have an owner, an expiry, and a dead-letter path, with an alert on the age of the oldest paused run.
+- [ ] The graph version is stored in every checkpoint, and a fixture checkpoint from the previous version resumes through a migration or is refused with a labeled error.
+- [ ] Runs get a submission idempotency key, so a redelivered queue message or retried HTTP request cannot start a second run for the same ticket.
+- [ ] Both an engine-level `max_steps` and a domain-level counter bound every cycle in the graph.
+- [ ] Dashboards show path distribution per graph version (escalate and redraft fractions with alerts), attempts per node, and orchestration time separately from model time.
+- [ ] A golden set with expected paths, not only expected outcomes, runs in CI on every change to a prompt, a router, or the graph.
+
 ## Exercises
+
+**Start here:** K1, K3, E2, P2, D2 (about 4 hours). The rest go deeper.
 
 ### Knowledge questions
 
@@ -1215,15 +852,17 @@ Quality of the model steps is evaluated separately, with the evaluation harness 
 
 **E4.** The team wants to parallelize `retrieve_policy` and a new `lookup_customer_history` node. Rewrite the relevant part of the graph using fan-out and fan-in and specify what the fan-in does when one branch raises `TransientError`.
 
+**E5.** The triage workflow is to move onto a code-first durable workflow engine because refund approvals now wait up to three days. Say which of the seven nodes become activities and which logic stays in the workflow function, how `approval` and its `ResumeHandle` check are expressed, what the engine's history will contain and what that implies for retention, and what `send` still needs that the engine does not provide.
+
 ### Practical exercises
 
-**P1.** Add a `fallback_model` to `build_triage_graph`: when `draft` exhausts its retries with `TransientError`, run the draft once more against a second model callable before failing. Add a test with a primary that always raises and a secondary that succeeds, and assert the trace shows the attempts.
+**P1.** (about 90 min) Add a `fallback_model` to `build_triage_graph`: when `draft` exhausts its retries with `TransientError`, run the draft once more against a second model callable before failing. Add a test with a primary that always raises and a secondary that succeeds, and assert the trace shows the attempts.
 
-**P2.** Implement `JsonlCheckpointer` that appends checkpoints to a file and reconstructs `latest` and `history` from it. Replace `InMemoryCheckpointer` in the crash test so the two "processes" share only the file.
+**P2.** (about 90 min) Implement `JsonlCheckpointer` that appends checkpoints to a file and reconstructs `latest` and `history` from it. Replace `InMemoryCheckpointer` in the crash test so the two "processes" share only the file.
 
-**P3.** Add a `path` attribute to `RunResult` (the list of node names visited) and extend `compare.py` to print the path distribution over a set of twenty mixed tickets (shipping, refund, account, and one with a scripted `escalate` verdict). Write a golden-path test that asserts the expected path for each ticket.
+**P3.** (about 2 hours) Add a `path` attribute to `RunResult` (the list of node names visited) and extend `compare.py` to print the path distribution over a set of twenty mixed tickets (shipping, refund, account, and one with a scripted `escalate` verdict). Write a golden-path test that asserts the expected path for each ticket.
 
-**P4.** Build a miniature "deterministic workflow versus agent graph" comparison: implement a bounded three-step agent node (Chapter 19 style, with the fake model choosing between "retrieve more" and "draft") and run both designs over the same twenty tickets, reporting success rate, average model calls, and total simulated latency.
+**P4.** (about 3 hours) Build a miniature "deterministic workflow versus agent graph" comparison: implement a bounded three-step agent node (Chapter 19 style, with the fake model choosing between "retrieve more" and "draft") and run both designs over the same twenty tickets, reporting success rate, average model calls, and total simulated latency.
 
 ### Debugging exercises
 
@@ -1244,4 +883,12 @@ Quality of the model steps is evaluated separately, with the evaluation harness 
 - Classify errors: retry transient ones, route validation ones, stop on fatal ones, escalate impossible ones. Semantic errors are verdicts in state, not exceptions.
 - Measure orchestration overhead separately from model quality, and track path distribution as a first-class metric; it catches regressions no per-step metric can.
 - Graduate to an agent only when failure analysis shows the path itself, not any single step, is what fails, and graduate the smallest node that needs it.
-- Graph libraries are this engine with persistence and tooling. Evaluate them on visibility of state, prompts, and retries; durability of checkpoints; testability; and exit cost.
+- Graph libraries are this engine with persistence and tooling; durable execution engines move the run into a separate service with event histories, signals, and timers. Both still execute side effects at least once and still need routing on validated values. Adopt an engine when runs wait for hours or span services, not for a workflow that finishes inside a request.
+
+## Further reading
+
+- *Designing Data-Intensive Applications* (Kleppmann, 2017): delivery guarantees, idempotence, and event logs, the background for at-least-once nodes, step keys, and checkpoint logs.
+- *Release It! Design and Deploy Production-Ready Software* (Nygard, 2018): timeouts, circuit breakers, and stability anti-patterns, the patterns that sit around every model node in a workflow.
+- *Exponential Backoff and Jitter* (Brooker, 2015): why plain exponential backoff synchronizes retries during an incident and how jitter fixes it, which is the retry-storm failure mode in this chapter.
+- *The Tail at Scale* (Dean and Barroso, 2013): why the tail latency of a chain or fan-out is worse than its parts suggest, the argument behind budgeting per node.
+- *LangGraph* documentation: a widely used graph library whose state, checkpointer, and interrupt concepts map directly onto this chapter's engine; read it with the mapping table in hand.

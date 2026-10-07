@@ -191,9 +191,10 @@ lives. Outlines name what must be present; they are not scripts.
 11. **What does MCP solve and not solve?** Standard discovery and invocation of tools, resources, and
     prompts across hosts; not authorization, trust of tool descriptions, or egress control. Host,
     client, server roles; stdio and HTTP transports. (Ch 18)
-12. **How do you make an agent durable across a restart?** Checkpoint typed state after each step,
-    idempotent side effects under at-least-once delivery, approvals as first-class states, resume from
-    the event log. (Ch 38)
+12. **How do you make an agent durable across a restart?** Make an append-only event log the source of
+    truth and rebuild state by folding it (checkpoints are only a cache of that fold), make side
+    effects idempotent under at-least-once delivery, treat approvals as first-class states, and fence
+    workers with leases. (Ch 38)
 
 ### 2.7 Evaluation (Chapters 14, 24-25)
 
@@ -265,7 +266,8 @@ lives. Outlines name what must be present; they are not scripts.
 9. **Where do you cache?** Prompt prefix, embeddings, retrieval, responses, semantic; each with a
    correctness key and a TTL tied to the change rate underneath. (Ch 30)
 10. **Hosted API or self-host?** Self-host when data residency, sustained-volume cost, latency
-    control, or customization requires it and you can run capacity planning and on-call. (Ch 34)
+    control, or customization requires it and you can run capacity planning and on-call; price it at
+    measured utilization, not peak throughput. (Ch 7 for the decision, Ch 34 for the serving math)
 
 ### 2.10 System design prompts (Chapters 35-36)
 
@@ -463,7 +465,8 @@ For each chapter, three passes, aloud, timed.
    topic.
 
 Then one design problem per week on a whiteboard, ten steps, no product names until the architecture
-is complete. Your recall notes feed pass one, your project code pass two, the chapter's failure-modes
+is complete. Use the Try-it-first boxes in Chapters 35 and 36: 45 minutes on your own design, then
+the five-minute whiteboard version aloud, then the case's follow-up questions and rubric. Your recall notes feed pass one, your project code pass two, the chapter's failure-modes
 section and debugging exercises pass three. In the last four weeks of the study plan: two chapters a
 day on passes one and three, one whiteboard a day, one full design case each weekend.
 

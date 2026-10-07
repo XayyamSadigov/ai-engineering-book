@@ -1,6 +1,16 @@
 # Chapter 32 — Engineering Practices for AI Systems
 
-After this chapter you will be able to structure an AI feature so that the model is a replaceable adapter instead of the center of the code, test it at every level from pure functions to live traffic, version every artifact that can change its behavior, and ship changes through flags, experiments, canaries, and a pipeline with an evaluation gate. The chapter builds `book/projects/examples/ch32/`: a ticket-triage service for Northwind Assist with a domain/application/ports/adapters layout, a version manifest attached to every trace, deterministic percentage rollout with a kill switch, an httpx transport that records and replays provider calls, property tests with hypothesis, contract tests for tools, prompt snapshots, an offline eval gate, experiment arithmetic, complete GitHub Actions and GitLab CI pipelines, and an architecture decision record (ADR) template.
+This chapter is about the code inside each box of an AI system and the path every change takes to production. Without these practices, a prompt edit, a provider update, or a flag change alters behavior with no record of what changed, no test that notices, and no quick way back.
+
+**You will be able to:**
+- Structure an AI feature with ports and adapters so the model is a replaceable adapter behind an anti-corruption layer, and enforce the boundary with a fitness test.
+- Test it at every level: property tests for parsers, contract tests for tools, prompt snapshots, recorded HTTP fixtures for provider adapters, and an offline eval gate.
+- Version every artifact that changes behavior with a label plus a content hash, and attach a version manifest with a fingerprint to every trace.
+- Roll out changes with deterministic, monotonic feature flags, a kill switch, shadow traffic, canaries, and A/B experiments sized before they start.
+- Build a CI/CD pipeline that routes code, prompt, and model changes through the right gates, including a nightly drift evaluation.
+- Record AI decisions in architecture decision records (ADRs) with evidence, revisit triggers, and rollback.
+
+**Prerequisites:** Chapters 3 (the `aie_core` client and errors), 24 and 25 (evaluators and eval gates), and 28 (the system's components and versioned artifacts). | **Code:** `book/projects/examples/ch32/` (run: `cd book/projects/examples/ch32 && pytest -q`) | **Builds:** the `northwind_triage` package, with GitHub Actions and GitLab CI pipelines and an ADR template.
 
 ## Why this matters
 
@@ -43,7 +53,7 @@ When not to: a one-off analysis notebook, a throwaway spike, or a batch job that
 
 Layers are horizontal boundaries. Modules are vertical ones: triage, retrieval, answer generation, and ingestion are separate features with separate domains. Two rules keep them apart. A module exposes a small public interface (its use cases and ports) and hides the rest. And modules share platform code (the `aie_core` gateway, tracing, settings) but not domain types; if retrieval and triage both need a `Ticket`, each defines the fields it needs, or a shared kernel (a small module of types that several features agree to share) is created deliberately and owned by someone.
 
-Boundaries erode unless something fails the build when they are crossed. The example ships an architecture fitness test that parses every module's imports with `ast` and fails if the domain imports anything but the standard library and pydantic, or if the application imports an adapter. It runs in the unit stage in under a second. Tools such as import-linter do the same at larger scale.
+Boundaries erode unless something fails the build when they are crossed. The example ships an architecture fitness test that parses every module's imports with `ast` and fails if the domain imports anything but the standard library and pydantic, or if the application imports an adapter. It runs in the unit stage in under a second. Tools such as import-linter do the same at larger scale. A diagram in a wiki does not fail a build; a test does.
 
 ### Provider abstraction and anti-corruption layers
 
@@ -76,7 +86,7 @@ A **recorded fixture** (often called a cassette, after the Ruby library VCR) is 
 
 A **mock of the SDK** (`MagicMock` returning an object with `.choices[0].message.content`) encodes your belief about the SDK. When the SDK changes, the mock does not, and the tests keep passing. Avoid it.
 
-Fixtures have costs. They must be re-recorded when prompts change, which is a feature (the diff shows the new request) but also churn. They capture whatever the provider returned that day, so they are not quality evidence. And they can contain PII and credentials; the transport in this chapter never writes credential headers and accepts a `scrub` function for bodies, and cassettes are reviewed in merge requests like code.
+Fixtures have costs. They must be re-recorded when prompts change, which is a feature (the diff shows the new request) but also churn. They capture whatever the provider returned that day, so they are not quality evidence. And they can contain PII and credentials; the transport in this chapter never writes credential headers and accepts a `scrub` function for bodies, and cassettes are reviewed in pull requests (merge requests in GitLab) like code.
 
 ### Property-based tests for parsers and validators
 
@@ -171,13 +181,13 @@ An AI change can be code, a prompt, a model identifier, a dataset, an index buil
 
 1. **Lint and format** (ruff) and **type check** (mypy strict): cheap, catch the most bugs per second.
 2. **Unit and contract tests**, including property tests, prompt snapshots, the prompts lock, the tool-schema lock, the architecture fitness test, and replayed provider fixtures with `CASSETTE_MODE=replay`.
-3. **Offline eval gate**: the golden set against the baseline, per-slice, with critical slices (security-report recall, P1 recall) that may not regress at all. Exit code 1 on regression, 2 when there is no baseline or it is not comparable (a different dataset or provider). Each provider keeps its own baseline file, so a real model is never judged against the simulated one. Chapter 25's pipelines read thresholds and baselines from the default branch so a merge request cannot loosen its own gate; this example reads the provider's baseline file and `GateRules` from the checkout under test, which is simpler but trusts the author. Until `eval/baseline-openai.json` is created with `--write-baseline` in a reviewed change, real-provider runs exit 2.
+3. **Offline eval gate**: the golden set against the baseline, per-slice, with critical slices (security-report recall, P1 recall) that may not regress at all. Exit code 1 on regression, 2 when there is no baseline or it is not comparable (a different dataset or provider). Each provider keeps its own baseline file, so a real model is never judged against the simulated one. Read thresholds and baselines from the default branch, as Chapter 25's pipelines do, so a pull request cannot loosen its own gate; reading them from the checkout under test, as this example does, is simpler but trusts the author. Until `eval/baseline-openai.json` is created with `--write-baseline` in a reviewed change, real-provider runs exit 2.
 4. **Build** an image with code identity baked in.
 5. **Canary** at a small traffic weight, wait the observation window, export arm metrics, compute a verdict, roll back automatically on failure. A `hold` verdict (exit 3) also fails the job and rolls back, because a pipeline cannot wait open-ended; observing longer means re-running the job. Size the window and `min_requests` from expected traffic: the example's 30 minutes and 400 requests assume far more than an illustrative 1,200 tickets a day.
 6. **Promote** behind a protected environment with a human approval.
 7. **Scheduled drift evaluation**: the same gate, nightly, with no code change. Providers update models underneath you; a nightly failure with an unchanged manifest, measured against that provider's own baseline, means the provider moved.
 
-Secrets policy shapes the pipeline. Merge request pipelines never receive provider keys (fork merge requests cannot, and the example applies the same rule to every merge request), so they run the gate on a simulated model (still useful: it catches parser, wiring, and rule regressions); the default branch and nightly runs use the real provider.
+Secrets policy shapes the pipeline. Pull request pipelines never receive provider keys (pull requests from forks cannot, and the example applies the same rule to every pull request), so they run the gate on a simulated model (still useful: it catches parser, wiring, and rule regressions); the default branch and nightly runs use the real provider.
 
 ### Architecture decision records for AI decisions
 
@@ -191,7 +201,7 @@ The fix keeps command-line tools but makes them entry points into the package in
 
 ### A code review checklist for AI code
 
-Reviewers of AI changes need questions that ordinary review does not ask. The checklist below is the one Northwind attaches to merge request templates; each item names the failure it prevents.
+Reviewers of AI changes need questions that ordinary review does not ask. The checklist below is the one Northwind attaches to pull request templates; each item names the failure it prevents.
 
 **Boundaries and structure**
 - Does any domain or application module import a provider SDK, `aie_core`, httpx, or a framework? (Coupling; the fitness test should already fail.)
@@ -248,7 +258,7 @@ sequenceDiagram
     S-->>H: FinalTriage and manifest fingerprint
 ```
 
-A change flows through the pipeline like this. A prompt edit creates `1.1.0.md`; the author updates `prompts.lock` and the snapshot, and opens a merge request. Unit and contract tests verify the lock and snapshot. The eval gate runs `1.1.0` against the golden set and the baseline. After merge, the image is built, but `1.1.0` serves no traffic until the `triage.prompt` flag sends a percentage to `treatment`. The flag is ramped 0 → 5% (canary guardrails) → 50% (A/B on the primary metric) → 100%, then `1.1.0` becomes the control version in configuration and the flag is deleted.
+A change flows through the pipeline like this. A prompt edit creates `1.1.0.md`; the author updates `prompts.lock` and the snapshot, and opens a pull request. Unit and contract tests verify the lock and snapshot. The eval gate runs `1.1.0` against the golden set and the baseline. After merge, the image is built, but `1.1.0` serves no traffic until the `triage.prompt` flag sends a percentage to `treatment`. The flag is ramped 0 → 5% (canary guardrails) → 50% (A/B on the primary metric) → 100%, then `1.1.0` becomes the control version in configuration and the flag is deleted.
 
 ```mermaid
 stateDiagram-v2
@@ -327,7 +337,7 @@ The pipeline diagram shows the gates a change passes and the branch that each fa
 
 ```mermaid
 flowchart LR
-    PR["merge request"] --> L["lint + format"]
+    PR["pull request"] --> L["lint + format"]
     PR --> TC["type check"]
     L --> U["unit, contract, snapshot, replay"]
     TC --> U
@@ -389,26 +399,7 @@ Configuration is documented in the project README and `.env.example`. The variab
 The ports file is short and contains no provider types. `PromptVersion` carries its own content hash, so its label is always `version#hash`.
 
 ```python
-# path: book/projects/examples/ch32/northwind_triage/application/ports.py
-"""Ports: the interfaces the application needs, written in the application's own terms.
-
-These types are owned by the application, not by any provider SDK. Adapters translate to
-and from them. That translation is the anti-corruption layer: a provider's field names,
-error classes, and quirks stop at the adapter and never leak into use-case code.
-"""
-from __future__ import annotations
-
-import hashlib
-import re
-from contextlib import AbstractContextManager
-from dataclasses import dataclass
-from string import Template
-from typing import Any, Protocol
-
-from ..domain import Ticket
-from ..flags import Assignment
-
-
+# path: book/projects/examples/ch32/northwind_triage/application/ports.py (excerpt; full file on disk)
 @dataclass(frozen=True)
 class ClassifierOutput:
     text: str
@@ -437,12 +428,7 @@ _TICKET_TAG = re.compile(r"<\s*/?\s*ticket\b[^>]*>", re.IGNORECASE)
 
 
 def strip_delimiters(text: str) -> str:
-    """Remove every opening or closing ticket tag from untrusted text, until none is left.
-
-    One pass is not enough: removing the inner tag of '</tic</ticket>ket>' leaves '</ticket>'.
-    Repeating until the text stops changing closes that gap, and the pattern also catches case
-    and whitespace variants ('</TICKET >', '< /ticket>') that a literal replace would miss.
-    """
+    # ... docstring: one pass is not enough, '</tic</ticket>ket>' would leave '</ticket>'
     while True:
         cleaned = _TICKET_TAG.sub("", text)
         if cleaned == text:
@@ -479,52 +465,21 @@ class PromptVersion:
 class PromptStorePort(Protocol):
     def get(self, prompt_id: str, version: str) -> PromptVersion: ...
 
-
-class FlagsPort(Protocol):
-    def evaluate(self, name: str, unit_id: str) -> Assignment: ...
-
-
-class SpanPort(Protocol):
-    def set_attribute(self, key: str, value: Any) -> None: ...
-
-
-class TracerPort(Protocol):
-    """Structurally satisfied by aie_core.observability.Tracer; the application does not
-    import aie_core."""
-
-    def span(self, name: str, **attributes: Any) -> AbstractContextManager[Any]: ...
+# ... FlagsPort, SpanPort, TracerPort: one-method protocols (on disk)
 ```
 
 ### The anti-corruption layer
 
 ```python
-# path: book/projects/examples/ch32/northwind_triage/adapters/llm_classifier.py
-"""Outbound adapter: ClassifierPort implemented on top of aie_core's provider-neutral client.
-
-This is the anti-corruption layer. Everything provider-shaped (CompletionRequest, Completion,
-the LLMError taxonomy) is translated here into application types (ClassifierOutput,
-ClassifierUnavailable). Swapping providers, or replacing the LLM with a fine-tuned small
-model behind an HTTP endpoint, changes this file and the composition root, nothing else.
-"""
-from __future__ import annotations
-
-from aie_core import CompletionRequest, Message
-from aie_core.llm.client import LLMClient
-from aie_core.llm.errors import LLMError
-
-from ..application.ports import ClassifierOutput, ClassifierUnavailable
-from ..domain import TriageDecision
-
+# path: book/projects/examples/ch32/northwind_triage/adapters/llm_classifier.py (excerpt; full file on disk)
+# ... imports from aie_core and the application ports
 TRIAGE_JSON_SCHEMA = TriageDecision.model_json_schema()
 
 
 class LLMClassifier:
     def __init__(self, client: LLMClient, *, max_tokens: int = 300, timeout_s: float = 8.0,
                  use_response_schema: bool = True) -> None:
-        self.client = client
-        self.max_tokens = max_tokens
-        self.timeout_s = timeout_s
-        self.use_response_schema = use_response_schema
+        # ... stores the four arguments on self
 
     def classify(self, *, system: str, user: str, model: str) -> ClassifierOutput:
         req = CompletionRequest(
@@ -602,7 +557,7 @@ The service selects versions through flags, extends the manifest, and records ev
 The business rules are plain functions in the domain, so a reviewer can read the policy without reading a prompt:
 
 ```python
-# path: book/projects/examples/ch32/northwind_triage/domain/models.py (excerpt, reformatted)
+# path: book/projects/examples/ch32/northwind_triage/domain/models.py (excerpt; full file on disk)
 MIN_URGENCY: dict[Category, Priority] = {
     Category.SECURITY_REPORT: Priority.P2,
     Category.POS_PAYMENTS: Priority.P3,
@@ -626,8 +581,13 @@ def apply_business_rules(ticket: Ticket, decision: TriageDecision) -> FinalTriag
     if decision.confidence < AUTO_ROUTE_MIN_CONFIDENCE:
         route = "human_review"
         reasons.append(f"confidence {decision.confidence:.2f} below {AUTO_ROUTE_MIN_CONFIDENCE}")
-    return FinalTriage(ticket_id=ticket.id, category=decision.category, priority=priority,
-                       route=route, reasons=tuple(reasons))
+    return FinalTriage(
+        ticket_id=ticket.id,
+        category=decision.category,
+        priority=priority,
+        route=route,
+        reasons=tuple(reasons),
+    )
 ```
 
 ### The version manifest
@@ -674,38 +634,17 @@ class VersionManifest(BaseModel):
 
 ### Feature flags
 
+The excerpt shows bucketing, the flag's fields, evaluation in precedence order, and the kill switch. The validator (variants unique, allocations summing to 100, safe and override variants known), the loaders, and `ramp` are on disk.
+
 ```python
-# path: book/projects/examples/ch32/northwind_triage/flags.py
-"""Feature flags with deterministic percentage rollout and a kill switch.
-
-Assignment is a pure function of (flag salt, unit id): no database lookup, no randomness,
-identical on every replica and in every replay. Ramping a variant from 5% to 20% keeps the
-first 5% in it, because buckets are compared against a cumulative threshold.
-"""
-from __future__ import annotations
-
-import hashlib
-import json
-from pathlib import Path
-from typing import Any, Literal
-
-from pydantic import BaseModel, ConfigDict, Field, model_validator
-
+# path: book/projects/examples/ch32/northwind_triage/flags.py (excerpt; full file on disk)
 BUCKETS = 10_000  # basis points: 1 bucket = 0.01% of traffic
-
-Reason = Literal["kill_switch", "override", "allocation", "unknown_flag", "disabled_environment"]
 
 
 def bucket(unit_id: str, salt: str) -> int:
     """Map a unit (user, tenant, conversation) to [0, BUCKETS). Uniform and stable."""
     digest = hashlib.sha256(f"{salt}:{unit_id}".encode("utf-8")).digest()
     return int.from_bytes(digest[:8], "big") % BUCKETS
-
-
-class Allocation(BaseModel):
-    model_config = ConfigDict(frozen=True)
-    variant: str
-    percent: float = Field(ge=0.0, le=100.0)
 
 
 class FlagConfig(BaseModel):
@@ -723,35 +662,7 @@ class FlagConfig(BaseModel):
     overrides: dict[str, str] = Field(default_factory=dict)  # unit id -> variant (QA, dogfood)
     environments: tuple[str, ...] = ()  # empty = all environments
 
-    @model_validator(mode="after")
-    def _check(self) -> "FlagConfig":
-        names = [a.variant for a in self.allocations]
-        if len(set(names)) != len(names):
-            raise ValueError(f"flag {self.name}: duplicate variants {names}")
-        total = sum(a.percent for a in self.allocations)
-        if abs(total - 100.0) > 1e-9:
-            raise ValueError(f"flag {self.name}: allocations sum to {total}, expected 100")
-        if self.safe_variant not in names:
-            raise ValueError(f"flag {self.name}: safe_variant {self.safe_variant!r} not in {names}")
-        unknown = set(self.overrides.values()) - set(names)
-        if unknown:
-            raise ValueError(f"flag {self.name}: overrides use unknown variants {sorted(unknown)}")
-        return self
-
-    @property
-    def effective_salt(self) -> str:
-        return self.salt or self.name
-
-    def percent_of(self, variant: str) -> float:
-        return sum(a.percent for a in self.allocations if a.variant == variant)
-
-
-class Assignment(BaseModel):
-    model_config = ConfigDict(frozen=True)
-    flag: str
-    variant: str
-    reason: Reason
-    bucket: int | None = None
+    # ... validator: unique variants, allocations sum to 100, safe and override variants exist
 
 
 class FlagEvaluator:
@@ -759,21 +670,7 @@ class FlagEvaluator:
     an unknown flag returns the safe variant, because a typo in a flag name must not take the
     service down."""
 
-    def __init__(self, configs: dict[str, FlagConfig], environment: str = "dev") -> None:
-        self._configs = dict(configs)
-        self.environment = environment
-
-    @classmethod
-    def from_dict(cls, raw: dict[str, Any], environment: str = "dev") -> "FlagEvaluator":
-        configs = {name: FlagConfig(name=name, **spec) for name, spec in raw.items()}
-        return cls(configs, environment)
-
-    @classmethod
-    def from_file(cls, path: str | Path, environment: str = "dev") -> "FlagEvaluator":
-        return cls.from_dict(json.loads(Path(path).read_text(encoding="utf-8")), environment)
-
-    def config(self, name: str) -> FlagConfig | None:
-        return self._configs.get(name)
+    # ... from_dict, from_file, config
 
     def evaluate(self, name: str, unit_id: str) -> Assignment:
         cfg = self._configs.get(name)
@@ -794,7 +691,6 @@ class FlagEvaluator:
         # Floating-point remainder: fall through to the last allocation.
         return Assignment(flag=name, variant=cfg.allocations[-1].variant, reason="allocation", bucket=b)
 
-    # --------------------------------------------------------------- operations
     def kill(self, name: str) -> "FlagEvaluator":
         """Return a new evaluator with the flag killed. Snapshots are immutable so that one
         request never sees half an update."""
@@ -802,32 +698,13 @@ class FlagEvaluator:
         return FlagEvaluator({**self._configs, name: cfg.model_copy(update={"kill_switch": True})},
                              self.environment)
 
-    def ramp(self, name: str, variant: str, percent: float, control: str = "control") -> "FlagEvaluator":
-        """Set `variant` to `percent`, taking or giving the difference from `control`."""
-        cfg = self._configs[name]
-        current = cfg.percent_of(variant)
-        delta = percent - current
-        new_allocs = []
-        for a in cfg.allocations:
-            if a.variant == variant:
-                new_allocs.append(Allocation(variant=variant, percent=percent))
-            elif a.variant == control:
-                new_allocs.append(Allocation(variant=control, percent=a.percent - delta))
-            else:
-                new_allocs.append(a)
-        new_cfg = FlagConfig(**{**cfg.model_dump(), "allocations": new_allocs})
-        return FlagEvaluator({**self._configs, name: new_cfg}, self.environment)
-
-    def snapshot_hash(self) -> str:
-        payload = json.dumps({n: c.model_dump(mode="json") for n, c in sorted(self._configs.items())},
-                             sort_keys=True)
-        return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    # ... ramp() and snapshot_hash() (on disk)
 ```
 
 A flag file for production, with the prompt treatment at a 5% canary and the model candidate not yet exposed:
 
 ```jsonc
-// path: book/projects/examples/ch32/flags/prod.json
+// path: book/projects/examples/ch32/flags/prod.json (excerpt; full file on disk)
 {
   "triage.prompt": {
     "allocations": [
@@ -849,84 +726,16 @@ A flag file for production, with the prompt treatment at a 5% canary and the mod
 
 ### Record and replay
 
+The transport matches a request by a hash of its method, path, and canonical body, serves recordings in `replay` and `auto` modes, and in `record` mode replaces any earlier recording of the same request. The constructor, cassette loading and saving, and response building are on disk.
+
 ```python
-# path: book/projects/examples/ch32/northwind_triage/record_replay.py
-"""Record real provider HTTP exchanges once; replay them in tests forever after.
-
-RecordReplayTransport is an httpx transport, so it plugs into any adapter that accepts
-`transport=` (aie_core's OpenAICompatibleClient and AnthropicClient do). It sits below the
-adapter, which means replayed tests exercise the real request encoding, response decoding,
-and error mapping, the code a FakeLLM skips.
-
-Modes:
-  replay  serve from the cassette; a request with no recording raises CassetteMiss
-  record  forward to the upstream transport and append to the cassette
-  auto    replay when recorded, otherwise record (convenient locally, never in CI)
-
-Requests are matched by method, path, and a hash of the canonical JSON body with volatile
-fields removed. Credentials in headers are never written. A `scrub` callback can remove PII
-from bodies before they reach disk; cassettes are committed to git and reviewed like code.
-"""
-from __future__ import annotations
-
-import hashlib
-import json
-import os
-import threading
-from pathlib import Path
-from typing import Any, Callable, Literal
-
-import httpx
-
-Mode = Literal["replay", "record", "auto"]
+# path: book/projects/examples/ch32/northwind_triage/record_replay.py (excerpt; full file on disk)
 SENSITIVE_HEADERS = frozenset({"authorization", "x-api-key", "api-key", "cookie", "set-cookie",
                                "openai-organization", "x-request-id"})
-DROP_RESPONSE_HEADERS = frozenset({"content-encoding", "content-length", "transfer-encoding",
-                                   "date", "connection"})
-
-
-class CassetteMiss(LookupError):
-    pass
-
-
-def mode_from_env(default: Mode = "replay") -> Mode:
-    value = os.environ.get("CASSETTE_MODE", default)
-    if value not in ("replay", "record", "auto"):
-        raise ValueError(f"CASSETTE_MODE must be replay|record|auto, got {value!r}")
-    return value  # type: ignore[return-value]
-
+# ...
 
 class RecordReplayTransport(httpx.BaseTransport):
-    def __init__(
-        self,
-        cassette_path: str | Path,
-        mode: Mode = "replay",
-        upstream: httpx.BaseTransport | None = None,
-        ignore_body_fields: tuple[str, ...] = ("user", "metadata", "stream_options"),
-        scrub: Callable[[str], str] | None = None,
-    ) -> None:
-        self.path = Path(cassette_path)
-        self.mode = mode
-        self.upstream = upstream
-        self.ignore_body_fields = ignore_body_fields
-        self.scrub = scrub or (lambda s: s)
-        self._lock = threading.Lock()
-        self._cursor: dict[str, int] = {}
-        self._entries: dict[str, list[dict[str, Any]]] = self._load()
-        self._rerecorded: set[str] = set()   # keys replaced in this session (record mode)
-
-    # ------------------------------------------------------------------ storage
-    def _load(self) -> dict[str, list[dict[str, Any]]]:
-        if not self.path.exists():
-            return {}
-        data = json.loads(self.path.read_text(encoding="utf-8"))
-        return {k: v for k, v in data.get("interactions", {}).items()}
-
-    def _save(self) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        payload = {"version": 1, "interactions": self._entries}
-        self.path.write_text(json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False) + "\n",
-                             encoding="utf-8")
+    # ... __init__ loads the cassette; _load and _save read and write JSON
 
     # ------------------------------------------------------------------ matching
     def _canonical_body(self, request: httpx.Request) -> str:
@@ -963,19 +772,7 @@ class RecordReplayTransport(httpx.BaseTransport):
         upstream = self.upstream or httpx.HTTPTransport()
         response = upstream.handle_request(request)
         content = response.read()
-        entry = {
-            "request": {
-                "method": request.method,
-                "path": request.url.path,
-                "body": self.scrub(self._canonical_body(request)),
-            },
-            "response": {
-                "status": response.status_code,
-                "headers": {k: v for k, v in response.headers.items()
-                            if k.lower() not in SENSITIVE_HEADERS | DROP_RESPONSE_HEADERS},
-                "body": self.scrub(content.decode("utf-8", errors="replace")),
-            },
-        }
+        # ... build the entry: scrubbed request body, response minus credential headers
         with self._lock:
             if self.mode == "record" and key not in self._rerecorded:
                 # Re-recording replaces the old exchange; appending would let replay keep serving it.
@@ -983,15 +780,7 @@ class RecordReplayTransport(httpx.BaseTransport):
                 self._rerecorded.add(key)
             self._entries.setdefault(key, []).append(entry)
             self._save()
-        # read() already decoded gzip/br, so the encoding headers no longer describe the body.
-        headers = {k: v for k, v in response.headers.items() if k.lower() not in DROP_RESPONSE_HEADERS}
-        return httpx.Response(response.status_code, headers=headers, content=content, request=request)
-
-    @staticmethod
-    def _to_response(entry: dict[str, Any], request: httpx.Request) -> httpx.Response:
-        r = entry["response"]
-        return httpx.Response(r["status"], headers=r["headers"], content=r["body"].encode("utf-8"),
-                              request=request)
+        # ... return the live response to the caller
 
     # ------------------------------------------------------------------ audit
     def unused_keys(self) -> list[str]:
@@ -1008,18 +797,13 @@ class AppSettings(BaseSettings):
                                       frozen=True)
 
     environment: Environment = "dev"
-    app_version: str = "0.0.0-dev"
     git_sha: str = "unknown"
-    prompt_id: str = "triage.classify"
     prompt_control_version: str = "1.0.0"
     prompt_treatment_version: str | None = None
-    model_candidate: str | None = None            # control model comes from LLM_MODEL
     flags_path: Path | None = None
-    prompt_dir: Path | None = None
     classifier_timeout_s: float = Field(default=8.0, gt=0, le=60)
-    dataset_version: str | None = None
-    evaluator_version: str | None = None
     llm: LLMSettings = Field(default_factory=LLMSettings)
+    # ... app_version, prompt_id, model_candidate, prompt_dir, dataset and evaluator versions
 
     @model_validator(mode="after")
     def _environment_rules(self) -> "AppSettings":
@@ -1029,10 +813,7 @@ class AppSettings(BaseSettings):
             problems.append("LLM_PROVIDER=fake is not allowed in staging/prod")
         if deployed and self.git_sha == "unknown":
             problems.append("TRIAGE_GIT_SHA must be set in staging/prod (it goes into every trace)")
-        if self.llm.llm_provider == "openai" and self.llm.openai_api_key is None and not self.llm.llm_base_url:
-            problems.append("LLM_PROVIDER=openai needs OPENAI_API_KEY (or LLM_BASE_URL for a local server)")
-        if self.llm.llm_provider == "anthropic" and self.llm.anthropic_api_key is None:
-            problems.append("LLM_PROVIDER=anthropic needs ANTHROPIC_API_KEY")
+        # ... a selected provider without its API key is also a problem
         if self.environment == "prod" and self.flags_path is None:
             problems.append("TRIAGE_FLAGS_PATH is required in prod (no implicit 100% rollouts)")
         if self.prompt_treatment_version == self.prompt_control_version:
@@ -1072,7 +853,8 @@ def test_parser_total_function(text: str) -> None:
 
 
 @given(decisions, noise, noise, wrappers)
-def test_round_trip_through_prose_and_fences(decision, before, after, wrapper) -> None:
+def test_round_trip_through_prose_and_fences(decision: TriageDecision, before: str, after: str,
+                                             wrapper: str) -> None:
     text = before + wrapper.replace("{}", render_decision(decision)) + after
     assert parse_triage(text) == decision
 ```
@@ -1127,104 +909,49 @@ A missing snapshot fails rather than being written, because a test that creates 
 ### Experiment arithmetic and the canary verdict
 
 ```python
-# path: book/projects/examples/ch32/northwind_triage/experiments.py (excerpt, reason messages shortened)
+# path: book/projects/examples/ch32/northwind_triage/experiments.py (excerpt; full file on disk)
 def canary_decision(baseline: ArmStats, canary: ArmStats, policy: CanaryPolicy | None = None) -> CanaryDecision:
     policy = policy or CanaryPolicy()
     breaches: list[str] = []
+    # Guardrails that can roll back on little data: safety is zero-tolerance.
     if canary.safety_violations > policy.max_safety_violations:
         breaches.append(f"safety violations {canary.safety_violations} > {policy.max_safety_violations}")
     if canary.requests and canary.error_rate - baseline.error_rate > policy.max_error_rate_increase:
         breaches.append(f"error rate {canary.error_rate:.3f} vs {baseline.error_rate:.3f}")
-    if baseline.p95_latency_ms and canary.p95_latency_ms > baseline.p95_latency_ms * policy.max_p95_latency_ratio:
-        breaches.append("p95 latency over limit")
-    if baseline.cost_per_request and canary.cost_per_request > baseline.cost_per_request * policy.max_cost_ratio:
-        breaches.append("cost per request over limit")
+    # ... the same shape for p95 latency and cost per request, as ratios to the baseline
     if breaches:
         return CanaryDecision(action="rollback", reasons=breaches)
+
     if canary.requests < policy.min_requests:
         return CanaryDecision(action="hold", reasons=[f"{canary.requests} < {policy.min_requests} requests"])
+
     test = two_proportion_test(baseline.task_successes, baseline.requests,
                                canary.task_successes, canary.requests, policy.alpha)
+    # Roll back only when the drop is both larger than tolerated and statistically real.
     if test.ci_high < 0 and -test.diff > policy.max_success_drop:
-        return CanaryDecision(action="rollback", reasons=[f"success rate dropped {test.diff:+.3f}"])
+        return CanaryDecision(action="rollback", reasons=[
+            f"success rate dropped {test.diff:+.3f} (95% CI {test.ci_low:+.3f}..{test.ci_high:+.3f})"])
     if test.ci_low < -policy.max_success_drop:
-        return CanaryDecision(action="hold", reasons=["cannot yet exclude a large drop; keep collecting"])
-    return CanaryDecision(action="promote", reasons=["guardrails within limits"])
+        return CanaryDecision(action="hold", reasons=[
+            f"cannot yet exclude a drop larger than {policy.max_success_drop} "
+            f"(CI low {test.ci_low:+.3f}); keep collecting"])
+    return CanaryDecision(action="promote", reasons=[
+        f"success {test.diff:+.3f} (CI {test.ci_low:+.3f}..{test.ci_high:+.3f}); guardrails within limits"])
 ```
 
-### The GitHub Actions workflow
+### The CI pipeline
+
+The full GitHub Actions workflow on disk has eight jobs: `lint` and `typecheck` in parallel, then `unit` (with `CASSETTE_MODE=replay` and the prompts-lock check), `offline-eval`, `build` (the image gets the git sha and app version as build arguments), `canary` (deploy at 5%, wait the observation window, export arm metrics, compute the verdict, roll back on any non-zero exit), `promote` behind a protected environment, and `nightly-drift` on a schedule. The job that carries the chapter's ideas is the eval gate, because it is where the secrets policy and the per-provider baselines meet:
 
 ```yaml
-# path: book/projects/examples/ch32/ci/github-actions.yml
+# path: book/projects/examples/ch32/ci/github-actions.yml (excerpt; full file on disk)
 # Copy to .github/workflows/triage.yml. Stages: lint -> typecheck -> unit/contract -> offline eval
 # gate -> build -> canary -> promote, plus a nightly eval that runs even when no code changed,
 # because providers change models underneath you.
 # Deployment commands (helm, the metrics export) are environment-specific placeholders.
-name: triage
-
-on:
-  pull_request:
-  push:
-    branches: [main]
-  schedule:
-    - cron: "17 3 * * *"          # nightly drift check against the live provider
-  workflow_dispatch:
-
-concurrency:
-  group: triage-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
-
-permissions:
-  contents: read
-
-env:
-  PYTHON_VERSION: "3.12"
-  WORKDIR: book/projects/examples/ch32
-  IMAGE: ghcr.io/${{ github.repository }}/triage
-
-defaults:
-  run:
-    working-directory: book/projects/examples/ch32
-
+# ...
 jobs:
-  lint:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with: { python-version: "${{ env.PYTHON_VERSION }}", cache: pip }
-      - run: pip install -e ../../aie_core -e ".[dev]"
-      - run: ruff check .
-      - run: ruff format --check .
-
-  typecheck:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with: { python-version: "${{ env.PYTHON_VERSION }}", cache: pip }
-      - run: pip install -e ../../aie_core -e ".[dev]"
-      - run: mypy
-
-  unit:
-    # Unit, property, contract, snapshot, architecture, and replayed-fixture tests. No network,
-    # no keys: CASSETTE_MODE=replay turns an unrecorded provider call into a failure.
-    needs: [lint, typecheck]
-    runs-on: ubuntu-latest
-    env:
-      CASSETTE_MODE: replay
-      LLM_PROVIDER: fake
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with: { python-version: "${{ env.PYTHON_VERSION }}", cache: pip }
-      - run: pip install -e ../../aie_core -e ".[dev]"
-      - run: python -m northwind_triage.adapters.prompt_store      # prompts.lock immutability
-      - run: pytest -q --junitxml=reports/unit.xml
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with: { name: unit-report, path: "${{ env.WORKDIR }}/reports/" }
-
+  # ... lint, typecheck, unit
   offline-eval:
     # Pull requests from forks never see secrets, so they run the gate on the simulated model;
     # main and nightly runs use the real provider. Each compares against its provider's baseline (eval/baseline.json for fake,
@@ -1250,251 +977,18 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with: { name: eval-report, path: "${{ env.WORKDIR }}/reports/eval.json" }
-
-  build:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: offline-eval
-    runs-on: ubuntu-latest
-    permissions: { contents: read, packages: write }
-    outputs:
-      image: ${{ steps.meta.outputs.image }}
-    steps:
-      - uses: actions/checkout@v4
-      - id: meta
-        run: echo "image=${IMAGE}:${GITHUB_SHA::12}" >> "$GITHUB_OUTPUT"
-      - run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
-      - name: Build with the version manifest baked in
-        run: >
-          docker build -f Dockerfile
-          --build-arg TRIAGE_GIT_SHA=${GITHUB_SHA::12}
-          --build-arg TRIAGE_APP_VERSION=$(python -c "import northwind_triage as m; print(m.__version__)")
-          -t "${{ steps.meta.outputs.image }}" ../..
-      - run: docker push "${{ steps.meta.outputs.image }}"
-
-  canary:
-    needs: build
-    runs-on: ubuntu-latest
-    environment: canary
-    timeout-minutes: 90
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with: { python-version: "${{ env.PYTHON_VERSION }}" }
-      - run: pip install -e ../../aie_core -e .
-      - name: Deploy canary at 5% of traffic
-        run: helm upgrade --install triage-canary deploy/chart --set image=${{ needs.build.outputs.image }} --set canary.weight=5
-      - name: Wait for the observation window
-        run: sleep 1800
-      - name: Export arm metrics from the metrics backend
-        run: |
-          mkdir -p reports
-          curl -sf -H "Authorization: Bearer ${{ secrets.METRICS_TOKEN }}" \
-            "${{ vars.METRICS_URL }}/triage/arm?deployment=stable&window=30m" > reports/baseline.json
-          curl -sf -H "Authorization: Bearer ${{ secrets.METRICS_TOKEN }}" \
-            "${{ vars.METRICS_URL }}/triage/arm?deployment=canary&window=30m" > reports/canary.json
-      - name: Canary verdict (0 promote, 3 hold, 1 rollback)
-        # Any non-zero exit fails the job and the next step rolls back. A hold (3) is treated as a
-        # rollback because a pipeline cannot wait open-ended; re-run the job to observe longer.
-        id: verdict
-        run: python -m northwind_triage.experiments canary --baseline reports/baseline.json --canary reports/canary.json
-      - name: Roll back on failure
-        if: failure()
-        run: helm upgrade --install triage-canary deploy/chart --set canary.weight=0
-
-  promote:
-    needs: [build, canary]
-    runs-on: ubuntu-latest
-    environment: production          # protected: requires a human approval in repository settings
-    steps:
-      - uses: actions/checkout@v4
-      - run: helm upgrade --install triage deploy/chart --set image=${{ needs.build.outputs.image }} --set canary.weight=0
-
-  nightly-drift:
-    # Same gate, the provider's own baseline, no code change: a failure here means the provider moved.
-    if: github.event_name == 'schedule'
-    runs-on: ubuntu-latest
-    env:
-      LLM_PROVIDER: openai
-      LLM_MODEL: ${{ vars.TRIAGE_MODEL }}
-      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with: { python-version: "${{ env.PYTHON_VERSION }}" }
-      - run: pip install -e ../../aie_core -e .
-      - run: python -m northwind_triage.eval_gate --prompt-version 1.0.0 --report reports/nightly.json
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with: { name: nightly-eval, path: "${{ env.WORKDIR }}/reports/nightly.json" }
+  # ... build, canary, promote, nightly-drift
 ```
 
-### The equivalent GitLab CI pipeline
-
-```yaml
-# path: book/projects/examples/ch32/ci/gitlab-ci.yml
-# Copy to .gitlab-ci.yml. Same pipeline as ci/github-actions.yml: lint -> typecheck -> unit ->
-# offline eval gate -> build -> canary -> promote (manual), plus a scheduled drift eval.
-# Deployment commands are environment-specific placeholders.
-stages: [lint, test, eval, build, canary, promote]
-
-variables:
-  WORKDIR: book/projects/examples/ch32
-  PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
-  IMAGE: "$CI_REGISTRY_IMAGE/triage:$CI_COMMIT_SHORT_SHA"
-
-default:
-  image: python:3.12-slim
-  cache:
-    key: pip-$CI_COMMIT_REF_SLUG
-    paths: [.cache/pip]
-  before_script:
-    - cd "$WORKDIR"
-    - pip install -e ../../aie_core -e ".[dev]"
-
-workflow:
-  rules:
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
-    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
-    - if: $CI_PIPELINE_SOURCE == "schedule"
-
-lint:
-  stage: lint
-  rules:
-    - if: $CI_PIPELINE_SOURCE != "schedule"
-  script:
-    - ruff check .
-    - ruff format --check .
-
-typecheck:
-  stage: lint
-  rules:
-    - if: $CI_PIPELINE_SOURCE != "schedule"
-  script:
-    - mypy
-
-unit:
-  stage: test
-  rules:
-    - if: $CI_PIPELINE_SOURCE != "schedule"
-  variables:
-    CASSETTE_MODE: replay
-    LLM_PROVIDER: fake
-  script:
-    - python -m northwind_triage.adapters.prompt_store
-    - pytest -q --junitxml=reports/unit.xml
-  artifacts:
-    when: always
-    reports:
-      junit: $WORKDIR/reports/unit.xml
-
-# Real-provider runs compare against eval/baseline-openai.json; until a reviewed change creates it
-# with --write-baseline, they exit 2 (fail closed) instead of judging a real model by the fake baseline.
-offline-eval:
-  stage: eval
-  needs: [unit]
-  timeout: 20m
-  rules:
-    # Merge requests: simulated model, no secrets exposed to branch pipelines.
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
-      variables: { LLM_PROVIDER: fake }
-    # Default branch: real provider; OPENAI_API_KEY is a protected, masked CI variable.
-    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_PIPELINE_SOURCE != "schedule"
-      variables: { LLM_PROVIDER: openai, LLM_MODEL: $TRIAGE_MODEL }
-  script:
-    - python -m northwind_triage.eval_gate --prompt-version "${TRIAGE_CANDIDATE_PROMPT:-1.1.0}" --report reports/eval.json
-  artifacts:
-    when: always
-    paths: [$WORKDIR/reports/eval.json]
-
-build:
-  stage: build
-  needs: [offline-eval]
-  image: docker:27
-  services: [docker:27-dind]
-  rules:
-    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_PIPELINE_SOURCE != "schedule"
-  before_script:
-    - cd "$WORKDIR"
-    - echo "$CI_REGISTRY_PASSWORD" | docker login "$CI_REGISTRY" -u "$CI_REGISTRY_USER" --password-stdin
-  script:
-    - docker build -f Dockerfile --build-arg TRIAGE_GIT_SHA="$CI_COMMIT_SHORT_SHA"
-        --build-arg TRIAGE_APP_VERSION="$(sed -n 's/^__version__ = "\(.*\)"/\1/p' northwind_triage/__init__.py)"
-        -t "$IMAGE" ../..
-    - docker push "$IMAGE"
-
-canary:
-  stage: canary
-  needs: [build]
-  timeout: 90m
-  environment: { name: canary }
-  rules:
-    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_PIPELINE_SOURCE != "schedule"
-  script:
-    - helm upgrade --install triage-canary deploy/chart --set image="$IMAGE" --set canary.weight=5
-    - sleep 1800
-    - mkdir -p reports
-    - 'curl -sf -H "Authorization: Bearer $METRICS_TOKEN" "$METRICS_URL/triage/arm?deployment=stable&window=30m" > reports/baseline.json'
-    - 'curl -sf -H "Authorization: Bearer $METRICS_TOKEN" "$METRICS_URL/triage/arm?deployment=canary&window=30m" > reports/canary.json'
-    - python -m northwind_triage.experiments canary --baseline reports/baseline.json --canary reports/canary.json
-  after_script:
-    # after_script runs on failure too; roll back when the verdict job failed. A hold (exit 3)
-    # also fails the job and rolls back: a pipeline cannot wait open-ended; retry to observe longer.
-    - cd "$WORKDIR"
-    - if [ "$CI_JOB_STATUS" = "failed" ]; then helm upgrade --install triage-canary deploy/chart --set canary.weight=0; fi
-  artifacts:
-    when: always
-    paths: [$WORKDIR/reports/]
-
-promote:
-  stage: promote
-  needs: [build, canary]
-  environment: { name: production }
-  rules:
-    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_PIPELINE_SOURCE != "schedule"
-      when: manual                   # a human presses the button; protected environment
-  script:
-    - helm upgrade --install triage deploy/chart --set image="$IMAGE" --set canary.weight=0
-
-nightly-drift:
-  stage: eval
-  rules:
-    - if: $CI_PIPELINE_SOURCE == "schedule"
-  variables:
-    LLM_PROVIDER: openai
-    LLM_MODEL: $TRIAGE_MODEL
-  script:
-    - python -m northwind_triage.eval_gate --prompt-version 1.0.0 --report reports/nightly.json
-  artifacts:
-    when: always
-    paths: [$WORKDIR/reports/nightly.json]
-```
+`ci/gitlab-ci.yml` on disk is the same pipeline for GitLab CI: the same stages, the eval gate on the simulated model for merge request pipelines (GitLab's name for them), the provider key as a protected, masked variable on the default branch, the canary rollback in `after_script`, and a manual `promote` job.
 
 ### ADR template
 
 ```markdown
-<!-- path: book/projects/examples/ch32/adr/0001-template.md -->
+<!-- path: book/projects/examples/ch32/adr/0001-template.md (excerpt; full file on disk) -->
 # ADR NNNN: <decision in one line, imperative>
 
-- Status: proposed | accepted | superseded by ADR-XXXX | deprecated
-- Date: YYYY-MM-DD
-- Deciders: <names or roles>
-- Components affected: prompts | models | embeddings/index | tools | policies | evaluators | infra
-
-## Context
-
-What forces are at play: the user job, the constraint (latency, cost, data residency,
-quality bar), and what we observed. Link evidence: eval report ids, trace queries, incident ids.
-
-## Decision
-
-What we will do, stated so that a reviewer can check compliance in a pull request.
-
-## Alternatives considered
-
-| Option | Why not |
-|---|---|
-| <option A> | <reason with evidence> |
-| <option B> | <reason with evidence> |
+<!-- ... Status, Date, Deciders, Components affected; then Context, Decision, Alternatives considered -->
 
 ## Evidence
 
@@ -1502,10 +996,7 @@ What we will do, stated so that a reviewer can check compliance in a pull reques
 - Online: experiment or canary id, primary metric, guardrails, sample size, duration.
 - Version manifest fingerprint(s) of what was compared.
 
-## Consequences
-
-Positive, negative, and the new risks. What becomes harder. Cost and latency impact
-(illustrative numbers labeled as such).
+<!-- ... Consequences -->
 
 ## Revisit when
 
@@ -1521,17 +1012,17 @@ The repository also contains a filled example, `adr/0002-classifier-port-and-rec
 
 ## Code walkthrough
 
-**Start at the composition root.** `composition.build_service` is the only function that names concrete classes. It builds the prompt store and flag evaluator, runs `check_consistency` (every configured prompt version exists, the lock holds, every flag variant with traffic has a configured value), builds the static manifest (provider, tool schema labels, flag snapshot hash, timeout), and wires `TriageService`. A flag that sends 10% of traffic to `treatment` while no treatment prompt is configured fails here, at boot, with a message naming the flag and variant. Without that check, the service would silently fall back to control and the experiment would compare control against control for two weeks.
+**Start at the composition root.** `composition.build_service` (on disk) is the only function that names concrete classes. It builds the prompt store and flag evaluator, runs `check_consistency` (every configured prompt version exists, the lock holds, every flag variant with traffic has a configured value), builds the static manifest (provider, tool schema labels, flag snapshot hash, timeout), and wires `TriageService`. A flag that sends 10% of traffic to `treatment` while no treatment prompt is configured fails here, at boot, with a message naming the flag and variant. Without that check, the service would silently fall back to control and the experiment would compare control against control for two weeks.
 
-**The parser is the most tested twenty lines.** `extract_json_object` is a scanner rather than a regex because braces inside string values (`"rationale": "matched {x}"`) and escaped quotes defeat regexes; the property test that embeds arbitrary nested JSON after arbitrary prose is what proves it. Normalizers reject booleans explicitly because `bool` is a subclass of `int` in Python and `str(True)` would otherwise flow through.
+**The parser is the most tested twenty lines.** `extract_json_object` in `domain/parsing.py` (on disk) is a scanner rather than a regex because braces inside string values (`"rationale": "matched {x}"`) and escaped quotes defeat regexes; the property test that embeds arbitrary nested JSON after arbitrary prose is what proves it. Normalizers reject booleans explicitly because `bool` is a subclass of `int` in Python and `str(True)` would otherwise flow through.
 
 **Notice what the adapter request contains.** The committed cassette's request body includes the JSON Schema of `TriageDecision`, which includes its docstring as the schema description. Editing that docstring changes the request, which produces a `CassetteMiss` in CI. That is correct: the docstring is part of what the model sees, so it is part of the prompt. Treat schema descriptions and tool descriptions with the same review as prompt files.
 
-**The eval gate evaluates the shipping code.** `eval_gate.evaluate` calls `load_settings` and `build_service` exactly as the HTTP entry point does, with an in-memory tracer. Every evaluation report contains the full manifest. The baseline stores the dataset version; comparing against a baseline built on a different dataset exits with code 2, because a three-point drop on a dataset that gained ten hard cases is not evidence of a regression. `--strict-attribution` turns "two components changed at once" from a warning into a failure, which a team can enable on the default branch (the example pipelines leave it off).
+**The eval gate evaluates the shipping code.** `eval_gate.evaluate` (on disk) calls `load_settings` and `build_service` exactly as the HTTP entry point does, with an in-memory tracer. Every evaluation report contains the full manifest. The baseline stores the dataset version; comparing against a baseline built on a different dataset exits with code 2, because a three-point drop on a dataset that gained ten hard cases is not evidence of a regression. `--strict-attribution` turns "two components changed at once" from a warning into a failure, which a team can enable on the default branch (the example pipelines leave it off).
 
-**The flags are a pure function.** `FlagEvaluator.evaluate` has no I/O, which is why it can be called on every request without latency and why a replay of last month's trace reproduces the same assignment. Operations (`kill`, `ramp`) return new evaluators instead of mutating, matching how a real flag service distributes immutable snapshots.
+**The flags are a pure function.** `FlagEvaluator.evaluate` has no I/O, which is why it can be called on every request without latency and why a replay of last month's trace reproduces the same assignment. Operations (`kill`, shown above, and `ramp`) return new evaluators instead of mutating, matching how a real flag service distributes immutable snapshots.
 
-**Shadow runs never touch the response.** `run_shadow` returns the primary's outputs, catches every shadow exception, and only counts. In production the shadow call should go to a queue and run asynchronously with tool execution disabled; the example's `run_shadow` is synchronous so that tests can check isolation.
+**Shadow runs never touch the response.** `run_shadow` in `experiments.py` (on disk) returns the primary's outputs, catches every shadow exception, and only counts. In production the shadow call should go to a queue and run asynchronously with tool execution disabled; the example's `run_shadow` is synchronous so that tests can check isolation.
 
 ## Production considerations
 
@@ -1539,7 +1030,7 @@ The repository also contains a filled example, `adr/0002-classifier-port-and-rec
 
 **Cost.** Every online technique costs model calls. Shadow traffic doubles inference spend for the shadowed share. Nightly drift evaluation on a 60-case golden set is cheap; on a 5,000-case set with an LLM judge it is not, so sample or tier it (Chapter 30 for cost models). Canary cost guardrails catch a prompt that doubles context length before it reaches everyone.
 
-**Security.** Provider keys exist only in protected CI variables for the default branch and scheduled runs; merge request pipelines use the simulated model. Cassettes and snapshots are committed, so they must be scrubbed of PII and never contain credentials; the transport strips credential headers by construction and the test proves it. The manifest goes into traces, so it must not contain secrets; it holds versions and hashes, not values. Flag overrides keyed by user id are personal data in some jurisdictions; keep them short-lived.
+**Security.** Provider keys exist only in protected CI variables for the default branch and scheduled runs; pull request pipelines use the simulated model. Cassettes and snapshots are committed, so they must be scrubbed of PII and never contain credentials; the transport strips credential headers by construction and the test proves it. The manifest goes into traces, so it must not contain secrets; it holds versions and hashes, not values. Flag overrides keyed by user id are personal data in some jurisdictions; keep them short-lived.
 
 **Operations.** The on-call engineer needs three things during an AI incident: which manifest fingerprints are serving traffic, which one correlates with the bad metric, and a one-step rollback. With version attributes on spans, the first two are a group-by query (Chapter 31). The kill switch and the flag ramp are the rollback for prompts and models; the canary weight is the rollback for code. Write the runbook entry for "kill the triage.model flag" before the experiment starts.
 
@@ -1578,9 +1069,9 @@ Most mistakes are the review checklist's questions left unasked. Four come up of
 |---|---|---|---|
 | Structure | Ports and adapters | Single module | the feature will live longer than a quarter or has more than one reason to change |
 | Model double in tests | FakeLLM | Recorded fixtures | testing use-case logic; use fixtures for adapter encoding and error mapping |
-| Flag storage | File snapshot in repo | Flag service | few flags, changes reviewed in merge requests; a service when non-engineers ramp flags or you need instant kills |
+| Flag storage | File snapshot in repo | Flag service | few flags, changes reviewed in pull requests; a service when non-engineers ramp flags or you need instant kills |
 | Randomization unit | User | Request | the experience must be consistent; request only for stateless, single-shot features |
-| Eval gate provider in MRs | Simulated model | Real provider | secrets must not reach merge request pipelines; real provider on main and nightly |
+| Eval gate provider in pull requests | Simulated model | Real provider | secrets must not reach pull request pipelines; real provider on main and nightly |
 | Online step | Shadow first | Canary first | the candidate is a different model or risky prompt and doubled cost for a slice is affordable |
 | Attribution | One change at a time | Bundled release | always, unless the ADR explicitly accepts bundling for speed |
 | Prompt immutability | Lock with hashes | Edit in place | anything that has served production traffic |
@@ -1605,15 +1096,26 @@ Test the engineering practices themselves, not only the feature. Each practice i
 | Pipelines | workflow files parse; stage dependencies in the promised order |
 | Eval gate | passes on baseline, fails on regression and on unparseable output, refuses incomparable baselines, enforces attribution |
 
-The example's suite runs all of these offline in a couple of seconds:
+The example's suite runs all of these offline in a couple of seconds. The one test it deselects by default re-records a cassette against a real provider and is marked `integration`.
 
-```text
-91 passed, 1 deselected
-```
+## Before you ship
 
-The deselected test re-records a cassette against a real provider and is marked `integration`.
+- [ ] The architecture fitness test runs in CI and fails if the domain or application imports a provider SDK, `aie_core`, httpx, or a framework.
+- [ ] The model-output parser has a totality property test, and every parse failure seen in staging is pinned as an `@example`.
+- [ ] Every prompt version that can serve traffic has a committed snapshot and an entry in the prompts lock; a missing snapshot fails the test.
+- [ ] Every tool's advertised schema is generated from its validator, and the tool-schema lock fails on a schema change without a version bump.
+- [ ] Provider adapter tests replay recorded fixtures with `CASSETTE_MODE=replay` in CI, the cassettes contain no credentials or PII, and no recording is unused.
+- [ ] Startup validation rejects the fake provider, a missing git sha, and a missing flag file in prod, and the consistency check maps every flag variant with traffic to a configured value.
+- [ ] Every request span carries the `version.*` attributes, the manifest fingerprint, and `llm.served_model`, and a group-by on the fingerprint works in the trace backend.
+- [ ] Every new behavior sits behind a flag with a safe variant and a kill switch, and the runbook entry for killing it is written.
+- [ ] The canary policy (guardrails, window, `min_requests`) is written down before the canary starts, and the window can deliver `min_requests` at the planned weight.
+- [ ] The experiment plan states the randomization unit, primary metric, guardrails, and a sample size that the planned split can reach.
+- [ ] The offline eval gate blocks merge on any critical-slice regression, refuses a baseline from a different dataset or provider, and its report carries the manifest fingerprint.
+- [ ] The nightly drift job runs against the real provider with its own baseline, and someone is alerted when it fails.
 
 ## Exercises
+
+**Start here:** K3, K5, E2, P2, D1 (about 3 hours). The rest go deeper.
 
 ### Knowledge questions
 
@@ -1635,25 +1137,25 @@ E1. Northwind wants to replace the LLM classifier with a fine-tuned small model 
 
 E2. Design the experiment plan for switching the triage model: hypothesis, primary metric, guardrails, randomization unit, sample size reasoning at an illustrative 1,200 tickets per day with an 80% baseline and a three-point minimum effect, duration, stop conditions, and rollback.
 
-E3. Your organization forbids provider keys in any CI job triggered by a merge request. Design an offline evaluation strategy that still catches prompt regressions before merge, and state what it cannot catch.
+E3. Your organization forbids provider keys in any CI job triggered by a pull request. Design an offline evaluation strategy that still catches prompt regressions before merge, and state what it cannot catch.
 
-E4. Write the code review checklist you would apply to a merge request that changes a prompt, a tool schema, and the parser in one change. What would you ask the author to split, and why?
+E4. Write the code review checklist you would apply to a pull request that changes a prompt, a tool schema, and the parser in one change. What would you ask the author to split, and why?
 
 ### Practical exercises
 
-P1. Add an `embedding_model` and `index_version` to the triage manifest by introducing a retrieval port that fetches similar past tickets as few-shot examples. Record both on spans and add a test that a changed index version changes the fingerprint and appears in `changed_components`.
+P1. (about 2 hours) Add an `embedding_model` and `index_version` to the triage manifest by introducing a retrieval port that fetches similar past tickets as few-shot examples. Record both on spans and add a test that a changed index version changes the fingerprint and appears in `changed_components`.
 
-P2. Extend `FlagEvaluator` with a tenant-level override so that the `logistics` tenant can be excluded from an experiment entirely, regardless of user bucket. Add tests for precedence (kill switch, environment, tenant exclusion, user override, allocation).
+P2. (about 90 min) Extend `FlagEvaluator` with a tenant-level override so that the `logistics` tenant can be excluded from an experiment entirely, regardless of user bucket. Add tests for precedence (kill switch, environment, tenant exclusion, user override, allocation).
 
-P3. Add a `--slice tenant` option to the eval gate that reports and gates per-tenant accuracy, failing if any tenant regresses by more than the tolerance even when the aggregate improves.
+P3. (about 2 hours) Add a `--slice tenant` option to the eval gate that reports and gates per-tenant accuracy, failing if any tenant regresses by more than the tolerance even when the aggregate improves.
 
-P4. Write a hypothesis property test for `RecordReplayTransport.key_for`: reordering JSON keys and changing ignored fields never changes the key; changing any non-ignored field always does.
+P4. (about 60 min) Write a hypothesis property test for `RecordReplayTransport.key_for`: reordering JSON keys and changing ignored fields never changes the key; changing any non-ignored field always does.
 
 ### Debugging exercises
 
 D1. After a release, the triage dashboard shows the `treatment` and `control` arms of the prompt experiment with identical category distributions and identical token counts for two weeks. The flag file shows 50% treatment. Spans show `version.flags.triage.prompt = treatment` on half of the requests. Diagnose the cause and name the check that would have caught it at startup.
 
-D2. CI starts failing in the unit stage with `CassetteMiss: no recording for POST /v1/chat/completions`. The merge request only edits the docstring of `TriageDecision` and a comment in the prompt store. Explain the failure, decide whether it is a bug, and describe the correct fix.
+D2. CI starts failing in the unit stage with `CassetteMiss: no recording for POST /v1/chat/completions`. The pull request only edits the docstring of `TriageDecision` and a comment in the prompt store. Explain the failure, decide whether it is a bug, and describe the correct fix.
 
 D3. The nightly drift job fails on `recall.security_report` (from 0.83 to 0.67). No commits landed in a week. The manifest fingerprint of the nightly report is identical to the baseline's. Spans from production over the same week show `llm.served_model` changing from one dated identifier to another on Tuesday. What happened, what is the immediate mitigation, and what would you change so that this is caught on Tuesday rather than days later?
 
@@ -1669,3 +1171,11 @@ D3. The nightly drift job fails on `recall.security_report` (from 0.83 to 0.67).
 - Change one component at a time; when attribution is lost, debugging becomes guessing.
 - Run the same eval gate in CI and nightly; a nightly failure with an unchanged manifest means the provider moved.
 - Ship tools as package entry points, not a scripts folder, and record AI decisions in ADRs with evidence, revisit triggers, and rollback.
+
+## Further reading
+
+- *Hidden Technical Debt in Machine Learning Systems* (Sculley et al., 2015): the short classic on why the model is the small part of the system, and on the glue code and configuration debt this chapter's structure prevents.
+- *Domain-Driven Design* (Evans, 2003): the original account of the anti-corruption layer used here to keep provider concepts out of the domain.
+- *Documenting Architecture Decisions* (Nygard, 2011): the proposal that started ADRs; read it before adapting the template.
+- *Trustworthy Online Controlled Experiments* (Kohavi, Tang, and Xu, 2020): randomization units, sample sizes, peeking, and guardrail metrics in far more depth than one chapter can give.
+- Hypothesis documentation: strategies, `@example`, and shrinking, for writing property tests against model output.

@@ -52,7 +52,7 @@ The embedding model and index version must travel together because vectors from 
 - Rollback: kill `triage.model`, which takes effect without a deploy. Document the plan in an ADR with the evidence section filled at the end.
 
 **E3.**
-- Run the gate on merge requests with a simulated model, as the example does. This catches wiring, parser, rule, prompt-rendering, and lock regressions, but not model quality.
+- Run the gate on pull requests with a simulated model, as the example does. This catches wiring, parser, rule, prompt-rendering, and lock regressions, but not model quality.
 - Add replayed cassettes for the golden set. Record the candidate prompt's responses on a protected job: either a maintainer-triggered job on a protected branch with keys, or a scheduled re-record. Merge request pipelines then replay real model outputs for the exact request bytes. If the prompt changed and no recording exists, the job fails with `CassetteMiss` and requires a maintainer to run the protected recording job before merge.
 - Run the real-provider gate on the default branch after merge, as a blocking step before build.
 
@@ -66,7 +66,7 @@ This approach cannot catch quality changes for prompts that have not been record
 - Is the behavior flagged?
 - Do descriptions count as prompt changes?
 
-Ask the author to split the change into three merge requests: parser first, because it is a pure robustness change gated by unit tests; then the tool schema; then the prompt. Three components changing at once lose attribution. If the eval moves, nobody knows which change caused it, and a rollback of one requires reverting all three. The parser change may also be safe to ship immediately while the prompt needs a canary.
+Ask the author to split the change into three pull requests: parser first, because it is a pure robustness change gated by unit tests; then the tool schema; then the prompt. Three components changing at once lose attribution. If the eval moves, nobody knows which change caused it, and a rollback of one requires reverting all three. The parser change may also be safe to ship immediately while the prompt needs a canary.
 
 ## Practical exercises
 

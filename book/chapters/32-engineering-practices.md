@@ -12,150 +12,149 @@ This chapter is about the code inside each box of an AI system and the path ever
 
 **Prerequisites:** Chapters 3 (the `aie_core` client and errors), 24 and 25 (evaluators and eval gates), and 28 (the system's components and versioned artifacts). | **Code:** `book/projects/examples/ch32/` (run: `cd book/projects/examples/ch32 && pytest -q`) | **Builds:** the `northwind_triage` package, with GitHub Actions and GitLab CI pipelines and an ADR template.
 
+**First reading:** Why this matters, Mental model, Core concepts (clean architecture, provider abstraction, the test pyramid, fakes and fixtures, versioning, feature flags, experiments), How it works, Implementation: Feature flags, Code walkthrough, Failure modes. **Deep dives** (skip on a first pass): the other Core concepts subsections, Architecture, and the other Implementation subsections.
+
 ## Why this matters
 
-Northwind's first triage feature was a 140-line file in `scripts/`. It read a ticket, formatted a prompt with an f-string, called the provider SDK, sliced the reply between the first `{` and the last `}`, and wrote a category back to the ticket system. It worked in the demo. Over the next quarter, four things happened. A provider SDK upgrade renamed a response field and the script crashed every night for a week before anyone noticed. Someone edited the prompt to fix one misrouted ticket class and silently broke another; there was no record of which prompt had produced which routing. A new model was switched on for everyone on a Friday, and on Monday nobody could tell whether the jump in human escalations came from the model, the prompt edited the same day, or the re-embedded knowledge base that the prompt's few-shot examples were pulled from. Finally, a security ticket was routed as `hardware` because the parser accepted `"category": "Security Report"` with a space and fell through to a default.
+Northwind's first triage feature was a 140-line file in `scripts/`. It read a ticket, formatted a prompt with an f-string, called the provider SDK, sliced the reply between the first `{` and the last `}`, and wrote a category back to the ticket system. It worked in the demo. Over the next quarter, four things happened:
 
-None of these is an AI problem. They are software-engineering problems that AI systems make more likely, for three reasons. Behavior lives in artifacts that are not code: prompts, model identifiers, embedding models, indexes, tool schemas, evaluator rubrics. Behavior changes without a deploy: a provider updates a model, a flag moves, an index is rebuilt. And the central dependency is probabilistic, so a single passing example proves little. The practices in this chapter are the ordinary disciplines of a mature engineering team (layering, testing, versioning, configuration, gradual rollout, CI/CD, design records, code review) adapted to those three facts.
+- A provider SDK upgrade renamed a response field, and the script crashed every night for a week before anyone noticed.
+- Someone edited the prompt to fix one misrouted ticket class and silently broke another. Nothing recorded which prompt had produced which routing.
+- A new model was switched on for everyone on a Friday. On Monday nobody could tell whether the jump in human escalations came from the model, the prompt edited the same day, or the re-embedded knowledge base behind the few-shot examples.
+- A security ticket was routed as `hardware` because the parser accepted `"category": "Security Report"` with a space and fell through to a default.
 
-Chapter 28 drew the system. This chapter is about the code inside each box and the path every change takes to production.
+None of these is an AI problem; they are software-engineering problems that AI systems make more likely, for three reasons. Behavior lives in artifacts that are not code (prompts, model identifiers, indexes, tool schemas, evaluator rubrics). Behavior changes without a deploy: a provider updates a model, a flag moves, an index is rebuilt. And the central dependency is probabilistic, so one passing example proves little. This chapter adapts a mature team's ordinary disciplines to those three facts.
 
 ## Mental model
 
 > **Mental model:** Reliability is engineered around the model, not expected from it. The model proposes; deterministic code validates, decides, records, and rolls back.
 
-Hold three images while reading.
+**The model is a plugin.** The triage domain (categories, priorities, the rule that security reports always get a human) existed before language models and will outlive the current one, so code that encodes it should not know a model exists. The model enters through one port, like a database or a payment provider, and is translated at the boundary.
 
-**The model is a plugin.** The domain of ticket triage (categories, priorities, the rule that security reports always get a human) existed before language models and will outlive the current one. Code that encodes the domain should not know that a model exists. The model enters through one port, like a database or a payment provider, and is translated at the boundary.
+**Every output has a bill of materials.** A response was produced by a specific code commit, prompt version, model, index, tool schema set, flag assignment, and configuration. If you cannot list those for a trace, you cannot debug, reproduce, or attribute a change. The version manifest is that bill of materials, and it travels with every request.
 
-**Every output has a bill of materials.** A response was produced by a specific code commit, prompt version, model, index, tool schema set, flag assignment, and configuration. If you cannot list those for any trace, you cannot debug, reproduce, or attribute a change. The version manifest is that bill of materials, and it travels with every request.
-
-**Every change is an experiment until proven otherwise.** A prompt edit is a hypothesis about behavior. It goes through an offline gate (does it regress the golden set?), then exposure to a small, deterministic slice of traffic (does it break anything real?), then a measured comparison (is it better?), then promotion, with a one-step rollback at each stage.
+**Every change is an experiment until proven otherwise.** A prompt edit is a hypothesis. It passes an offline gate (does it regress?), then a small, deterministic slice of traffic (does it break anything real?), then a measured comparison (is it better?), with a one-step rollback at each stage.
 
 ## Core concepts
 
 ### Clean architecture for AI applications
 
-Clean architecture (and its close relative, hexagonal or ports-and-adapters architecture) organizes code in concentric layers with one rule: source-code dependencies point inward. Inner layers define what they need as interfaces; outer layers implement them. An interface that an inner layer defines is called a *port*, and an outer-layer class that implements it for a specific technology is an *adapter*.
+Clean architecture (also called hexagonal or ports-and-adapters architecture) organizes code in concentric layers with one rule: source-code dependencies point inward. An inner layer declares what it needs as an interface, a *port*; an outer-layer *adapter* implements it for one technology. For an AI feature the layers are:
 
-For an AI feature the layers are:
+- **Domain.** Business vocabulary and rules as pure functions and value types: `Ticket`, `TriageDecision`, `apply_business_rules`, and the parser that turns model text into a validated decision. No I/O, provider types, or frameworks (pydantic is allowed; it validates values).
+- **Application.** Use cases such as "triage this ticket for this user." This layer owns the ports, written in its own terms (`ClassifierPort.classify(system, user, model) -> ClassifierOutput`), and decides what happens on failure without knowing about HTTP status codes.
+- **Adapters.** Port implementations: `LLMClassifier` on `aie_core`, a file-backed prompt store, a FastAPI router. Inbound adapters (HTTP, queues, CLIs) call use cases; outbound ones (LLM, database) are called by them.
+- **Composition root.** The one module that knows every concrete class: it reads configuration, builds adapters, checks consistency, and wires the use case. Tests call it with fakes.
 
-- **Domain.** The business vocabulary and rules, as pure functions and value types: `Ticket`, `Category`, `Priority`, `TriageDecision`, `apply_business_rules`, and the parser that turns model text into a validated decision. No I/O, no provider types, no framework imports. The domain may still use pydantic, because it is a value-validation library rather than infrastructure.
-- **Application.** Use cases that orchestrate the domain: "triage this ticket for this user." This layer owns the ports, which are interfaces written in its own terms such as `ClassifierPort.classify(system, user, model) -> ClassifierOutput`, and it decides what happens on failure. It knows that classification can fail; it does not know about HTTP status codes.
-- **Adapters.** Implementations of ports for specific technologies: an `LLMClassifier` built on `aie_core`, a file-backed prompt store, a FastAPI router, a tool executor. Inbound adapters (HTTP, queue consumers, CLIs) call use cases; outbound adapters (LLM, database, vector store) are called by them.
-- **Composition root.** The one module that knows every concrete class. It reads configuration, builds adapters, checks consistency, and wires the use case. Tests call it with fakes.
+With layers, each of the four incidents lands in exactly one place: the SDK rename in an adapter (caught by adapter tests), the prompt edit in a versioned artifact behind a flag, the model switch in a flag ramp with a manifest on every trace, and the parser bug in the domain (caught by property tests).
 
-Why bother for something as small as triage? Because each of the four incidents above lands in exactly one layer once the layers exist. The SDK rename is an adapter bug caught by adapter tests. The prompt edit is a versioned artifact behind a flag. The model switch is a flag ramp with a manifest on every trace. The parser bug is a domain bug caught by property tests. In the script, all four were the same 140 lines.
-
-When not to: a one-off analysis notebook, a throwaway spike, or a batch job that will run twice does not need ports. The cost of layering is indirection: more files, more names, a newcomer has to find the composition root. The signal that you need layering is a second, independent reason for the same code to change. When the same code must change because the provider changed and because the business rule changed, separate those reasons.
+When not to: a notebook, a spike, or a batch job that runs twice does not need ports, because layering costs indirection. You need it when the same code has a second, independent reason to change, such as a provider change and a business-rule change.
 
 ### Modularity and boundaries
 
-Layers are horizontal boundaries. Modules are vertical ones: triage, retrieval, answer generation, and ingestion are separate features with separate domains. Two rules keep them apart. A module exposes a small public interface (its use cases and ports) and hides the rest. And modules share platform code (the `aie_core` gateway, tracing, settings) but not domain types; if retrieval and triage both need a `Ticket`, each defines the fields it needs, or a shared kernel (a small module of types that several features agree to share) is created deliberately and owned by someone.
+> **Deep dive.** Module boundaries and their fitness test; skip on a first reading.
 
-Boundaries erode unless something fails the build when they are crossed. The example ships an architecture fitness test that parses every module's imports with `ast` and fails if the domain imports anything but the standard library and pydantic, or if the application imports an adapter. It runs in the unit stage in under a second. Tools such as import-linter do the same at larger scale. A diagram in a wiki does not fail a build; a test does.
+Layers are horizontal boundaries; modules (triage, retrieval, ingestion) are vertical ones. A module exposes its use cases and ports and hides the rest. Modules share platform code (`aie_core`, tracing, settings) but not domain types, unless a shared kernel is created deliberately and owned by someone.
+
+Boundaries erode unless the build fails when they are crossed. The example's *architecture fitness test* parses every module's imports with `ast` and fails if the domain imports anything beyond the standard library and pydantic, or the application imports an adapter. A wiki diagram does not fail a build; a test does.
 
 ### Provider abstraction and anti-corruption layers
 
-There are two abstractions, and confusing them is a common mistake. `aie_core` (Chapter 3) is a *provider abstraction*: it hides wire formats so that the same `CompletionRequest` works against several vendors. It is still LLM-shaped: messages, roles, tokens, finish reasons. An *anti-corruption layer* (a term from domain-driven design) is a translation boundary that keeps another system's concepts out of your domain. `LLMClassifier` is one: `CompletionRequest`, `Completion`, and the `LLMError` taxonomy go in, and only `ClassifierOutput` and `ClassifierUnavailable` come out.
+`aie_core` (Chapter 3) is a *provider abstraction*: it hides wire formats so one `CompletionRequest` works against several vendors, but it is still LLM-shaped (messages, tokens, finish reasons). An *anti-corruption layer*, a term from domain-driven design, is a translation boundary that keeps another system's concepts out of your domain. `LLMClassifier` is one: `CompletionRequest`, `Completion`, and `LLMError` go in; only `ClassifierOutput` and `ClassifierUnavailable` come out.
 
-The payoff appears when the implementation behind the port is not an LLM at all. If Northwind later fine-tunes a small classifier and serves it over HTTP (Chapter 33), or replaces the model with a gradient-boosted tree for the easy majority of tickets, the use case does not change. The anti-corruption layer is also where provider quirks are normalized: a truncated completion (`finish_reason = "length"`) becomes "classifier unavailable," not a short answer; a rate-limit error becomes a retryable failure the application maps to "route to a human."
+The payoff: if Northwind replaces the LLM with a fine-tuned small classifier (Chapter 33) or a gradient-boosted tree, the use case does not change. The layer also normalizes provider quirks: a truncated completion (`finish_reason = "length"`) becomes "classifier unavailable," not a short answer.
 
-The trade-off is lowest-common-denominator design. If a port exposes only what every provider supports, you lose provider-specific features. The answer is that ports expose what the *use case* needs, not what providers offer. If the use case benefits from a provider's prompt caching, the adapter uses it internally; the port does not mention it.
+Design ports around what the *use case* needs, not what providers offer, to avoid lowest-common-denominator interfaces. If prompt caching helps, the adapter uses it internally; the port never mentions it.
 
 ### Testability: the test pyramid for AI systems
 
-A classic test pyramid has many unit tests, fewer integration tests, and few end-to-end tests. AI systems need a pyramid with different layers, because the most important property, output quality, is statistical and cannot be asserted with `==`.
+Output quality is statistical and cannot be asserted with `==`, so an AI system's test pyramid has different layers. From bottom to top:
 
-From bottom to top:
+1. **Unit tests** for deterministic code: parsers, rules, prompt rendering, flag bucketing, manifest hashing, config. Property-based tests live here.
+2. **Contract tests** for agreements at boundaries: tool schema against the handler's validator, adapter encoding and decoding against recorded provider traffic, prompt bytes against the lock. Offline and fast.
+3. **Offline evaluation** on a versioned golden dataset, per slice, against a stored baseline. It takes minutes, costs money with a real model, and is the release gate (Chapters 24 and 25 own the evaluators).
+4. **Online evaluation** of real traffic: shadow, canary, A/B, sampled judging. Hours to weeks.
 
-1. **Unit tests** cover deterministic code: parsers, business rules, prompt rendering, flag bucketing, manifest hashing, config validation. Thousands of cases per second. Property-based tests, explained below, live here.
-2. **Contract tests** check agreements at boundaries: the tool schema the model sees matches the validator the handler uses; the adapter correctly encodes requests and decodes responses for a real provider format (using recorded fixtures, described in the next section); a prompt version's bytes match the lock. They run offline and fast.
-3. **Offline evaluation** runs the system on a versioned golden dataset and computes quality metrics per slice, compared with a stored baseline. It takes minutes, costs money when it uses a real model, and is the release gate (Chapters 24 and 25 own the evaluators; this chapter owns where the gate sits).
-4. **Online evaluation** measures real traffic: shadow comparisons, canary guardrails, A/B experiments, sampled judging of production traces. Hours to weeks.
-
-Each layer catches failures the others cannot. Unit tests cannot tell you a prompt got worse. Offline evaluation cannot tell you that real tickets differ from the golden set. Online evaluation is too slow and too expensive to catch a parser crash. The common failure is an inverted pyramid: no unit tests, a handful of "does the demo still work" calls to a live model, and production as the real test.
+Each layer catches what the others miss: unit tests cannot see a worse prompt, and online evaluation is too slow to catch a parser crash. The common failure is an inverted pyramid: no unit tests, a few demo calls to a live model, and production as the real test.
 
 ### Fakes, recorded fixtures, and why mocks of SDKs lie
 
-There are three ways to replace a model in a test, and they test different things.
+Three kinds of test double test different things.
 
-A **fake** is a working, simplified implementation. `aie_core`'s `FakeLLM` returns scripted responses or calls a handler, and records every request. Use it to test use-case logic: does a parse error route to a human, does the kill switch select the control prompt, is temperature zero. A fake tests your code's reaction to model output, not your code's interaction with a provider.
+A **fake** is a working, simplified implementation. `aie_core`'s `FakeLLM` returns scripted responses and records requests. Use it for use-case logic, such as whether a parse error routes to a human. It tests your code's reaction to model output, not its interaction with a provider.
 
-A **recorded fixture** (often called a cassette, after the Ruby library VCR) is a real HTTP exchange captured once and replayed. Replaying at the HTTP transport, beneath the adapter, exercises the real request encoding, response decoding, and error mapping, which is exactly the code a fake skips and exactly what broke in Northwind's SDK incident. The recording is matched by a hash of the canonical request, so a changed prompt, model, or parameter produces a loud miss rather than a stale answer. The transport has three modes: `record` calls the provider and saves the exchange (replacing any earlier recording of the same request), `replay` serves only saved exchanges, and `auto` replays when it can and records otherwise. In CI the mode is `replay`, so an unrecorded call fails the build.
+A **recorded fixture** (a *cassette*, after the Ruby library VCR) is a real HTTP exchange captured once and replayed beneath the adapter. Replay exercises the real request encoding, response decoding, and error mapping: the code a fake skips, and what broke in Northwind's SDK incident. Recordings are keyed by a hash of the canonical request, so a changed prompt or parameter produces a loud miss, not a stale answer. Of the three modes (`record`, `replay`, `auto`), CI uses `replay`, so an unrecorded call fails the build.
 
-A **mock of the SDK** (`MagicMock` returning an object with `.choices[0].message.content`) encodes your belief about the SDK. When the SDK changes, the mock does not, and the tests keep passing. Avoid it.
+A **mock of the SDK** (`MagicMock` returning `.choices[0].message.content`) encodes your belief about the SDK. When the SDK changes, the mock does not, and tests keep passing. Avoid it.
 
-Fixtures have costs. They must be re-recorded when prompts change, which is a feature (the diff shows the new request) but also churn. They capture whatever the provider returned that day, so they are not quality evidence. And they can contain PII and credentials; the transport in this chapter never writes credential headers and accepts a `scrub` function for bodies, and cassettes are reviewed in pull requests (merge requests in GitLab) like code.
+Fixtures cost re-recording churn, are one day's output rather than quality evidence, and can leak secrets, so the transport never writes credential headers and cassettes are reviewed in pull requests (merge requests in GitLab) like code.
 
 ### Property-based tests for parsers and validators
 
-Model output is adversarial input you did not write. Example-based tests check the five cases you thought of; property-based tests state an invariant and let a library (hypothesis, in Python) generate hundreds of inputs, then shrink any failure to a minimal counterexample.
+> **Deep dive.** Invariants for model-output parsers; skip on a first reading.
 
-Good properties for AI code:
+Model output is adversarial input. A property-based test states an invariant, lets a library (hypothesis, in Python) generate hundreds of inputs, and shrinks any failure to a minimal counterexample. Good properties:
 
-- **Totality.** For any string, the parser returns a valid decision or raises `ParseError`, never `KeyError`, `TypeError`, or `RecursionError`. The property test targets the inputs that break naive parsers, such as a `bool` priority that `str()` turns into `"TRUE"` and a NaN confidence that slips past a naive range check; the example pins both as explicit `@example` cases.
-- **Round trip.** A valid decision rendered as JSON and wrapped in prose or code fences parses back to itself.
-- **Idempotent normalization.** Normalizing `"p2"` gives `"P2"`, and normalizing `"P2"` gives `"P2"`.
-- **Business invariants.** Business rules never lower urgency; a security report always routes to a human.
-- **Tool argument space.** Every argument dictionary the schema allows is accepted by the handler and produces output matching the result schema.
+- **Totality.** Any string yields a valid decision or `ParseError`, never `KeyError`, `TypeError`, or `RecursionError`. A `bool` priority and a NaN confidence are pinned as `@example` cases.
+- **Round trip.** A valid decision wrapped in prose or code fences parses back to itself.
+- **Idempotent normalization.** `"p2"` and `"P2"` both normalize to `"P2"`.
+- **Business invariants.** Rules never lower urgency; a security report always routes to a human.
 
 ### Contract tests for tools
 
-A tool has a contract with two parties. The model sees a name, a description, and a JSON Schema. The executor validates arguments and performs the action. Drift between them is a silent failure: the schema says `priority` is a string, the handler expects an integer, and the model's correct call fails validation in production. The example derives the advertised schema from the same pydantic model the handler validates with, so drift is impossible by construction.
+> **Deep dive.** Schema-handler agreement for tools; skip on a first reading.
 
-The tests then cover the rest of the contract: `additionalProperties: false` so the model cannot invent arguments, an idempotency key for write tools, documented valid and invalid examples, idempotent behavior on retry, tenant-scoped keys, and a lock file that pins a schema hash per tool version so that a schema edit without a version bump fails the build. Chapter 16 owns the registry and policy engine; contract tests are how a tool earns its place in it.
+The model sees a tool's JSON Schema; the executor validates arguments against its own model. If the two drift (the schema says `priority` is a string, the handler expects an integer), the model's correct call fails in production. The example derives the schema from the handler's pydantic model, so drift is impossible by construction. Tests cover the rest: `additionalProperties: false`, idempotent retries for write tools, tenant-scoped keys, and a lock that fails a schema edit without a version bump (Chapter 16 owns the registry).
 
 ### Snapshot tests for prompts
 
-The bytes a model receives are assembled from a template, variables, escaping rules, and sometimes few-shot examples. A refactor of any of those changes the prompt without anyone editing the template file. A snapshot test renders each prompt version with a fixed input and compares the result with a committed file; the diff shows reviewers exactly what changed. Snapshots do not judge whether a prompt is good, only that it changed; the eval gate judges quality. Pair snapshots with an immutability lock (a hash per published version): once `1.0.0` is published, editing it in place fails, and the author creates `1.0.1`. Chapter 4 builds the full prompt registry with aliases; this chapter uses a minimal store with the same lock discipline.
+> **Deep dive.** Catching accidental prompt changes; skip on a first reading.
+
+A refactor of a template or its escaping can change the bytes a model receives without anyone editing the prompt. A snapshot test renders each prompt version with a fixed input and diffs it against a committed file; it detects change, and the eval gate judges quality. An immutability lock (a hash per published version) makes editing `1.0.0` in place fail, so the author creates `1.0.1` (Chapter 4 builds the full registry).
 
 ### Versioning every artifact
 
-Chapter 28 lists the seven artifacts that change an AI system's output (prompt, chat model, embedding model, index build, tool schema, policy, evaluator) and the tables that record them. Add datasets: a golden set that grows by ten cases changes every metric computed on it. The practices that make versioning work:
+Chapter 28 lists the seven artifacts that change an AI system's output (prompt, chat model, embedding model, index build, tool schema, policy, evaluator). Add datasets, since ten new golden cases change every metric. What makes versioning work:
 
-- **Labels plus hashes.** `1.1.0` is a claim; `1.1.0#3edba2c34b45` is evidence. A label without a content hash lets someone edit a "published" artifact; a hash without a label is unreadable. The example's `versioned(label, content)` produces both.
-- **Pin explicit model versions** where providers offer dated identifiers, and record the model the provider says it served, which can differ from the one requested (aliases, fallbacks). The example records `llm.served_model` on every span.
-- **Embedding model and index version travel together.** Vectors from different embedding models are not comparable; an index is defined by its corpus snapshot, chunker configuration, and embedding model, and a query must be embedded with the index's model.
-- **Evaluators are versioned like code.** A rubric edit changes what "pass" means. The example hashes the evaluator module, so a metric definition change shows up as a changed component.
-- **Datasets are versioned by content.** The eval gate refuses to compare against a baseline computed on a different dataset hash.
+- **Labels plus hashes.** `1.1.0` is a claim; `1.1.0#3edba2c34b45` is evidence. The hash stops in-place edits; the label keeps it readable.
+- **Pin dated model identifiers** where offered, and record the model the provider says it served (`llm.served_model`), which aliases and fallbacks can change.
+- **Embedding model and index version travel together**, because a query must be embedded with the index's model (Chapter 8).
+- **Evaluators and datasets are versioned by content.** A rubric edit changes what "pass" means, and the gate refuses a baseline built on a different dataset hash.
 
-The version manifest collects all of this into one immutable record: code identity, prompts, models, embedding model, index, datasets, evaluators, tool schemas, flag assignments, and behavior-relevant configuration. It is built once at startup and refined per request with the prompt and model that flags selected. Its fingerprint (a hash of the canonical JSON) identifies the exact system that produced an output. It goes onto every trace span as flat `version.*` attributes, into every evaluation report, and into the eval gate's comparison, where `changed_components` warns when more than one component changed relative to the baseline, because then attribution is lost.
-
-Chapter 31 owns the span schema, and its tooling groups traffic by `prompt.id`, `prompt.version`, `index.version`, and `llm.model`, so the service also writes those keys with `as_semconv_attributes`. The `version.*` set is complete; the Chapter 31 set lets `compare_versions` and the alert rules work on triage traffic without a mapping table.
+The *version manifest* collects all of this, plus code identity, flag assignments, and behavior-relevant configuration, into one immutable record. It is built at startup and refined per request with the flag-selected prompt and model. Its *fingerprint*, a hash of the canonical JSON, identifies the exact system that produced an output. The manifest goes onto every span as `version.*` attributes (plus Chapter 31's `prompt.version` and `llm.model`) and into every evaluation report. There, `changed_components` warns when more than one component changed, because attribution is then lost.
 
 ### Configuration management
 
-Configuration is the set of values that differ between environments or change without a code change. Three rules.
+> **Deep dive.** Validated settings and secrets; skip on a first reading.
 
-**Typed, in one place, validated at startup.** The example's `AppSettings` uses pydantic-settings: `TRIAGE_*` variables for the application, nested `aie_core` settings for the provider. A model validator enforces environment rules: staging and prod refuse the fake provider and require a git sha (it goes into every trace), prod requires a flag file, and every deployed environment refuses an experiment whose treatment equals its control. `load_settings` collects every problem into one `ConfigError` so a broken deployment fails at boot with a full list, not on the first request with the first error. The composition root adds checks that need I/O: every configured prompt version exists and is locked, and every flag variant that can receive traffic (allocated, overridden, or the safe variant) maps to a configured value.
+Configuration is what differs between environments or changes without a code change. Three rules:
 
-**Secrets are never configuration files.** They arrive as environment variables or from a secret manager, are typed `SecretStr` so they do not appear in `repr` or logs, and never appear in error messages. Tests clear provider variables so a developer's real key never leaks into a test run.
-
-**Separate behavior from code identity.** The container image carries `TRIAGE_GIT_SHA` and the app version, baked in at build time. Prompt and model selection come from configuration and flags at runtime, so a prompt rollout does not require an image build and a rollback does not require a deploy.
+- **Typed, in one place, validated at startup.** `AppSettings` (pydantic-settings) enforces environment rules, and `load_settings` reports every problem at once, at boot rather than on the first request. The composition root adds I/O checks: every configured prompt version exists and is locked, and every flag variant that can get traffic maps to a configured value.
+- **Secrets are never configuration files.** They come from the environment or a secret manager, typed `SecretStr` to stay out of logs and errors.
+- **Separate behavior from code identity.** The image bakes in `TRIAGE_GIT_SHA`; prompt and model selection come from configuration and flags at runtime, so a rollout needs no build and a rollback no deploy.
 
 ### Feature flags and gradual rollout
 
-A feature flag decides, per request, which variant of a behavior runs. For AI systems the variants are usually prompt versions, models, retrieval settings, or whether a feature runs at all. Requirements specific to AI rollouts:
+A feature flag decides, per request, which variant runs: a prompt version, a model, a setting, or whether a feature runs at all. AI rollouts need:
 
-- **Deterministic assignment by a stable unit.** The example hashes `salt:unit_id` with SHA-256 into 10,000 buckets. The same user gets the same variant on every replica, in every retry, and in a replay months later, without a database lookup. Randomizing per request would show a user two different classifiers in one conversation and break the independence assumptions of the analysis.
-- **Monotonic ramps.** Buckets are compared against a cumulative threshold with control last, so ramping a treatment from 5% to 20% keeps the original 5% in it. Users do not flip back and forth, and early exposure data stays valid.
-- **Independent salts per flag.** Two experiments with the same salt put the same users in both treatments, confounding their effects. Defaulting the salt to the flag name keeps them independent; the test checks that about 25% of users land in both treatments of two 50% flags, not 50%.
-- **A kill switch** returns everyone to the safe variant in one change, without a deploy. Flag snapshots are immutable objects so a request never sees half an update.
-- **Fail safe.** An unknown flag name returns control rather than raising. A typo must not take down the service; it shows up instead as `reason = "unknown_flag"` in the trace.
-- **Overrides** for QA and dogfooding, keyed by unit id; the flag's environment list decides where the whole flag, overrides included, is live.
+- **Deterministic assignment by a stable unit.** Hashing `salt:unit_id` with SHA-256 into 10,000 buckets gives a user the same variant on every replica, retry, and replay, with no lookup. Per-request randomization would show one user two classifiers in a conversation.
+- **Monotonic ramps.** Buckets are compared against cumulative thresholds with control last, so ramping a treatment from 5% to 20% keeps the original 5%, and early exposure data stays valid.
+- **Independent salts per flag.** Shared salts put the same users in both experiments' treatments, confounding them. The salt defaults to the flag name; a test checks that about 25%, not 50%, of users land in both treatments of two 50% flags.
+- **A kill switch** that returns everyone to the safe variant in one change, without a deploy. Snapshots are immutable, so no request sees half an update.
+- **Fail safe.** An unknown flag returns control with `reason = "unknown_flag"` rather than raising.
+- **Overrides** keyed by unit id, for QA and dogfooding.
 
-Each live flag is technical debt: it adds a code path that must keep working in both states. Delete a flag within a sprint of full rollout, and keep the list of live flags short enough that someone can name them all.
+Each live flag is a code path that must work both ways; delete it within a sprint of full rollout.
 
 ### Experiments: A/B, shadow, canary
 
 Three techniques answer three different questions.
 
-**Shadow traffic** answers "does the candidate behave sanely on real inputs?" The primary serves the user; the candidate runs on a copy of the request, its output is compared and discarded. No user impact, so it is the first online step for a new model or prompt. Costs: you pay for both calls, and side-effecting paths (tool writes, emails) must be disabled for the shadow. Shadow agreement rate is a smoke signal, not a quality metric; disagreement tells you where to look.
+**Shadow traffic** answers "does the candidate behave sanely on real inputs?" It runs on a copy of each request; its output is compared and discarded. You pay for both calls, and side effects (tool writes, emails) must be disabled. Agreement rate is a smoke signal, not a quality metric.
 
-**Canary** answers "is it safe?" A small percentage of traffic (1 to 5%) gets the new version, and guardrail metrics (error rate, latency, cost, safety violations) are compared with the baseline over a fixed window against criteria written *before* the canary starts. Breach of a hard guardrail rolls back immediately, even on small samples: a single cross-tenant leak is enough. Too little data produces a `hold` verdict rather than a guess. A canary is not designed to prove improvement; at 5% it rarely has the power to.
+**Canary** answers "is it safe?" A small share of traffic (1 to 5%) gets the new version. Guardrails (error rate, latency, cost, safety violations) are compared with the baseline over a fixed window, against criteria written *before* it starts. A hard breach rolls back immediately, even on small samples: one cross-tenant leak is enough. Too little data yields `hold`, not a guess.
 
-**A/B experiment** answers "is it better?" Users are split (often 50/50) and a primary metric is compared with a significance test, with guardrail metrics that must not regress. Before starting, write down the hypothesis, primary metric, guardrails, minimum practical effect, population, randomization unit, duration, and stop conditions. Change one component; if prompt and model change together, a positive result cannot be attributed.
+**A/B experiment** answers "is it better?" Users are split (often 50/50), a primary metric gets a significance test, and guardrails must not regress. Write down beforehand the hypothesis, metrics, minimum practical effect, randomization unit, duration, and stop conditions, and change one component only.
 
 Sample size is where most AI experiments go wrong. For a proportion metric such as "ticket routed correctly per agent feedback," the per-arm sample size to detect an absolute change *d* from baseline *p* with significance α and power 1−β is approximately
 
@@ -171,69 +170,59 @@ where p̄ is the mean of the two proportions. With an illustrative baseline of 8
 | +3 points | 2,629 |
 | +1 point | 24,641 |
 
-A third of the effect needs roughly nine times the traffic. If Northwind triages an illustrative 1,200 tickets a day, a 50/50 test for +3 points needs about 4.4 days of traffic; the same test run at a 5% canary split would take about 44 days, which is why canaries guard safety and A/B tests measure improvement.
+A third of the effect needs roughly nine times the traffic. At an illustrative 1,200 tickets a day, a 50/50 test for +3 points needs about 4.4 days; at a 5% canary split it would take about 44. That is why canaries guard safety and A/B tests measure improvement.
 
-Two corrections matter in practice. If one user produces many tickets and you randomize by user, observations are correlated; count by the randomization unit or inflate *n* by the design effect (the variance multiplier that within-unit correlation causes). And peeking at a running test and stopping when p < 0.05 inflates false positives; fix the duration in advance or use a sequential method designed for it.
+Two corrections matter. If one user produces many tickets, observations are correlated: count by the randomization unit, or inflate *n* by the design effect (the variance multiplier that within-unit correlation causes). And stopping a running test the moment p < 0.05 inflates false positives: fix the duration in advance or use a sequential method.
 
 ### CI/CD for AI changes
 
-An AI change can be code, a prompt, a model identifier, a dataset, an index build, or a flag. The pipeline must route each through the right gates:
+> **Deep dive.** The pipeline gates; skip on a first reading.
 
-1. **Lint and format** (ruff) and **type check** (mypy strict): cheap, catch the most bugs per second.
-2. **Unit and contract tests**, including property tests, prompt snapshots, the prompts lock, the tool-schema lock, the architecture fitness test, and replayed provider fixtures with `CASSETTE_MODE=replay`.
-3. **Offline eval gate**: the golden set against the baseline, per-slice, with critical slices (security-report recall, P1 recall) that may not regress at all. Exit code 1 on regression, 2 when there is no baseline or it is not comparable (a different dataset or provider). Each provider keeps its own baseline file, so a real model is never judged against the simulated one. Read thresholds and baselines from the default branch, as Chapter 25's pipelines do, so a pull request cannot loosen its own gate; reading them from the checkout under test, as this example does, is simpler but trusts the author. Until `eval/baseline-openai.json` is created with `--write-baseline` in a reviewed change, real-provider runs exit 2.
+An AI change can be code, a prompt, a model identifier, a dataset, an index build, or a flag. The pipeline routes each through these gates:
+
+1. **Lint, format, and type check** (ruff, mypy strict): the most bugs per second.
+2. **Unit and contract tests**, including snapshots, both locks, the fitness test, and cassettes in `replay` mode.
+3. **Offline eval gate** per slice against the baseline; critical slices (security-report recall, P1 recall) may not regress at all. It exits 1 on regression and 2 when no comparable baseline exists (different dataset or provider). Read thresholds and baselines from the default branch, as Chapter 25 does, so a pull request cannot loosen its own gate; this example reads the checkout under test, which trusts the author.
 4. **Build** an image with code identity baked in.
-5. **Canary** at a small traffic weight, wait the observation window, export arm metrics, compute a verdict, roll back automatically on failure. A `hold` verdict (exit 3) also fails the job and rolls back, because a pipeline cannot wait open-ended; observing longer means re-running the job. Size the window and `min_requests` from expected traffic: the example's 30 minutes and 400 requests assume far more than an illustrative 1,200 tickets a day.
-6. **Promote** behind a protected environment with a human approval.
-7. **Scheduled drift evaluation**: the same gate, nightly, with no code change. Providers update models underneath you; a nightly failure with an unchanged manifest, measured against that provider's own baseline, means the provider moved.
+5. **Canary**: deploy at a small weight, wait the window, compute a verdict, and roll back on failure. A `hold` (exit 3) also rolls back, because a pipeline cannot wait open-ended. Size the window from real traffic: the example's 30 minutes and 400 requests assume far more than an illustrative 1,200 tickets a day.
+6. **Promote** behind a protected environment with human approval.
+7. **Nightly drift evaluation**: the same gate with no code change. A failure with an unchanged manifest means the provider moved.
 
-Secrets policy shapes the pipeline. Pull request pipelines never receive provider keys (pull requests from forks cannot, and the example applies the same rule to every pull request), so they run the gate on a simulated model (still useful: it catches parser, wiring, and rule regressions); the default branch and nightly runs use the real provider.
+Pull request pipelines never get provider keys, so they run the gate on a simulated model, which still catches parser, wiring, and rule regressions. The default branch and nightly runs use the real provider, each provider against its own baseline file.
 
 ### Architecture decision records for AI decisions
 
-An architecture decision record (ADR) is a short document that captures one decision, its context, the alternatives, and its consequences, stored in the repository next to the code. AI decisions need ADRs more than most because they decay: a model choice made on this quarter's evaluation may be wrong next quarter, and without the record nobody knows what evidence it rested on. The template in this chapter adds three sections to the classic format: **Evidence** (dataset and evaluator versions, manifest fingerprints, experiment ids), **Revisit when** (concrete triggers such as a metric threshold, a provider change, or a date), and **Rollback** (which flag or pin undoes it). Write ADRs for model and provider selection, retrieval strategy, chunking and embedding choices, guardrail placement, framework adoption (Chapter 23), and data-retention decisions for prompts and traces.
+> **Deep dive.** What an AI decision record adds; skip on a first reading.
+
+An architecture decision record (ADR) is a short file in the repository that captures one decision, its context, alternatives, and consequences. AI decisions decay (this quarter's model choice may be wrong next quarter), so the template adds **Evidence** (dataset and evaluator versions, manifest fingerprints, experiment ids), **Revisit when** (a metric threshold, a provider change, a date), and **Rollback** (the flag or pin that undoes it). Write one for model, retrieval, chunking, guardrail, framework (Chapter 23), and retention decisions.
 
 ### The scripts-folder anti-pattern
 
-Every AI team accumulates a `scripts/` directory: `run_eval.py`, `reembed_all.py`, `test_new_prompt.py`, `backfill_categories.py`. Each started as a quick experiment, each builds its own client, its own prompt string, its own parsing. The result is that the evaluation evaluates code that does not ship, the backfill uses last month's prompt, and nobody knows which scripts still work.
+> **Deep dive.** Tools as package entry points; skip on a first reading.
 
-The fix keeps command-line tools but makes them entry points into the package instead of copies of it. The eval gate in this chapter is `northwind_triage/eval_gate.py`, exposed as the `triage-eval` console script. It calls the same composition root as the HTTP service, so it evaluates exactly the prompt store, adapter, parser, and rules that production runs, and it is covered by tests. Notebooks are fine for exploration; when a notebook's result matters, its logic moves into the package with a test, and the notebook imports it.
+Every AI team grows a `scripts/` folder (`run_eval.py`, `reembed_all.py`), each script with its own client, prompt string, and parsing, so the evaluation evaluates code that does not ship. Keep command-line tools, but as entry points into the package: the `triage-eval` console script calls the same composition root as the HTTP service.
 
 ### A code review checklist for AI code
 
-Reviewers of AI changes need questions that ordinary review does not ask. The checklist below is the one Northwind attaches to pull request templates; each item names the failure it prevents.
+> **Deep dive.** A ready-made review checklist; skip on a first reading.
 
-**Boundaries and structure**
-- Does any domain or application module import a provider SDK, `aie_core`, httpx, or a framework? (Coupling; the fitness test should already fail.)
-- Is model output parsed by a total function that returns a domain type or a typed error, with no default category or silent fallthrough?
-- Are business rules (floors, approvals, routing) in deterministic code rather than only in the prompt?
+Reviewers of AI changes need questions ordinary review does not ask. Northwind attaches these to its pull request template:
 
-**Versioning and attribution**
-- Is a changed prompt a new version file with an updated lock and snapshot, never an in-place edit?
-- Does the change alter more than one manifest component (prompt, model, index, tool schema, evaluator, dataset)? If so, is the bundling justified in the description or an ADR?
-- Are tool and schema descriptions treated as prompt changes, since the model reads them?
-- Does a tool schema change bump the tool version and the lock?
-
-**Testing and evaluation**
-- Is there an eval report in the pipeline artifacts for this exact manifest fingerprint, with per-slice results and no critical-slice regression?
-- Were new failure examples from production added to the golden set or as hypothesis `@example`s?
-- Were cassettes re-recorded deliberately, with the diff reviewed and no PII or credentials in it?
-
-**Rollout and operations**
-- Is new behavior behind a flag with a safe variant, a kill switch, and a written canary policy?
-- Is the randomization unit stated, and is the sample size feasible at the planned traffic split?
-- Are new span attributes added for any new decision the system makes, so the incident query is possible?
-
-**Security and cost**
-- Does untrusted text reach only the user message, inside delimiters that input cannot close or reopen, including nested and case variants (Chapter 26)? A single `replace` of the closing tag is not enough.
-- Are new secrets typed, injected by the environment, and absent from logs, errors, and fixtures?
-- Does the change increase context size, call count, or retries, and is the cost guardrail updated (Chapter 30)?
+- **Boundaries.** Do the domain and application stay free of provider SDKs, `aie_core`, httpx, and frameworks? Is model output parsed by a total function with no default category? Are business rules (floors, approvals, routing) in code, not only in the prompt?
+- **Versioning.** Is a changed prompt a new version with an updated lock and snapshot? Are tool and schema description edits reviewed as prompt changes, and does a schema change bump the tool version and lock? If more than one manifest component changed, is the bundling justified in the description or an ADR?
+- **Evaluation.** Is there an eval report for this exact manifest fingerprint with no critical-slice regression? Were new production failures added to the golden set or as `@example`s? Were cassettes re-recorded deliberately, with the diff reviewed?
+- **Rollout.** Is new behavior behind a flag with a safe variant, a kill switch, and a written canary policy? Are the randomization unit and a feasible sample size stated? Does every new decision get a span attribute?
+- **Security and cost.** Does untrusted text reach only the user message, inside delimiters input cannot close or reopen, nested and case variants included (Chapter 26)? Are new secrets typed and absent from logs, errors, and fixtures? Is the cost guardrail updated for any growth in context, calls, or retries (Chapter 30)?
 
 ## How it works
 
-A triage request flows through the layers like this. The HTTP adapter validates JSON into a domain `Ticket` and calls `TriageService.triage(ticket, unit_id)`. The service evaluates two flags with the user id, picks a prompt version and model, fetches the prompt, and extends the startup manifest with those selections. It opens a `triage.request` span carrying every `version.*` attribute plus the fingerprint. It renders the prompt (untrusted ticket text goes only in the user message, with delimiter look-alikes stripped from it), calls the classifier port, parses the output with the total parser, and applies business rules.
+A triage request flows through the layers in five steps:
 
-On `ClassifierUnavailable` or `ParseError` the service returns the safe fallback (human review, P3) and records the outcome on the span. The HTTP adapter returns the decision and the manifest fingerprint.
+1. The HTTP adapter validates JSON into a `Ticket` and calls `TriageService.triage(ticket, unit_id)`.
+2. The service evaluates two flags for the user, picks a prompt version and model, and extends the startup manifest with them.
+3. It opens a `triage.request` span carrying the `version.*` attributes and the fingerprint.
+4. It renders the prompt (untrusted ticket text only in the user message, delimiter look-alikes stripped), calls the classifier port, parses with the total parser, and applies business rules.
+5. On `ClassifierUnavailable` or `ParseError` it returns the safe fallback (human review, P3). It records the outcome and returns the decision with the fingerprint.
 
 ```mermaid
 sequenceDiagram
@@ -258,7 +247,7 @@ sequenceDiagram
     S-->>H: FinalTriage and manifest fingerprint
 ```
 
-A change flows through the pipeline like this. A prompt edit creates `1.1.0.md`; the author updates `prompts.lock` and the snapshot, and opens a pull request. Unit and contract tests verify the lock and snapshot. The eval gate runs `1.1.0` against the golden set and the baseline. After merge, the image is built, but `1.1.0` serves no traffic until the `triage.prompt` flag sends a percentage to `treatment`. The flag is ramped 0 → 5% (canary guardrails) → 50% (A/B on the primary metric) → 100%, then `1.1.0` becomes the control version in configuration and the flag is deleted.
+A prompt change follows the second diagram. `1.1.0.md` passes the gates but serves no traffic until the `triage.prompt` flag ramps 0 → 5% (canary) → 50% (A/B) → 100%; then `1.1.0` becomes control and the flag is deleted.
 
 ```mermaid
 stateDiagram-v2
@@ -280,7 +269,9 @@ stateDiagram-v2
 
 ## Architecture
 
-The dependency diagram shows the rule the fitness test enforces. Arrows are source-code imports. Nothing points outward from the domain; the application sees only ports; adapters and the composition root are the only places that import `aie_core`, httpx, or FastAPI. The two pure modules at the package root (flags and the version manifest) are libraries the application may use; they import only the standard library and pydantic.
+> **Deep dive.** The import graph and pipeline as diagrams; skip on a first reading.
+
+The dependency diagram shows the rule the fitness test enforces; arrows are imports. Nothing points outward from the domain, and only adapters and the composition root import `aie_core`, httpx, or FastAPI.
 
 ```mermaid
 flowchart TB
@@ -333,7 +324,7 @@ flowchart TB
     TOOLS --> MOD
 ```
 
-The pipeline diagram shows the gates a change passes and the branch that each failure takes.
+The pipeline diagram shows each gate and where each failure goes.
 
 ```mermaid
 flowchart LR
@@ -375,14 +366,14 @@ book/projects/examples/ch32/
   Dockerfile  pyproject.toml  .env.example  README.md
 ```
 
-Install and run the tests from the book root:
+Install and test from the book root:
 
 ```bash
 uv pip install --python .venv/bin/python -e book/projects/aie_core -e "book/projects/examples/ch32[dev]"
 .venv/bin/python -m pytest book/projects/examples/ch32 -q
 ```
 
-Configuration is documented in the project README and `.env.example`. The variables that matter for this chapter:
+The variables that matter here (the full list is in the README and `.env.example`):
 
 | Variable | Default | Meaning |
 |---|---|---|
@@ -396,7 +387,9 @@ Configuration is documented in the project README and `.env.example`. The variab
 
 ### Ports
 
-The ports file is short and contains no provider types. `PromptVersion` carries its own content hash, so its label is always `version#hash`.
+> **Deep dive.** The ports in code; skip on a first reading.
+
+`PromptVersion` hashes its own content, so its label is always `version#hash`.
 
 ```python
 # path: book/projects/examples/ch32/northwind_triage/application/ports.py (excerpt; full file on disk)
@@ -470,6 +463,10 @@ class PromptStorePort(Protocol):
 
 ### The anti-corruption layer
 
+> **Deep dive.** The translating adapter in code; skip on a first reading.
+
+Every `LLMError` and abnormal finish leaves as `ClassifierUnavailable`.
+
 ```python
 # path: book/projects/examples/ch32/northwind_triage/adapters/llm_classifier.py (excerpt; full file on disk)
 # ... imports from aie_core and the application ports
@@ -511,7 +508,7 @@ class LLMClassifier:
 
 ### The use case
 
-The service selects versions through flags, extends the manifest, and records everything on one span. The excerpt is the core method; the file also defines `TriageConfig` and `TriageResult`.
+> **Deep dive.** The triage method and business rules in code; skip on a first reading.
 
 ```python
 # path: book/projects/examples/ch32/northwind_triage/application/triage_service.py (excerpt)
@@ -554,7 +551,7 @@ The service selects versions through flags, extends the manifest, and records ev
             return TriageResult(result, manifest, "ok")
 ```
 
-The business rules are plain functions in the domain, so a reviewer can read the policy without reading a prompt:
+The business rules are plain domain functions a reviewer can read without the prompt:
 
 ```python
 # path: book/projects/examples/ch32/northwind_triage/domain/models.py (excerpt; full file on disk)
@@ -592,7 +589,7 @@ def apply_business_rules(ticket: Ticket, decision: TriageDecision) -> FinalTriag
 
 ### The version manifest
 
-The full file is on disk; these are the methods that matter.
+> **Deep dive.** The manifest in code; skip on a first reading.
 
 ```python
 # path: book/projects/examples/ch32/northwind_triage/version_manifest.py (excerpt)
@@ -634,7 +631,7 @@ class VersionManifest(BaseModel):
 
 ### Feature flags
 
-The excerpt shows bucketing, the flag's fields, evaluation in precedence order, and the kill switch. The validator (variants unique, allocations summing to 100, safe and override variants known), the loaders, and `ramp` are on disk.
+The excerpt shows bucketing, the flag's fields, evaluation in precedence order, and the kill switch. `evaluate` has no I/O, so it is cheap on every request and a replay reproduces the same assignment.
 
 ```python
 # path: book/projects/examples/ch32/northwind_triage/flags.py (excerpt; full file on disk)
@@ -701,7 +698,7 @@ class FlagEvaluator:
     # ... ramp() and snapshot_hash() (on disk)
 ```
 
-A flag file for production, with the prompt treatment at a 5% canary and the model candidate not yet exposed:
+The production flag file, with the prompt treatment at a 5% canary and the model candidate unexposed:
 
 ```jsonc
 // path: book/projects/examples/ch32/flags/prod.json (excerpt; full file on disk)
@@ -726,7 +723,9 @@ A flag file for production, with the prompt treatment at a 5% canary and the mod
 
 ### Record and replay
 
-The transport matches a request by a hash of its method, path, and canonical body, serves recordings in `replay` and `auto` modes, and in `record` mode replaces any earlier recording of the same request. The constructor, cassette loading and saving, and response building are on disk.
+> **Deep dive.** The cassette transport in code; skip on a first reading.
+
+Re-recording replaces the old exchange, so replay never serves a stale one, and `unused_keys` finds recordings no test replayed.
 
 ```python
 # path: book/projects/examples/ch32/northwind_triage/record_replay.py (excerpt; full file on disk)
@@ -790,6 +789,10 @@ class RecordReplayTransport(httpx.BaseTransport):
 
 ### Configuration validated at startup
 
+> **Deep dive.** The environment rules in code; skip on a first reading.
+
+This validator stops a deployed service from booting on the fake provider, without a git sha, without a prod flag file, or with treatment equal to control, and reports every violation at once.
+
 ```python
 # path: book/projects/examples/ch32/northwind_triage/config.py (excerpt)
 class AppSettings(BaseSettings):
@@ -824,6 +827,10 @@ class AppSettings(BaseSettings):
 ```
 
 ### Property tests
+
+> **Deep dive.** The parser properties in code; skip on a first reading.
+
+The first test proves the parser is total over arbitrary text; the second proves any valid decision survives being wrapped in prose and code fences.
 
 ```python
 # path: book/projects/examples/ch32/tests/test_parsing_properties.py (excerpt)
@@ -861,6 +868,10 @@ def test_round_trip_through_prose_and_fences(decision: TriageDecision, before: s
 
 ### Tool contract tests
 
+> **Deep dive.** Tool contracts in code; skip on a first reading.
+
+These tests prove the advertised schema is the validator's, a schema edit needs a version bump, and a repeated write creates nothing new.
+
 ```python
 # path: book/projects/examples/ch32/tests/test_tool_contracts.py (excerpt)
 @pytest.mark.parametrize("contract", CONTRACTS, ids=lambda c: c.name)
@@ -888,6 +899,8 @@ def test_write_tools_are_idempotent() -> None:
 
 ### Prompt snapshots
 
+> **Deep dive.** The snapshot test in code; skip on a first reading.
+
 ```python
 # path: book/projects/examples/ch32/tests/test_prompt_snapshots.py (excerpt)
 @pytest.mark.parametrize("prompt", STORE.all_versions(), ids=lambda p: f"{p.id}@{p.version}")
@@ -904,9 +917,13 @@ def test_rendered_prompt_matches_snapshot(prompt) -> None:
         f"rendered prompt for {prompt.id}@{prompt.version} changed; review and re-run with UPDATE_SNAPSHOTS=1")
 ```
 
-A missing snapshot fails rather than being written, because a test that creates its own expected output on first run passes in CI for a prompt version nobody has reviewed. The same file holds the property test for the delimiter: built from fragments such as `</tic`, `ket>`, and `</TICKET >`, no ticket text can produce a second opening or closing tag in the rendered prompt. It is the test that catches a one-pass `replace`, which turns `</tic</ticket>ket>` back into `</ticket>`.
+A missing snapshot fails rather than being written, or CI would pass a prompt nobody reviewed. The same file's delimiter property test catches a one-pass `replace`, which turns `</tic</ticket>ket>` back into `</ticket>`.
 
 ### Experiment arithmetic and the canary verdict
+
+> **Deep dive.** The canary verdict in code; skip on a first reading.
+
+This function proves the canary rules run in order: a guardrail breach rolls back at any sample size, too few requests holds, and a success-rate drop rolls back only when it is both too large and statistically real.
 
 ```python
 # path: book/projects/examples/ch32/northwind_triage/experiments.py (excerpt; full file on disk)
@@ -941,7 +958,9 @@ def canary_decision(baseline: ArmStats, canary: ArmStats, policy: CanaryPolicy |
 
 ### The CI pipeline
 
-The full GitHub Actions workflow on disk has eight jobs: `lint` and `typecheck` in parallel, then `unit` (with `CASSETTE_MODE=replay` and the prompts-lock check), `offline-eval`, `build` (the image gets the git sha and app version as build arguments), `canary` (deploy at 5%, wait the observation window, export arm metrics, compute the verdict, roll back on any non-zero exit), `promote` behind a protected environment, and `nightly-drift` on a schedule. The job that carries the chapter's ideas is the eval gate, because it is where the secrets policy and the per-provider baselines meet:
+> **Deep dive.** The eval-gate job in code; skip on a first reading.
+
+The workflow has one job per stage above (lint and type check run as two parallel jobs). The excerpt is the eval gate, where the secrets policy meets the per-provider baselines:
 
 ```yaml
 # path: book/projects/examples/ch32/ci/github-actions.yml (excerpt; full file on disk)
@@ -980,9 +999,11 @@ jobs:
   # ... build, canary, promote, nightly-drift
 ```
 
-`ci/gitlab-ci.yml` on disk is the same pipeline for GitLab CI: the same stages, the eval gate on the simulated model for merge request pipelines (GitLab's name for them), the provider key as a protected, masked variable on the default branch, the canary rollback in `after_script`, and a manual `promote` job.
+`ci/gitlab-ci.yml` is the same pipeline for GitLab CI.
 
 ### ADR template
+
+> **Deep dive.** The ADR template; skip on a first reading.
 
 ```markdown
 <!-- path: book/projects/examples/ch32/adr/0001-template.md (excerpt; full file on disk) -->
@@ -1008,109 +1029,94 @@ requirement, a date. AI decisions decay faster than most; every ADR here names i
 How to undo it, how long that takes, and which flag or version pin performs it.
 ```
 
-The repository also contains a filled example, `adr/0002-classifier-port-and-recorded-fixtures.md`, recording why triage sits behind a port and why adapter tests replay recordings instead of mocking the SDK.
+`adr/0002-classifier-port-and-recorded-fixtures.md` is a filled example.
 
 ## Code walkthrough
 
-**Start at the composition root.** `composition.build_service` (on disk) is the only function that names concrete classes. It builds the prompt store and flag evaluator, runs `check_consistency` (every configured prompt version exists, the lock holds, every flag variant with traffic has a configured value), builds the static manifest (provider, tool schema labels, flag snapshot hash, timeout), and wires `TriageService`. A flag that sends 10% of traffic to `treatment` while no treatment prompt is configured fails here, at boot, with a message naming the flag and variant. Without that check, the service would silently fall back to control and the experiment would compare control against control for two weeks.
+**Start at the composition root.** `composition.build_service` is the only function that names concrete classes. Its `check_consistency` step fails at boot when a flag sends traffic to `treatment` but no treatment prompt is configured. Otherwise the service would silently serve control, and the experiment would compare control with control for weeks.
 
-**The parser is the most tested twenty lines.** `extract_json_object` in `domain/parsing.py` (on disk) is a scanner rather than a regex because braces inside string values (`"rationale": "matched {x}"`) and escaped quotes defeat regexes; the property test that embeds arbitrary nested JSON after arbitrary prose is what proves it. Normalizers reject booleans explicitly because `bool` is a subclass of `int` in Python and `str(True)` would otherwise flow through.
+**The parser scans; it does not use a regex.** Braces inside strings (`"rationale": "matched {x}"`) and escaped quotes defeat regexes, so `extract_json_object` is a small scanner. Normalizers reject booleans explicitly because `bool` is a subclass of `int` in Python.
 
-**Notice what the adapter request contains.** The committed cassette's request body includes the JSON Schema of `TriageDecision`, which includes its docstring as the schema description. Editing that docstring changes the request, which produces a `CassetteMiss` in CI. That is correct: the docstring is part of what the model sees, so it is part of the prompt. Treat schema descriptions and tool descriptions with the same review as prompt files.
+**Notice what the adapter request contains.** The request carries `TriageDecision`'s JSON Schema, whose docstring becomes the schema description, so editing the docstring causes a `CassetteMiss` in CI. That is correct: the model reads the description, so review it like a prompt.
 
-**The eval gate evaluates the shipping code.** `eval_gate.evaluate` (on disk) calls `load_settings` and `build_service` exactly as the HTTP entry point does, with an in-memory tracer. Every evaluation report contains the full manifest. The baseline stores the dataset version; comparing against a baseline built on a different dataset exits with code 2, because a three-point drop on a dataset that gained ten hard cases is not evidence of a regression. `--strict-attribution` turns "two components changed at once" from a warning into a failure, which a team can enable on the default branch (the example pipelines leave it off).
+**The eval gate evaluates the shipping code.** `eval_gate.evaluate` builds the service exactly as the HTTP entry point does. A baseline from a different dataset exits 2: a three-point drop on a dataset that gained ten hard cases is not a regression.
 
-**The flags are a pure function.** `FlagEvaluator.evaluate` has no I/O, which is why it can be called on every request without latency and why a replay of last month's trace reproduces the same assignment. Operations (`kill`, shown above, and `ramp`) return new evaluators instead of mutating, matching how a real flag service distributes immutable snapshots.
-
-**Shadow runs never touch the response.** `run_shadow` in `experiments.py` (on disk) returns the primary's outputs, catches every shadow exception, and only counts. In production the shadow call should go to a queue and run asynchronously with tool execution disabled; the example's `run_shadow` is synchronous so that tests can check isolation.
+**Shadow runs never touch the response.** `run_shadow` returns the primary's outputs and swallows every shadow exception. It is synchronous for testing; in production the shadow runs asynchronously from a queue, with tools disabled.
 
 ## Production considerations
 
-**Latency.** Layering adds microseconds; the flag evaluation is one SHA-256 per flag; the manifest's span attributes are a few dozen strings. The latency-relevant decisions are elsewhere: the classifier timeout (8 s by default, configured and recorded in the manifest), and shadow traffic, which must be asynchronous so that the shadow's latency never adds to the user's.
+**Latency.** Layering adds microseconds and a flag costs one SHA-256. What matters is the classifier timeout (8 s by default, in the manifest) and asynchronous shadow traffic.
 
-**Cost.** Every online technique costs model calls. Shadow traffic doubles inference spend for the shadowed share. Nightly drift evaluation on a 60-case golden set is cheap; on a 5,000-case set with an LLM judge it is not, so sample or tier it (Chapter 30 for cost models). Canary cost guardrails catch a prompt that doubles context length before it reaches everyone.
+**Cost.** Shadow traffic doubles spend for its share. Nightly drift evaluation on 60 cases is cheap; on 5,000 cases with an LLM judge, sample or tier it (Chapter 30).
 
-**Security.** Provider keys exist only in protected CI variables for the default branch and scheduled runs; pull request pipelines use the simulated model. Cassettes and snapshots are committed, so they must be scrubbed of PII and never contain credentials; the transport strips credential headers by construction and the test proves it. The manifest goes into traces, so it must not contain secrets; it holds versions and hashes, not values. Flag overrides keyed by user id are personal data in some jurisdictions; keep them short-lived.
+**Security.** The manifest goes into traces, so it holds versions and hashes, never secrets. Flag overrides keyed by user id can be personal data; keep them short-lived.
 
-**Operations.** The on-call engineer needs three things during an AI incident: which manifest fingerprints are serving traffic, which one correlates with the bad metric, and a one-step rollback. With version attributes on spans, the first two are a group-by query (Chapter 31). The kill switch and the flag ramp are the rollback for prompts and models; the canary weight is the rollback for code. Write the runbook entry for "kill the triage.model flag" before the experiment starts.
-
-**Provider drift.** Pin dated model identifiers where available, record the served model, and keep the nightly drift job. A nightly failure with an unchanged fingerprint is the clearest signal that the dependency changed.
+**Operations.** During an incident, on-call needs the serving fingerprints, the one that correlates with the bad metric, and a one-step rollback. Version attributes make the first two a group-by query (Chapter 31); flags roll back prompts and models, and the canary weight rolls back code.
 
 ## Common mistakes
 
-Most mistakes are the review checklist's questions left unasked. Four come up often enough to call out:
+Most mistakes are review checklist questions left unasked. Two are common enough to name:
 
-- **Testing against a live model in unit tests.** It is slow, flaky, and costly, and one sample is not quality evidence. Use fakes for logic, cassettes for adapters, the eval gate for quality.
-- **Calling a 5% canary an A/B test.** It lacks the power to show a few points of improvement in any reasonable window.
+- **Calling a 5% canary an A/B test.** It lacks the power to show a few points of improvement.
 - **Comparing against a baseline built on a different dataset** and calling the difference a regression or an improvement.
-- **Leaving flags forever** and keeping a `scripts/` folder that re-implements the pipeline. Both create code paths nobody tests.
 
 ## Failure modes
 
-**Silent fallback to control.** A flag sends traffic to a variant the service does not know, and defensive code serves control. The experiment dashboards show two identical arms. Telemetry: spans show `version.flags.triage.prompt = treatment` with `version.prompts.triage.classify` equal to the control label. Prevention: the startup consistency check; test: `test_flag_pointing_at_unconfigured_variant_fails_at_startup`.
+**Silent fallback to control.** A flag sends traffic to an unknown variant, defensive code serves control, and dashboards show two identical arms. Telemetry: spans show `version.flags.triage.prompt = treatment` with `version.prompts.triage.classify` equal to the control label. Prevention: the startup consistency check.
 
-**Stale cassette after a prompt change.** Someone runs tests in `auto` mode locally, a new recording is appended for the new prompt, and the old one stays. Over months the cassette file holds dozens of dead entries. Telemetry: `RecordReplayTransport.unused_keys()` is non-empty after the suite. Prevention: CI uses `replay`, and a test asserts no unused keys for committed cassettes.
+**Stale cassette after a prompt change.** Local runs in `auto` mode append recordings for new prompts and keep the old ones, so cassettes fill with dead entries. Telemetry: `RecordReplayTransport.unused_keys()` is non-empty after the suite. Prevention: `replay` in CI, and a test asserting no unused keys.
 
-**Parser fallthrough.** Output like `"category": "Security Report"` or `"priority": 2` hits an unhandled branch and either crashes or defaults to a harmless-looking category. Telemetry: a spike in `triage.outcome = parse_error`, or worse, a category distribution shift with no prompt change. Prevention: normalizers plus the totality property test; never default a category.
+**Parser fallthrough.** Output like `"category": "Security Report"` or `"priority": 2` crashes the parser or defaults to a harmless-looking category. Telemetry: a spike in `triage.outcome = parse_error`, or a category shift with no prompt change. Prevention: normalizers, the totality property test, and no default category.
 
-**Provider model drift.** The provider updates the model behind an alias. No deploy happened. Telemetry: `llm.served_model` changes on spans; the nightly drift eval fails with an unchanged fingerprint for everything else. Response: pin, re-baseline, or roll forward with a deliberate experiment.
+**Provider model drift.** The provider updates the model behind an alias; no deploy happened. Telemetry: `llm.served_model` changes on spans, and the nightly drift eval fails with every other component unchanged. Response: pin dated identifiers, re-baseline, or roll forward with a deliberate experiment.
 
-**Attribution loss.** Prompt `1.1.0`, a new model, and a rebuilt index ship the same day; escalations rise. Telemetry: the manifest diff between before and after shows three changed components. Response: roll back to the last single-component state and reintroduce one change at a time, each behind its own flag.
+**Attribution loss.** Prompt `1.1.0`, a new model, and a rebuilt index ship the same day; escalations rise. Telemetry: the manifest diff shows three changed components. Response: roll back to the last single-component state and reintroduce changes one at a time, each behind a flag.
 
-**Correlated experiments.** Two flags share a salt; the "model experiment" and the "prompt experiment" assign the same users to treatment. Both appear to win, and the combination performs worse than either alone. Telemetry: cross-tabulating the two flag attributes on spans shows near-perfect correlation. Prevention: per-flag salts; test: `test_different_salts_give_independent_assignments`.
+**Correlated experiments.** Two flags share a salt, so the model and prompt experiments treat the same users. Both appear to win, yet the combination performs worse than either alone. Telemetry: cross-tabulating the two flag attributes shows near-perfect correlation. Prevention: per-flag salts.
 
-**Canary that never decides.** The policy's minimum sample is larger than the canary window can deliver at 5%, so the verdict is permanently `hold` and someone promotes manually "because it looked fine." Prevention: compute the expected requests in the window before choosing the weight and window; hold must have a timeout that escalates to a human decision recorded in the ADR. The example pipelines take the conservative version of that timeout: a hold fails the canary job and rolls back.
+**Canary that never decides.** The minimum sample exceeds what the window delivers at 5%, so the verdict stays `hold` and someone promotes manually "because it looked fine." Prevention: compute expected requests before choosing weight and window, and give `hold` a timeout that escalates to a recorded human decision (the example pipelines simply roll back).
 
-**Config drift between environments.** Staging runs prompt `1.1.0`, prod runs `1.0.0`, and an eval in staging is cited as evidence for prod. Telemetry: the `/v1/version` endpoint and the manifest fingerprints differ. Prevention: evidence in ADRs and release notes cites manifest fingerprints, not environment names.
+**Config drift between environments.** Staging runs prompt `1.1.0`, prod runs `1.0.0`, and a staging eval is cited as evidence for prod. Telemetry: the `/v1/version` endpoint and the manifest fingerprints differ. Prevention: ADRs and release notes cite manifest fingerprints, not environment names.
 
 ## Tradeoffs
 
 | Decision | Option A | Option B | Choose A when |
 |---|---|---|---|
-| Structure | Ports and adapters | Single module | the feature will live longer than a quarter or has more than one reason to change |
-| Model double in tests | FakeLLM | Recorded fixtures | testing use-case logic; use fixtures for adapter encoding and error mapping |
-| Flag storage | File snapshot in repo | Flag service | few flags, changes reviewed in pull requests; a service when non-engineers ramp flags or you need instant kills |
+| Structure | Ports and adapters | Single module | the feature will outlive a quarter or has two reasons to change |
+| Flag storage | File snapshot in repo | Flag service | few flags, reviewed in pull requests; a service when non-engineers ramp flags or kills must be instant |
 | Randomization unit | User | Request | the experience must be consistent; request only for stateless, single-shot features |
-| Eval gate provider in pull requests | Simulated model | Real provider | secrets must not reach pull request pipelines; real provider on main and nightly |
-| Online step | Shadow first | Canary first | the candidate is a different model or risky prompt and doubled cost for a slice is affordable |
-| Attribution | One change at a time | Bundled release | always, unless the ADR explicitly accepts bundling for speed |
-| Prompt immutability | Lock with hashes | Edit in place | anything that has served production traffic |
+| Online step | Shadow first | Canary first | the candidate is a new model or risky prompt and doubled cost for a slice is affordable |
 
-The deepest trade-off is speed against attribution. One component per release, each behind a flag with a canary and an experiment, is slower than shipping everything at once. Skipping it is faster until the first incident whose cause cannot be attributed, and untangling that can take weeks.
+The deepest trade-off is speed against attribution. One component per release, each behind a flag, is slower than shipping everything at once, until an incident whose cause cannot be attributed takes weeks to untangle. Bundle only when an ADR accepts the cost.
 
 ## Evaluation and testing
 
-Test the engineering practices themselves, not only the feature. Each practice in this chapter has a test that would fail if the practice silently stopped working:
+Test the practices themselves: each needs a test that fails if it silently stops working. Beyond those named in Core concepts:
 
 | Practice | Test that guards it |
 |---|---|
-| Dependency rule | AST fitness test, plus a test proving it catches a violation |
-| Total parser | hypothesis totality, round trip, idempotent normalization; every production failure added as `@example` |
-| Tool contracts | schema equals validator, no extra properties, examples, idempotency, tenant scoping, schema-hash lock |
-| Prompt versions | snapshots with injection-shaped input, failing on a missing snapshot; delimiter property test; immutability lock |
+| Dependency rule | the fitness test, plus a test proving it catches a planted violation |
 | Adapters | replayed recordings, including a recorded 503 so error mapping runs offline |
-| Flags | allocation within tolerance over 20,000 users, monotonic ramp, kill switch, unknown flag safe, independent salts |
-| Config | prod rules, missing keys, secrets absent from repr and errors, immutability |
-| Manifest | stable fingerprint, any component change changes it, diff names the changed components |
-| Experiments | worked sample sizes, every canary branch, shadow isolation |
-| Pipelines | workflow files parse; stage dependencies in the promised order |
-| Eval gate | passes on baseline, fails on regression and on unparseable output, refuses incomparable baselines, enforces attribution |
+| Flags | allocation within tolerance over 20,000 users, monotonic ramp, kill switch, independent salts |
+| Manifest | any component change changes the fingerprint, and the diff names it |
+| Eval gate | fails on regression and on unparseable output, refuses incomparable baselines |
 
-The example's suite runs all of these offline in a couple of seconds. The one test it deselects by default re-records a cassette against a real provider and is marked `integration`.
+The suite runs offline in a couple of seconds; one deselected `integration` test re-records a cassette against a real provider.
 
 ## Before you ship
 
 - [ ] The architecture fitness test runs in CI and fails if the domain or application imports a provider SDK, `aie_core`, httpx, or a framework.
 - [ ] The model-output parser has a totality property test, and every parse failure seen in staging is pinned as an `@example`.
-- [ ] Every prompt version that can serve traffic has a committed snapshot and an entry in the prompts lock; a missing snapshot fails the test.
-- [ ] Every tool's advertised schema is generated from its validator, and the tool-schema lock fails on a schema change without a version bump.
-- [ ] Provider adapter tests replay recorded fixtures with `CASSETTE_MODE=replay` in CI, the cassettes contain no credentials or PII, and no recording is unused.
-- [ ] Startup validation rejects the fake provider, a missing git sha, and a missing flag file in prod, and the consistency check maps every flag variant with traffic to a configured value.
-- [ ] Every request span carries the `version.*` attributes, the manifest fingerprint, and `llm.served_model`, and a group-by on the fingerprint works in the trace backend.
+- [ ] Every servable prompt version has a committed snapshot and a lock entry; a missing snapshot fails.
+- [ ] Every tool schema is generated from its validator, and the lock fails a schema change without a version bump.
+- [ ] Provider keys exist only in protected CI variables for the default branch and scheduled runs.
+- [ ] Adapter tests replay cassettes with `CASSETTE_MODE=replay` in CI; cassettes hold no credentials or PII and no unused recordings.
+- [ ] Startup validation rejects the fake provider, a missing git sha, and a missing prod flag file, and every flag variant with traffic maps to a configured value.
+- [ ] Every request span carries the `version.*` attributes, the fingerprint, and `llm.served_model`, and a group-by on the fingerprint works.
 - [ ] Every new behavior sits behind a flag with a safe variant and a kill switch, and the runbook entry for killing it is written.
-- [ ] The canary policy (guardrails, window, `min_requests`) is written down before the canary starts, and the window can deliver `min_requests` at the planned weight.
+- [ ] The canary policy (guardrails, window, `min_requests`) is written before the canary starts, and the window can deliver `min_requests` at the planned weight.
 - [ ] The experiment plan states the randomization unit, primary metric, guardrails, and a sample size that the planned split can reach.
-- [ ] The offline eval gate blocks merge on any critical-slice regression, refuses a baseline from a different dataset or provider, and its report carries the manifest fingerprint.
+- [ ] The eval gate blocks merge on any critical-slice regression, refuses an incomparable baseline, and reports the manifest fingerprint.
 - [ ] The nightly drift job runs against the real provider with its own baseline, and someone is alerted when it fails.
 
 ## Exercises

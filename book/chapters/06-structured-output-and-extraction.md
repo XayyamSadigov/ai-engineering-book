@@ -301,7 +301,7 @@ Project 1 lives in `book/projects/p1-extraction-api/`. The listings below are th
 ```text
 p1-extraction-api/
   pyproject.toml            aie-core as a path dependency
-  env.example               every environment variable with its default
+  .env.example              every environment variable with its default
   Dockerfile                build from book/projects
   README.md                 configuration table and run instructions
   extraction_api/
@@ -316,7 +316,7 @@ p1-extraction-api/
                             test_security_and_limits, test_eval
 ```
 
-Configuration follows the book's convention: model, provider, and tracing variables (`LLM_PROVIDER`, `LLM_MODEL`, the provider API keys, `TRACE_SINK`, and the rest) are read by `aie_core.Settings`; the service's own knobs use the `EXTRACT_` prefix. The ones that change behavior most are below; the README has the full table and `env.example` lists every variable.
+Configuration follows the book's convention: model, provider, and tracing variables (`LLM_PROVIDER`, `LLM_MODEL`, the provider API keys, `TRACE_SINK`, and the rest) are read by `aie_core.Settings`; the service's own knobs use the `EXTRACT_` prefix. The ones that change behavior most are below; the README has the full table and `.env.example` lists every variable.
 
 | Variable | Default | Effect |
 |---|---|---|

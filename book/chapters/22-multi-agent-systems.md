@@ -214,7 +214,7 @@ The project layout:
 
 ```
 book/projects/p6-research-team/
-  pyproject.toml  README.md  env.example  Dockerfile
+  pyproject.toml  README.md  .env.example  Dockerfile
   research_team/
     contracts.py  corpus.py  tools.py  ledger.py  tracing.py  roles.py
     verification.py  checks.py  team.py  baseline.py  render.py  scripted.py
@@ -235,7 +235,7 @@ python -m research_team trace .runs/<trace_id>
 python -m research_team.eval.benchmark
 ```
 
-Configuration comes from `P6_*` environment variables, read only by the CLI and the container (`research_team/config.py`): `P6_OFFLINE` (scripted policy or the model from `LLM_PROVIDER`), `P6_MAX_TOKENS`, `P6_MAX_COST_USD`, `P6_DEADLINE_S`, `P6_MAX_CHILDREN`, `P6_MAX_PARALLEL`, `P6_CHILD_MAX_TOKENS`, `P6_CHILD_MAX_STEPS`, `P6_MAX_ROUNDS`, `P6_LOG_DIR`, `P6_SHARED_DATA_DIR`. The README documents each in a table, and `env.example` lists them with illustrative defaults.
+Configuration comes from `P6_*` environment variables, read only by the CLI and the container (`research_team/config.py`): `P6_OFFLINE` (scripted policy or the model from `LLM_PROVIDER`), `P6_MAX_TOKENS`, `P6_MAX_COST_USD`, `P6_DEADLINE_S`, `P6_MAX_CHILDREN`, `P6_MAX_PARALLEL`, `P6_CHILD_MAX_TOKENS`, `P6_CHILD_MAX_STEPS`, `P6_MAX_ROUNDS`, `P6_LOG_DIR`, `P6_SHARED_DATA_DIR`. The README documents each in a table, and `.env.example` lists them with illustrative defaults.
 
 ```toml
 # path: book/projects/p6-research-team/pyproject.toml

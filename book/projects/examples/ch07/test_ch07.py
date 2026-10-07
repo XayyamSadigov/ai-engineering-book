@@ -6,6 +6,7 @@ FakeLLM instances stand in for a "small" and a "large" model; no network, no API
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 
 import pytest
@@ -13,6 +14,7 @@ import pytest
 from aie_core import (CompletionRequest, ContentPart, InvalidRequestError, Message, PricingTable,
                       ProviderUnavailableError, Role, ToolSpec, FakeLLM)
 from aie_core.embeddings import FakeEmbeddings
+from aie_core.llm.tokens import count_tokens
 from aie_core.observability import InMemoryTracer
 
 from cascade_eval import (CaseOutcome, UtilityModel, baseline, best_by_router_accuracy,
@@ -50,7 +52,11 @@ def pricing(catalog) -> PricingTable:
 
 
 def big_text(tokens: int) -> str:
-    return "incident timeline " * (tokens // 2)  # roughly two tokens per repetition
+    # Size the text with the same counter the router uses (tiktoken or the 4-chars heuristic),
+    # so the test does not depend on which one is available offline.
+    unit = "incident timeline "
+    per_unit = count_tokens(unit * 100) / 100
+    return unit * math.ceil(tokens / per_unit)
 
 
 def make_router(catalog, gold, **overrides) -> Router:

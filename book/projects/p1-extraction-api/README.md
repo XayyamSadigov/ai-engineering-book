@@ -23,7 +23,7 @@ Batch mode runs the same pipeline with bounded concurrency and per-document erro
 ```
 p1-extraction-api/
   pyproject.toml            dependencies; aie-core as a path dependency
-  env.example               every environment variable with its default
+  .env.example              every environment variable with its default
   Dockerfile                build from book/projects (see below)
   extraction_api/
     config.py               AppSettings (EXTRACT_* variables)
@@ -61,7 +61,7 @@ p1-extraction-api/
 ## Configuration
 
 Model and tracing variables are read by `aie_core.Settings`; service variables use the
-`EXTRACT_` prefix. Copy `env.example` to `.env` to change them.
+`EXTRACT_` prefix. Copy `.env.example` to `.env` to change them.
 
 | Variable | Default | Meaning |
 |---|---|---|

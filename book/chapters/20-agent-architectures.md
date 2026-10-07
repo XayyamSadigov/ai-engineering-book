@@ -959,7 +959,7 @@ The judge's verdict does not appear in the state machine on purpose. The determi
 
 ```
 book/projects/p5-incident-agent/
-  pyproject.toml  env.example  Dockerfile  README.md
+  pyproject.toml  .env.example  Dockerfile  README.md
   data/alerts.json  data/telemetry.json
   incident_agent/
     config.py  tools.py  judge.py  agent.py  service.py  cli.py  api.py
@@ -985,7 +985,7 @@ The project depends on `aie_core`, `agentkit`, `ragkit` (for loading and section
 | `P5_MAX_LLM_CALLS` | 60 | hard ceiling on model calls per investigation, all roles |
 | `P5_CHANNEL` | `#incidents` | where approved reports go |
 
-The environment template is `env.example`, and the README lists install, run, and Docker commands.
+The environment template is `.env.example`, and the README lists install, run, and Docker commands.
 
 ### Tools
 

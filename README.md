@@ -238,11 +238,21 @@ Plus [`shared-data`](book/projects/shared-data) (the synthetic Northwind corpus 
 
 All code targets **Python 3.11+** and runs **offline** in tests (fake model and embedding clients). Real providers are enabled through environment variables documented in each project's `.env.example`.
 
+Setup uses [uv](https://docs.astral.sh/uv/). One script creates `.venv` at the repo root with every library and project installed in editable mode:
+
 ```bash
-cd book/projects/aie_core && pip install -e .          # the shared library
-cd ../p3-rag-assistant && pip install -e . && pytest   # any project
-book/tools/verify_code.sh                              # compile and test everything
+git clone https://github.com/XayyamSadigov/ai-engineering-book && cd ai-engineering-book
+book/tools/setup_dev.sh                      # about a minute; creates .venv
+source .venv/bin/activate
+cd book/projects/p3-rag-assistant && pytest -q   # run one project from its own folder
+cd - && book/tools/verify_code.sh            # compile and test everything (exit 1 on any failure)
 ```
+
+Run tests from each project's folder, not from the repo root: the projects share module names such as `tests`, so one root-level pytest run cannot collect them all. `verify_code.sh` does the per-project loop for you.
+
+> **Do not install the projects with plain `pip install -e .`.** pip ignores the `[tool.uv.sources]` table that points each project at its sibling libraries, so installs fail, and several library names (`ragkit`, `evalkit`, `toolkit`, `agentkit`, `guardrails`, `reliability`, `memorykit`) belong to unrelated packages on PyPI that pip would fetch instead.
+
+To call a real model, copy a project's `.env.example` to `.env`, set `LLM_PROVIDER` and the provider's API key, and run the project's CLI or demo. Nothing else changes.
 
 To build the website locally:
 

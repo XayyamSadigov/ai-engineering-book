@@ -41,7 +41,7 @@ Plain pip works too: `pip install -e ../../aie_core -e ../../agentkit -e ../../r
 
 ## Configuration
 
-Copy `env.example` and adjust. All variables are optional.
+Copy `.env.example` and adjust. All variables are optional.
 
 | Variable | Default | Effect here |
 |---|---|---|

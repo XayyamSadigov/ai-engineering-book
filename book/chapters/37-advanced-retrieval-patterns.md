@@ -274,7 +274,7 @@ book/projects/examples/ch37/
   code_search.py         CodeIndex, split_identifier
   long_context_cost.py   Workload, Prices, estimate, compare
   tests/                 54 offline tests
-  pyproject.toml, README.md, env.example
+  pyproject.toml, README.md, .env.example
 ```
 
 | Variable | Default | Effect |

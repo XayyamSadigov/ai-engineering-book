@@ -31,7 +31,7 @@ every role; set a real provider to drive it with a model.
 
 ```
 p5-incident-agent/
-  pyproject.toml  env.example  Dockerfile  README.md
+  pyproject.toml  .env.example  Dockerfile  README.md
   data/
     alerts.json          two synthetic alerts (Trackline latency, RoutePilot latency)
     telemetry.json       metric series, service dependencies, deploy history
@@ -106,7 +106,7 @@ docker run -p 8000:8000 -v p5-state:/app/state northwind/incident-agent
 | `P5_CHUNK_TOKENS` | 250 | ragkit section-chunk size |
 | `P5_SHARED_DATA_DIR`, `P5_DATA_DIR` | `../shared-data`, `./data` | corpora and fake telemetry |
 
-The template is `env.example` (copy it to `.env`). Users and their groups are a fixed directory in
+The template is `.env.example` (copy it to `.env`). Users and their groups are a fixed directory in
 `config.py`, standing in for an identity provider; the API reads identity from `X-User` only.
 
 ## Statuses

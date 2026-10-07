@@ -14,7 +14,7 @@ what the benchmark says about it, including where it does not pay off.
 
 ```
 p6-research-team/
-  pyproject.toml  README.md  env.example  Dockerfile
+  pyproject.toml  README.md  .env.example  Dockerfile
   research_team/
     contracts.py      TaskEnvelope, ResultEnvelope, BudgetSlice, Plan, ResearchFindings, Claim, ...
     corpus.py         shared-data docs split into section passages, BM25 search, ACL filter
@@ -65,7 +65,7 @@ docker run --rm northwind/research-team ask "How many unused PTO days can I carr
 ## Configuration
 
 Library classes take explicit arguments. Only the CLI and the container read the environment
-(`research_team/config.py`). Copy `env.example` to `.env`.
+(`research_team/config.py`). Copy `.env.example` to `.env`.
 
 | Variable | Default | Meaning |
 |---|---|---|

@@ -36,7 +36,7 @@ FRONT = [
     ("00-learning-roadmap.md", "Learning roadmap"),
 ]
 BACK = [
-    ("appendix-c-interview-preparation.md", "Appendix C — Interview preparation"),
+    ("appendix-c-interview-preparation.md", "Appendix — Interview preparation"),
     ("glossary.md", "Glossary"),
     ("references.md", "References"),
     ("coverage-matrix.md", "Coverage matrix"),

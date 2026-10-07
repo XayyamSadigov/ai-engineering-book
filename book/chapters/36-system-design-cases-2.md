@@ -32,7 +32,7 @@ All numbers in this chapter are illustrative. They are chosen to be internally c
 
 ### How to use the cases as practice
 
-Each case has the same five parts. A **Try it first** box states the prompt the way an interviewer or an architecture review would, and lists what a complete answer covers. Close the book, spend 45 minutes on your own design with the Chapter 35 worksheet, and only then read the ten steps. After the steps, a **Whiteboard version** shows what you would actually say in five minutes, **Follow-up questions** list what you will be pushed on, and a **Scoring rubric** separates a weak, a solid and a strong answer. Score your own attempt against the rubric, then answer the follow-ups aloud. Appendix C (Interview Preparation) summarizes all nine cases in section 2.10, lists the numbers worth memorizing in section 3, and describes the drill method in section 5.
+Each case has the same five parts. A **Try it first** box states the prompt the way an interviewer or an architecture review would, and lists what a complete answer covers. Close the book, spend 45 minutes on your own design with the Chapter 35 worksheet, and only then read the ten steps. After the steps, a **Whiteboard version** shows what you would actually say in five minutes, **Follow-up questions** list what you will be pushed on, and a **Scoring rubric** separates a weak, a solid and a strong answer. Score your own attempt against the rubric, then answer the follow-ups aloud. the interview appendix summarizes all nine cases in section 2.10, lists the numbers worth memorizing in section 3, and describes the drill method in section 5.
 
 ---
 

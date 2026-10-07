@@ -107,7 +107,7 @@ implementation chapter.
 6. **Write the recall note.** Close the book and write from memory: five concepts, one mechanism (an
    equation, a data flow, or a state machine), one production trade-off, one failure mode, and one
    situation where you would not use the technique. If you cannot fill all five lines, reread. Keep the
-   notes in one file; they become your interview preparation (Appendix C).
+   notes in one file; they become your interview preparation (the interview appendix).
 
 Two parts of each chapter are built for later use rather than first reading. **Before you ship**
 (Chapters 3 to 34, 37 and 38) is a checklist to run against your own system before a launch, and
@@ -277,7 +277,7 @@ secure them, and explain them. Not one of the four, all four.
 - an adversarial suite with direct and indirect injection, exfiltration via URLs, and memory poisoning;
 - redaction of PII before the model and in logs, and secrets that never appear in code or traces.
 
-**You must be able to explain**, in the layered form Appendix C teaches:
+**You must be able to explain**, in the layered form the interview appendix teaches:
 
 - why decode is memory-bandwidth-bound and what that implies for batching and latency;
 - why prompt injection is an authorization problem, not a prompt-writing problem;
@@ -334,5 +334,5 @@ and the README's "Acceptance checklist mapped to evidence" table names the test 
 - [ ] Alert rules as code (page on user-visible SLO breaches and any cross-tenant event, ticket on drift), with a test that healthy traffic fires none and an injected fault fires the right one.
 - [ ] At least one documented failure analysis: what broke, which span showed it, what changed, how the gate now catches it.
 
-When every box is checked, you have the skill set this book is meant to build. Then read Appendix C
+When every box is checked, you have the skill set this book is meant to build. Then read the interview appendix
 and practice saying it out loud.

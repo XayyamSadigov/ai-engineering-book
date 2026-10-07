@@ -1,4 +1,4 @@
-# Appendix C — Interview Preparation
+# Appendix — Interview Preparation
 
 An AI engineering interview tests whether you can reason from invariants: probabilistic output,
 context limits, retrieval recall, authorization boundaries, queueing, latency, evaluation, failure

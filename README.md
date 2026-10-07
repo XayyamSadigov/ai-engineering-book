@@ -21,6 +21,8 @@
 
 **Read online:** <https://xayyamsadigov.github.io/ai-engineering-book/> · **Single file:** [AI_ENGINEERING_BOOK.md](book/AI_ENGINEERING_BOOK.md)
 
+**Run the code in two commands** (needs [uv](https://docs.astral.sh/uv/)): `book/tools/setup_dev.sh` then `book/tools/verify_code.sh`. Everything runs offline; no API key needed. Details in [Running the Code](#running-the-code).
+
 ---
 
 ## Table of Contents
@@ -67,7 +69,7 @@ In simple words:
 - **Engineers joining a RAG, search, or agents team** who need the production view, not just the demo.
 - **SREs and platform engineers** who will run AI services and need SLOs, observability, and cost control.
 - **Tech leads and architects** who must choose between prompting, RAG, tools, fine-tuning, and agents — and defend the choice.
-- **Anyone preparing for AI engineering interviews** (see [Appendix C](book/appendix-c-interview-preparation.md)).
+- **Anyone preparing for AI engineering interviews** (see [the interview appendix](book/appendix-c-interview-preparation.md)).
 
 No machine-learning background is assumed, and none is taught beyond what explains model behavior.
 
@@ -228,11 +230,10 @@ Plus [`shared-data`](book/projects/shared-data) (the synthetic Northwind corpus 
 ## Appendices
 
 - [Learning Roadmap](book/00-learning-roadmap.md) — reading paths, study method, graduation criteria
-- [Appendix C — Interview Preparation](book/appendix-c-interview-preparation.md)
+- [Appendix — Interview Preparation](book/appendix-c-interview-preparation.md)
 - [Glossary](book/glossary.md)
 - [References](book/references.md)
 - [Coverage Matrix](book/coverage-matrix.md) — which chapter covers which competency
-- [Analysis](book/analysis) — source map, competency map, gap analysis, and the authoring guide behind the book
 
 ## Running the Code
 

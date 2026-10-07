@@ -19,7 +19,7 @@ Every earlier chapter could be tested on its own. A packer that drops superseded
 
 The capstone is also where the book's mental models stop being slogans. "Retrieval quality dominates generation quality" becomes a stage-isolation table that names the stage to fix. "The model proposes, code authorizes" becomes a function that rehydrates an email address only inside the tool layer. "Evaluate before optimizing" becomes an exit code that blocks a merge. Building the whole system is how you find out whether you believe them.
 
-Finally, a capstone is a portfolio artifact and an interview answer. Being able to say "this is the request path, this is where the tenant id originates, this is the span that showed the regression, this is the gate that now catches it" is the difference between having read about AI engineering and having done it (Appendix C).
+Finally, a capstone is a portfolio artifact and an interview answer. Being able to say "this is the request path, this is where the tenant id originates, this is the span that showed the regression, this is the gate that now catches it" is the difference between having read about AI engineering and having done it (the interview appendix).
 
 ## Mental model
 

@@ -186,7 +186,7 @@ All prices in this chapter are illustrative inputs: 2 USD per million input toke
 
 Each case below opens with a **Try it first** box: the prompt as a product owner or an interviewer would give it, and what a complete answer covers. Close the book, set a 45-minute timer, and produce the worksheet, one diagram with the trust boundary, and the step-9 arithmetic before reading on. Then compare. The question is not whether you picked the same components; it is whether you answered the same questions and found the same hardest constraint.
 
-After each case, three short sections turn it into a drill: a **whiteboard version** (what you would actually say in five minutes), the **follow-up questions** an interviewer would ask next, and a **scoring rubric** that separates a weak, a solid, and a strong answer. Appendix C (Interview Preparation) is the companion: its section 2.10 summarizes each case in one line per step for recall, and its section 5 describes the timed drill these boxes are built for.
+After each case, three short sections turn it into a drill: a **whiteboard version** (what you would actually say in five minutes), the **follow-up questions** an interviewer would ask next, and a **scoring rubric** that separates a weak, a solid, and a strong answer. the interview appendix is the companion: its section 2.10 summarizes each case in one line per step for recall, and its section 5 describes the timed drill these boxes are built for.
 
 ## Case 1: Enterprise knowledge assistant
 

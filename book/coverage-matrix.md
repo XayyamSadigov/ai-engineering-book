@@ -1,6 +1,6 @@
 # Coverage Matrix
 
-This matrix maps every AI engineering skill in the book's competency map (`analysis/02-competency-map.md`)
+This matrix maps every AI engineering skill in the book's competency map
 to the chapter that teaches it, the depth reached, and the hands-on work that exercises it. It was
 built after all chapters were written and reviewed, by checking chapter text and code on disk.
 

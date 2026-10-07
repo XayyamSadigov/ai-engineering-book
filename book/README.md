@@ -4,13 +4,6 @@ A complete, self-contained textbook and field guide. Read it from the first chap
 you will be able to design, implement, evaluate, secure, deploy, observe, and improve production AI
 applications built on large language models.
 
-This book was produced by studying the *AI Engineering Complete Study Book v2 (2026)* (itself based on
-the topic map of a public AI Engineering course), keeping its engineering principles, removing its
-filler and out-of-scope material, and adding what a working AI engineer needs that the source lacked:
-complete runnable code, a shared library, six projects, a capstone, evaluation and security
-implementations, production engineering, system design cases, exercises with separate solutions, and a
-coverage matrix. The analysis that drove those decisions is in `analysis/`.
-
 ## Who this is for
 
 A strong software engineer (backend, full-stack, platform) who is comfortable with Python, HTTP APIs,
@@ -49,7 +42,6 @@ book/
   projects/                      aie_core, shared-data, p1..p6, per-chapter examples
   capstone/                      Northwind Assist
   glossary.md  references.md  coverage-matrix.md  appendix-c-interview-preparation.md
-  analysis/                      source map, competency map, gap analysis, TOC, authoring guide
   tools/                         build and verification scripts
 ```
 
@@ -79,3 +71,10 @@ Concepts in this book are vendor-independent. Where examples name a provider, it
 context sizes, and model names change quickly and are labeled illustrative where they appear. Protocol
 details (for example MCP) are described at the architecture level; check the current specification
 before implementing against it.
+
+## Acknowledgements
+
+The topic map of this book was informed by the public
+[AI Engineering Course](https://github.com/amitshekhariitbhu/ai-engineering-course) by Amit Shekhar /
+Outcome School. This book is an independent work that reorganizes the material for working software
+engineers, rewrites it, and adds runnable code, projects, a capstone, and exercises with solutions.

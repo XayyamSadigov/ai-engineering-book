@@ -14,10 +14,8 @@ exclude_docs: |
   /analysis/**
   !/projects/**/*.md
   !/capstone/**/*.md
-  !/analysis/*.md
   projects/shared-data/docs/
   AI_ENGINEERING_BOOK.md
-  analysis/reviews/
   tools/
   **/.pytest_cache/
 
@@ -200,7 +198,7 @@ nav:
       - "Chapter 38": solutions/ch38-solutions.md
       - "Chapter 39": solutions/ch39-solutions.md
   - Appendix:
-      - "Appendix C — Interview preparation": appendix-c-interview-preparation.md
+      - "Appendix — Interview preparation": appendix-c-interview-preparation.md
       - "Glossary": glossary.md
       - "References": references.md
       - "Coverage matrix": coverage-matrix.md

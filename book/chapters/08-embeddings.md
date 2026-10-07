@@ -1,6 +1,16 @@
 # Chapter 8 — Embeddings
 
-After this chapter you will be able to reason about embedding geometry well enough to choose a similarity metric, a vector size, and a unit of text with evidence rather than habit; to evaluate a candidate embedding model on your own labeled data in an afternoon; to version, batch, cache, and cost an embedding pipeline so that a model change is a planned migration rather than a silent corruption; and to use embeddings for jobs that have nothing to do with RAG: deduplication, topic discovery, ticket classification, intent routing, anomaly detection, and recommendation. The code is a small library, `embedlab`, built on `aie_core.embeddings`, plus a demo that runs every experiment on the Northwind documents and tickets (`book/projects/examples/ch08/`). All tests run offline with `FakeEmbeddings(vocabulary=...)`, and configuration alone switches every example to a real model.
+Embeddings turn text into vectors whose distances track relatedness. They sit under retrieval and under a family of cheap decisions, and every stored vector is tied to the exact model and settings that produced it, so choosing, evaluating, and versioning them well decides whether a model change is a planned migration or a silent corruption.
+
+**You will be able to:**
+- Choose a similarity metric, a vector size, and a unit of text (chunk or document) from measurements on your own data rather than habit.
+- Evaluate a candidate embedding model on a labeled query set in an afternoon.
+- Version an embedding pipeline with a space fingerprint so that mixed spaces and stale caches fail loudly.
+- Batch, cache, retry, and cost an embedding pipeline, including the wall-clock time of a full re-embed.
+- Build deduplication, topic discovery, classification, intent routing, anomaly detection, and recommendation on embeddings, with thresholds chosen from labeled data and an explicit "not sure" path.
+- Diagnose space mismatches, threshold collapse after a model update, and identifier blindness from telemetry.
+
+**Prerequisites:** Chapters 2 (token embeddings versus retrieval embeddings, softmax) and 3 (the `aie_core` embedding client, settings, and `CachedEmbeddings`). | **Code:** `book/projects/examples/ch08/` (run: `cd book/projects/examples/ch08 && pytest -q`) | **Builds:** the `embedlab` package.
 
 ## Why this matters
 
@@ -62,7 +72,7 @@ More dimensions can encode finer distinctions, but they cost memory, index build
 
 Some recent models are trained with *Matryoshka representation learning*: the loss is applied not only to the full vector but also to its prefixes (the first 64, 128, 256 dimensions, and so on), so the leading coordinates carry the coarsest, most important information and later coordinates add refinement. For such models you can truncate a vector to its first `k` dimensions, re-normalize it, and get a smaller vector that ranks almost as well. Some providers expose this as a `dimensions` parameter. The re-normalization step is not optional: a prefix of a unit vector is shorter than one, by a different amount for each vector, so un-normalized dot products would re-rank results by prefix length.
 
-For any model *not* trained this way, truncation is arbitrary dimensionality reduction and can destroy ranking quality. Never assume; measure. The `truncation_report` function in this chapter computes recall@k (the share of each query's relevant items found in the top k, averaged over queries) and MRR (mean reciprocal rank: one divided by the rank of the first correct hit, averaged over queries) at several prefix lengths and, separately, how many of the full-dimension top-k neighbors survive truncation. The fake model in this chapter happens to order its coordinates by word frequency, which makes it degrade gracefully, a useful stand-in for Matryoshka behavior:
+For any model *not* trained this way, truncation is arbitrary dimensionality reduction and can destroy ranking quality. Never assume; measure. The `truncation_report` function in this chapter computes recall@k (roughly, how many of each query's relevant items appear in the top k) and MRR (mean reciprocal rank: how high the first correct hit ranks; Chapter 10 gives the exact definitions of both) at several prefix lengths and, separately, how many of the full-dimension top-k neighbors survive truncation. The fake model in this chapter happens to order its coordinates by word frequency, which makes it degrade gracefully, a useful stand-in for Matryoshka behavior:
 
 | Dimensions kept | recall@3 | MRR | Top-3 overlap with full |
 |---|---|---|---|
@@ -91,6 +101,16 @@ Getting this wrong costs recall without raising any error. Forgetting the query 
 
 For symmetric tasks such as dedup, use the same role on both sides (the passage role in this chapter's code). For intent routing, route exemplars play the passage role and incoming messages the query role, because that mirrors how the model was trained to compare them.
 
+### The embedding space and its fingerprint
+
+Everything that changes a vector belongs to its *embedding space*: the model, the output dimensions, the text-preparation version (Unicode normalization, whitespace handling, chunk rendering), the query and passage prefixes, whether vectors are normalized, and any post-processing such as truncation or mean-centering. Two vectors are comparable only if every one of these matches. The *fingerprint* is a short hash over all of them.
+
+The fingerprint does two jobs. As a cache namespace, it guarantees that a changed space never gets old vectors back. Suppose Northwind indexes its handbook at 1,536 dimensions and later switches to 768 to save storage. A cache keyed on model name and text keeps returning 1,536-dimension vectors for unchanged paragraphs. A cache keyed on the fingerprint sees every key change and re-embeds every paragraph, which is the correct behavior. As an index tag, the fingerprint lets the index refuse writes and queries from any other space, which turns a silent quality regression into an exception at the first request.
+
+The book's code has two layers. `aie_core`'s `CachedEmbeddings` (Chapter 3) salts its keys with what a cache wrapper can see: provider, model, dimensions, instruction, and text-preparation version. That key is frozen at construction. A client that learns its dimensions lazily from the first response contributes `"unknown"` instead of changing keys mid-life, because a key that changed after the first response would orphan every entry written before it. This chapter's `EmbeddingSpace` covers the full list above, including normalization and post-processing, and is stored with the index. Chapter 9 carries the same fingerprint into its index namespaces and owns the mechanics of migrating between spaces.
+
+Three rules follow. Bump the text-preparation version whenever cleaning or chunk rendering changes, even for a "harmless" fix. Store the fingerprint next to the vectors, not only in configuration. Treat any fingerprint change as a data migration, never as a config tweak.
+
 ### Choosing a model
 
 There is no best embedding model, only the best one for your data under your constraints. The decision has six axes:
@@ -104,13 +124,15 @@ There is no best embedding model, only the best one for your data under your con
 | Size and speed | Dimensions drive storage and search cost; parameter count drives embedding latency and throughput when self-hosted |
 | Stability | Will the provider retire or silently update the model? Can you pin a version? What does a forced migration cost you? |
 
-Public benchmarks build a shortlist of three to five candidates; they do not pick a winner, because they average across tasks you do not have and models are increasingly tuned to them. The deciding evidence is your own retrieval evaluation, run identically for each candidate. Hosted versus self-hosted is usually settled by data policy before quality enters the picture: if a tenant's documents may not leave the region, the shortlist is the models you can run there. Small self-hosted models are often close to large hosted ones on narrow corporate corpora, and fine-tuning on a few thousand of your own query-passage pairs can close the gap.
+Public benchmarks build a shortlist of three to five candidates; they do not pick a winner, because they average across tasks you do not have and models are increasingly tuned to them. The deciding evidence is your own retrieval evaluation, run identically for each candidate. Hosted versus self-hosted is usually settled by data policy before quality enters the picture: if a tenant's documents may not leave the region, the shortlist is the models you can run there. Small self-hosted models are often close to large hosted ones on narrow corporate corpora.
+
+**When to fine-tune the embedder.** If gold-set recall is low specifically on domain vocabulary (product codes, internal jargon, legal or clinical terms), and lexical search plus reranking (Chapter 12) does not close the gap, fine-tuning the embedding model is the next option. The training data is query-passage pairs from your own traffic plus hard negatives mined from retrieval failures: the passages the current model ranks above the right one. A few thousand pairs often move domain recall noticeably (illustrative). The costs are ongoing. You now own a model version, so every retrain is a new space and a full re-embed, and you need a model you can self-host or that your provider lets you tune. Do not start before a gold set shows the problem, and evaluate on held-out queries across all slices, because tuning can trade general recall for domain recall. Chapter 33 covers the training mechanics; for RAG, an embedder or reranker fine-tune is often the highest-return fine-tune available.
 
 ## How it works
 
 Once a model is chosen, using it correctly is a pipeline problem. An embedding feature has two paths that must agree. The *write path* runs at ingestion: documents are split, each chunk is prepared (Unicode normalization, whitespace collapse, length cap), the passage prefix is applied, the cache is consulted, misses are batched to the provider, and the resulting vectors are normalized and written to an index tagged with the embedding space. The *read path* runs per request: the user's text goes through the same preparation, gets the query prefix, is embedded (often a cache hit for repeated queries), and is compared against the index. Every step on the write path that changes the vector must have an identical counterpart on the read path. Most silent embedding bugs are a divergence between the two: a new text normalizer deployed to the query service but not the indexer, a prefix added in one place only, a model upgraded on one side.
 
-The *embedding space* ties the two paths together: a small frozen record of model name, dimensions, text-preparation version, query and passage prefixes, normalization flag, and post-processing. Its hash, the fingerprint, is stored with the index and used as the cache namespace, and the index refuses vectors or queries from any other space. That one check turns a common embedding failure, mixing incompatible spaces, from a silent quality regression into an exception at the first request.
+The embedding space ties the two paths together. Its fingerprint is the cache namespace on both paths and the tag on the index, so a query or a write from any other space raises instead of returning wrong neighbors.
 
 ## Architecture
 
@@ -175,1131 +197,9 @@ flowchart TD
     A -- yes --> FLAG[flag for review]
 ```
 
-## Implementation
-
-The project layout:
-
-```
-book/projects/examples/ch08/
-  pyproject.toml  README.md  .env.example  conftest.py  demo.py
-  embedlab/
-    vector_math.py   corpus.py   space.py   pipeline.py   quality.py
-    usecases/  dedup.py  clustering.py  classify.py  routing.py  anomaly.py  recommend.py
-  data/  retrieval_pairs.jsonl  dedup_pairs.jsonl  routes.json
-  tests/ test_ch08_vector_math.py  test_ch08_pipeline_space.py  test_ch08_quality.py  test_ch08_usecases.py
-```
-
-Configuration is the `aie_core` settings, nothing new:
-
-| Variable | Default | Effect in this chapter |
-|---|---|---|
-| `EMBEDDING_PROVIDER` | `fake` | `fake` builds `FakeEmbeddings(vocabulary=...)` over the corpus; `openai` uses any OpenAI-compatible endpoint |
-| `EMBEDDING_MODEL` | `fake-embedding` | model name sent to the provider and recorded in the embedding space (the fake ignores it and records `fake-bow-v1`) |
-| `LLM_BASE_URL` | unset | endpoint for an OpenAI-compatible server, a self-hosted model, or a proxy |
-| `OPENAI_API_KEY` | unset | credential |
-
-Run it:
-
-```bash
-uv pip install --python .venv/bin/python -e book/projects/aie_core   # or: pip install -e ../../aie_core
-.venv/bin/python -m pytest book/projects/examples/ch08 -q
-cd book/projects/examples/ch08 && ../../../../.venv/bin/python demo.py
-# the same experiments against a real model:
-EMBEDDING_PROVIDER=openai EMBEDDING_MODEL=<model> OPENAI_API_KEY=... ../../../../.venv/bin/python demo.py
-```
-
-### VectorMath
-
-The math module is deliberately small. Everything operates on `(n, d)` NumPy matrices, Euclidean is returned as negative distance so that "higher is more similar" holds for every metric, and zero vectors stay zero instead of becoming NaN (the bag-of-words fake returns a zero vector for text with no known words, and a real system meets empty strings too).
-
-```python
-# path: book/projects/examples/ch08/embedlab/vector_math.py
-"""VectorMath: the handful of operations every embedding feature in Chapter 8 is built from.
-
-Everything works on 2-D NumPy matrices of shape (n, d). Single-vector helpers from
-aie_core (cosine_similarity, normalize, top_k) are re-exported so callers have one import site.
-"""
-from __future__ import annotations
-
-from typing import Literal, Sequence
-
-import numpy as np
-
-from aie_core.embeddings import cosine_similarity, normalize, top_k
-
-Metric = Literal["cosine", "dot", "euclidean"]
-ArrayLike = Sequence[Sequence[float]] | np.ndarray
-
-
-def as_matrix(vectors: ArrayLike) -> np.ndarray:
-    m = np.asarray(vectors, dtype=np.float64)
-    if m.ndim == 1:
-        m = m.reshape(1, -1)
-    if m.ndim != 2:
-        raise ValueError(f"expected a 2-D matrix, got shape {m.shape}")
-    return m
-
-
-def l2_normalize_rows(vectors: ArrayLike) -> np.ndarray:
-    """Divide each row by its L2 norm. Zero rows stay zero instead of becoming NaN."""
-    m = as_matrix(vectors)
-    norms = np.linalg.norm(m, axis=1, keepdims=True)
-    safe = np.where(norms == 0.0, 1.0, norms)
-    return m / safe
-
-
-def is_normalized(vectors: ArrayLike, tol: float = 1e-3) -> bool:
-    norms = np.linalg.norm(as_matrix(vectors), axis=1)
-    nonzero = norms[norms > 0]
-    return bool(nonzero.size == 0 or np.all(np.abs(nonzero - 1.0) <= tol))
-
-
-def pairwise(a: ArrayLike, b: ArrayLike, metric: Metric = "cosine") -> np.ndarray:
-    """Score every row of `a` against every row of `b`. Higher is always more similar,
-    so Euclidean is returned as negative distance."""
-    x, y = as_matrix(a), as_matrix(b)
-    if x.shape[1] != y.shape[1]:
-        raise ValueError(f"dimension mismatch: {x.shape[1]} vs {y.shape[1]}")
-    if metric == "cosine":
-        return l2_normalize_rows(x) @ l2_normalize_rows(y).T
-    if metric == "dot":
-        return x @ y.T
-    if metric == "euclidean":
-        sq = (x**2).sum(1)[:, None] + (y**2).sum(1)[None, :] - 2.0 * (x @ y.T)
-        return -np.sqrt(np.maximum(sq, 0.0))
-    raise ValueError(f"unknown metric {metric!r}")
-
-
-def similarity(a: Sequence[float], b: Sequence[float], metric: Metric = "cosine") -> float:
-    return float(pairwise([a], [b], metric)[0, 0])
-
-
-def rank(query: Sequence[float], matrix: ArrayLike, metric: Metric = "cosine", k: int = 10) -> list[tuple[int, float]]:
-    """Exact (brute-force) nearest neighbours under any metric, best first."""
-    scores = pairwise([query], matrix, metric)[0]
-    k = max(0, min(k, scores.shape[0]))
-    order = np.argsort(-scores, kind="stable")[:k]
-    return [(int(i), float(scores[i])) for i in order]
-
-
-def euclidean_from_cosine(cos: float) -> float:
-    """For unit vectors ||a - b||^2 = 2 - 2 cos(a, b), so the two metrics rank identically."""
-    return float(np.sqrt(max(0.0, 2.0 - 2.0 * cos)))
-
-
-def truncate(vectors: ArrayLike, dims: int, renormalize: bool = True) -> np.ndarray:
-    """Keep the first `dims` coordinates (Matryoshka-style). Re-normalize, because a prefix
-    of a unit vector is shorter than 1, by a different amount for each vector, and
-    un-normalized dot products would re-rank by prefix length."""
-    m = as_matrix(vectors)
-    if not 0 < dims <= m.shape[1]:
-        raise ValueError(f"dims must be in 1..{m.shape[1]}, got {dims}")
-    cut = m[:, :dims]
-    return l2_normalize_rows(cut) if renormalize else cut
-
-
-def centroid(vectors: ArrayLike, renormalize: bool = True) -> np.ndarray:
-    """Mean direction of a set of vectors. Averages unit vectors first so long texts do not dominate."""
-    c = l2_normalize_rows(vectors).mean(axis=0)
-    if renormalize:
-        n = np.linalg.norm(c)
-        return c / n if n > 0 else c
-    return c
-
-
-def similarity_profile(vectors: ArrayLike) -> dict[str, float]:
-    """Distribution of off-diagonal cosine similarities in a sample.
-
-    A model whose unrelated texts already score 0.7 against each other (anisotropy) needs very
-    different thresholds from one where they score 0.1. Measure before choosing any threshold.
-    """
-    m = l2_normalize_rows(vectors)
-    n = m.shape[0]
-    if n < 2:
-        return {"mean": 0.0, "p05": 0.0, "p50": 0.0, "p95": 0.0}
-    sims = m @ m.T
-    off = sims[np.triu_indices(n, k=1)]
-    return {
-        "mean": float(off.mean()),
-        "p05": float(np.percentile(off, 5)),
-        "p50": float(np.percentile(off, 50)),
-        "p95": float(np.percentile(off, 95)),
-    }
-
-
-def mean_center(vectors: ArrayLike, mean: np.ndarray | None = None) -> tuple[np.ndarray, np.ndarray]:
-    """Subtract the corpus mean and re-normalize. Spreads out an anisotropic space; the same
-    `mean` must then be applied to every query, so it becomes part of the embedding version."""
-    m = as_matrix(vectors)
-    mu = m.mean(axis=0) if mean is None else mean
-    return l2_normalize_rows(m - mu), mu
-
-
-__all__ = [
-    "Metric",
-    "as_matrix",
-    "centroid",
-    "cosine_similarity",
-    "euclidean_from_cosine",
-    "is_normalized",
-    "l2_normalize_rows",
-    "mean_center",
-    "normalize",
-    "pairwise",
-    "rank",
-    "similarity",
-    "similarity_profile",
-    "top_k",
-    "truncate",
-]
-```
-
-### Corpus loading and the client factory
-
-`make_client` is the single place the chapter decides which model it talks to. With the default settings it builds a vocabulary from the corpus and returns the bag-of-words fake; with `EMBEDDING_PROVIDER=openai` it delegates to `aie_core.settings.make_embedding_client`. The rest of `corpus.py` loads documents (with a minimal front-matter parser), tickets, and the chapter's labeled fixtures, and splits documents into title-prefixed sections. The interface is shown; the full file is on disk.
-
-```python
-# path: book/projects/examples/ch08/embedlab/corpus.py  (interface summary in signature form; full file on disk)
-@dataclass(frozen=True)
-class Doc:      id: str; title: str; tenant: str; acl_groups: tuple[str, ...]; body: str   # .text = title + body
-@dataclass(frozen=True)
-class Section:  id: str; doc_id: str; heading: str; text: str                         # id = "<doc_id>#s<n>"
-@dataclass(frozen=True)
-class Ticket:   id: str; tenant: str; subject: str; body: str; category: str; priority: str
-
-def load_docs(directory: Path | None = None) -> list[Doc]
-def load_tickets(path: Path | None = None) -> list[Ticket]
-def load_jsonl(name: str) -> list[dict]                         # chapter-local fixtures in data/
-def split_sections(doc: Doc) -> list[Section]                   # one per "## " heading, title-prefixed
-def build_vocabulary(texts, min_df: int = 2, max_size: int = 3000) -> list[str]   # ordered by doc frequency
-
-
-def make_client(settings: Settings | None = None, corpus_texts: Iterable[str] | None = None) -> EmbeddingClient:
-    """The one place the chapter decides which embedding model it talks to."""
-    settings = settings or Settings()
-    if settings.embedding_provider == "fake":
-        texts = list(corpus_texts) if corpus_texts is not None else default_corpus_texts()
-        return FakeEmbeddings(vocabulary=build_vocabulary(texts), model="fake-bow-v1")
-    return make_embedding_client(settings)
-```
-
-### Embedding spaces and the versioned index
-
-`EmbeddingSpace` is the frozen record of everything that shapes a vector; `VectorIndex` stores unit vectors tagged with one space. Watch `VectorIndex._check`: it is the method that makes mixed spaces an exception.
-
-```python
-# path: book/projects/examples/ch08/embedlab/space.py
-"""Embedding spaces, a versioned in-memory index, and re-embedding plans.
-
-A vector is meaningless without the space it was produced in. The space is everything that
-changes the geometry: model, dimensions, text preparation, instruction prefixes, normalization,
-and any post-processing such as mean-centering. Two vectors may be compared only if their
-spaces are equal, so the index refuses mixed writes and mismatched queries.
-"""
-from __future__ import annotations
-
-import hashlib
-import json
-from dataclasses import dataclass
-from typing import Any, Callable, Mapping
-
-import numpy as np
-from pydantic import BaseModel, ConfigDict
-
-from aie_core.llm.tokens import count_tokens
-
-from .vector_math import as_matrix, l2_normalize_rows
-
-
-class EmbeddingSpace(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
-    model: str
-    dimensions: int
-    text_prep: str = "v1"
-    query_prefix: str = ""
-    passage_prefix: str = ""
-    normalized: bool = True
-    post_process: str = "none"  # e.g. "mean-center:<hash>" or "truncate:256"
-
-    @property
-    def fingerprint(self) -> str:
-        blob = json.dumps(self.model_dump(), sort_keys=True).encode("utf-8")
-        return hashlib.sha256(blob).hexdigest()[:16]
-
-
-class SpaceMismatchError(ValueError):
-    """Raised when vectors from one space meet vectors from another."""
-
-
-@dataclass(frozen=True)
-class Hit:
-    id: str
-    score: float
-    metadata: Mapping[str, Any]
-
-
-class VectorIndex:
-    """Exact cosine search over one embedding space. Chapter 9 replaces the matrix with ANN."""
-
-    def __init__(self, space: EmbeddingSpace) -> None:
-        self.space = space
-        self.ids: list[str] = []
-        self.metadata: list[dict[str, Any]] = []
-        self._matrix = np.zeros((0, space.dimensions), dtype=np.float32)
-
-    def __len__(self) -> int:
-        return len(self.ids)
-
-    @property
-    def matrix(self) -> np.ndarray:
-        return self._matrix
-
-    def _check(self, space: EmbeddingSpace) -> None:
-        if space != self.space:
-            raise SpaceMismatchError(
-                f"index space {self.space.fingerprint} ({self.space.model}) != "
-                f"incoming space {space.fingerprint} ({space.model}); re-embed instead of mixing"
-            )
-
-    def add(self, ids: list[str], vectors: Any, space: EmbeddingSpace, metadata: list[dict[str, Any]] | None = None) -> None:
-        self._check(space)
-        m = as_matrix(vectors)
-        if m.shape[0] != len(ids):
-            raise ValueError("ids and vectors differ in length")
-        if m.shape[1] != self.space.dimensions:
-            raise SpaceMismatchError(f"expected {self.space.dimensions} dims, got {m.shape[1]}")
-        if self.space.normalized:
-            m = l2_normalize_rows(m)
-        # float32 halves memory versus float64 with no measurable ranking change for retrieval
-        self._matrix = np.vstack([self._matrix, m.astype(np.float32)])
-        self.ids.extend(ids)
-        self.metadata.extend(metadata or [{} for _ in ids])
-
-    def delete(self, ids: list[str]) -> int:
-        """Remove items (document deletion, right-to-erasure). Returns how many were removed.
-        Deleting the source text without deleting its vectors and cache entries is a leak."""
-        drop = set(ids)
-        keep = [n for n, i in enumerate(self.ids) if i not in drop]
-        removed = len(self.ids) - len(keep)
-        self._matrix = self._matrix[keep]
-        self.ids = [self.ids[n] for n in keep]
-        self.metadata = [self.metadata[n] for n in keep]
-        return removed
-
-    def search(
-        self,
-        query_vector: Any,
-        space: EmbeddingSpace,
-        k: int = 5,
-        where: Callable[[Mapping[str, Any]], bool] | None = None,
-    ) -> list[Hit]:
-        self._check(space)
-        if not self.ids:
-            return []
-        q = l2_normalize_rows(query_vector)[0].astype(np.float32)
-        scores = self._matrix @ q
-        if not self.space.normalized:
-            norms = np.linalg.norm(self._matrix, axis=1)
-            scores = np.where(norms > 0, scores / np.where(norms > 0, norms, 1.0), 0.0)
-        order = np.argsort(-scores, kind="stable")
-        hits: list[Hit] = []
-        for i in order:
-            if where is not None and not where(self.metadata[i]):
-                continue
-            hits.append(Hit(self.ids[i], float(scores[i]), self.metadata[i]))
-            if len(hits) == k:
-                break
-        return hits
-
-
-class ReembedPlan(BaseModel):
-    old_space: str
-    new_space: str
-    items: int
-    estimated_tokens: int
-    estimated_cost_usd: float
-    estimated_minutes: float | None = None  # wall-clock at the rate limit; usually the real constraint
-    reason: str
-
-
-def plan_reembed(
-    index: VectorIndex,
-    new_space: EmbeddingSpace,
-    texts_by_id: Mapping[str, str],
-    price_per_million_tokens: float,
-    tokens_per_minute: float | None = None,
-) -> ReembedPlan | None:
-    """None when the spaces match. Otherwise every stored item must be re-embedded: there is no
-    safe way to translate vectors between two models, so the corpus text is the source of truth.
-    Pass the provider's tokens-per-minute limit to get the migration window, not just the bill."""
-    if new_space == index.space:
-        return None
-    changed = [k for k, v in new_space.model_dump().items() if index.space.model_dump()[k] != v]
-    tokens = sum(count_tokens(texts_by_id[i]) for i in index.ids)
-    return ReembedPlan(
-        old_space=index.space.fingerprint,
-        new_space=new_space.fingerprint,
-        items=len(index),
-        estimated_tokens=tokens,
-        estimated_cost_usd=round(tokens / 1_000_000 * price_per_million_tokens, 6),
-        estimated_minutes=round(tokens / tokens_per_minute, 2) if tokens_per_minute else None,
-        reason="changed: " + ", ".join(changed),
-    )
-
-
-__all__ = ["EmbeddingSpace", "Hit", "ReembedPlan", "SpaceMismatchError", "VectorIndex", "plan_reembed"]
-```
-
-### The pipeline: preparation, prefixes, batching, caching, cost
-
-The pipeline layers text preparation, a cache, and a batcher in front of the provider. Follow `_embed` to see the order, and note where tokens are metered.
-
-```python
-# path: book/projects/examples/ch08/embedlab/pipeline.py
-"""EmbeddingPipeline: text preparation, query/passage prefixes, token-aware batching,
-a cache keyed by the full embedding space, cost metering, and tracing.
-
-    texts -> prepare -> prefix -> cache lookup -> batch misses -> client.embed -> cache write
-"""
-from __future__ import annotations
-
-import random
-import time
-import unicodedata
-from collections.abc import Callable, Iterator, MutableMapping
-from dataclasses import dataclass
-
-import numpy as np
-
-from aie_core.embeddings import CachedEmbeddings, EmbeddingClient
-from aie_core.llm.errors import LLMError
-from aie_core.llm.gateway import RetryPolicy
-from aie_core.llm.tokens import count_tokens
-from aie_core.observability import NoopTracer, Tracer
-
-from .space import EmbeddingSpace
-
-TEXT_PREP_VERSION = "v1"
-
-
-def prepare_text(text: str, max_chars: int = 8000) -> str:
-    """Deterministic normalization. Any change here changes vectors, so bump TEXT_PREP_VERSION."""
-    t = unicodedata.normalize("NFC", text)
-    t = " ".join(t.split())
-    return t[:max_chars]
-
-
-class NamespacedStore(MutableMapping[str, bytes]):
-    """Prefixes every cache key with this chapter's EmbeddingSpace fingerprint.
-
-    aie_core's CachedEmbeddings already salts its keys with a fingerprint of what it can see
-    (provider, model, dimensions, instruction, text-prep version), and a client whose
-    dimensions are learned lazily contributes "unknown". Namespacing by the full space means
-    two spaces never share an entry and lets one shared store (dict, Redis) be listed and
-    purged per space. The cost: a change to normalization or post-processing alone, which
-    happens after the cache, also forgoes otherwise valid hits."""
-
-    def __init__(self, inner: MutableMapping[str, bytes], namespace: str) -> None:
-        self.inner = inner
-        self.prefix = f"emb:{namespace}:"
-
-    def __getitem__(self, key: str) -> bytes:
-        return self.inner[self.prefix + key]
-
-    def __setitem__(self, key: str, value: bytes) -> None:
-        self.inner[self.prefix + key] = value
-
-    def __delitem__(self, key: str) -> None:
-        del self.inner[self.prefix + key]
-
-    def __iter__(self) -> Iterator[str]:
-        return (k[len(self.prefix):] for k in self.inner if k.startswith(self.prefix))
-
-    def __len__(self) -> int:
-        return sum(1 for _ in self)
-
-
-@dataclass
-class EmbeddingStats:
-    requests: int = 0
-    texts_sent: int = 0
-    tokens_sent: int = 0
-    cost_usd: float = 0.0
-    retries: int = 0
-
-
-class BatchingEmbeddings:
-    """An EmbeddingClient that splits work into batches bounded by count and by tokens,
-    retries transient provider errors per batch, and meters what is actually sent.
-
-    Embedding calls have no side effects, so retrying a timed-out batch is safe. The policy is
-    aie_core's RetryPolicy (ModelGateway covers chat completions, not embeddings)."""
-
-    def __init__(
-        self,
-        inner: EmbeddingClient,
-        *,
-        max_batch_texts: int = 64,
-        max_batch_tokens: int = 8000,
-        price_per_million_tokens: float = 0.0,
-        retry: RetryPolicy | None = None,
-        sleep: Callable[[float], None] = time.sleep,
-    ) -> None:
-        self.inner = inner
-        self.model = inner.model
-        self.max_batch_texts = max_batch_texts
-        self.max_batch_tokens = max_batch_tokens
-        self.price = price_per_million_tokens
-        self.retry = retry or RetryPolicy()
-        self._sleep = sleep
-        self._rng = random.Random()
-        self.stats = EmbeddingStats()
-
-    @property
-    def dimensions(self) -> int:
-        return self.inner.dimensions
-
-    def batches(self, texts: list[str]) -> Iterator[list[int]]:
-        batch: list[int] = []
-        tokens = 0
-        for i, t in enumerate(texts):
-            n = count_tokens(t)
-            if batch and (len(batch) >= self.max_batch_texts or tokens + n > self.max_batch_tokens):
-                yield batch
-                batch, tokens = [], 0
-            batch.append(i)
-            tokens += n
-        if batch:
-            yield batch
-
-    def embed(self, texts: list[str]) -> list[list[float]]:
-        out: list[list[float]] = [[] for _ in texts]
-        for idx in self.batches(texts):
-            chunk = [texts[i] for i in idx]
-            vectors = self._embed_with_retry(chunk)
-            n_tokens = sum(count_tokens(t) for t in chunk)
-            self.stats.requests += 1
-            self.stats.texts_sent += len(chunk)
-            self.stats.tokens_sent += n_tokens
-            self.stats.cost_usd += n_tokens / 1_000_000 * self.price
-            for i, v in zip(idx, vectors):
-                out[i] = v
-        return out
-
-    def _embed_with_retry(self, chunk: list[str]) -> list[list[float]]:
-        attempt = 1
-        while True:
-            try:
-                return self.inner.embed(chunk)
-            except LLMError as err:
-                if not self.retry.should_retry(err, attempt):
-                    raise  # non-retryable (bad input) or attempts exhausted: caller degrades
-                self.stats.retries += 1
-                self._sleep(self.retry.delay_for(attempt, err.retry_after_s, self._rng))
-                attempt += 1
-
-    def embed_query(self, text: str) -> list[float]:
-        return self.embed([text])[0]
-
-
-class EmbeddingPipeline:
-    def __init__(
-        self,
-        client: EmbeddingClient,
-        *,
-        store: MutableMapping[str, bytes] | None = None,
-        query_prefix: str = "",
-        passage_prefix: str = "",
-        max_batch_texts: int = 64,
-        max_batch_tokens: int = 8000,
-        price_per_million_tokens: float = 0.0,  # illustrative; set from your provider's price sheet
-        tracer: Tracer | None = None,
-        retry: RetryPolicy | None = None,
-    ) -> None:
-        self.client = client
-        self.query_prefix = query_prefix
-        self.passage_prefix = passage_prefix
-        self.tracer = tracer or NoopTracer()
-        self.batcher = BatchingEmbeddings(
-            client,
-            max_batch_texts=max_batch_texts,
-            max_batch_tokens=max_batch_tokens,
-            price_per_million_tokens=price_per_million_tokens,
-            retry=retry,
-        )
-        self.store: MutableMapping[str, bytes] = store if store is not None else {}
-        self._cached: CachedEmbeddings | None = None
-        self._cached_for: str | None = None
-
-    @property
-    def space(self) -> EmbeddingSpace:
-        dims = self.client.dimensions
-        if not dims:  # OpenAI-compatible clients learn dimensions from the first response
-            self.client.embed(["dimension probe"])
-            dims = self.client.dimensions
-        return EmbeddingSpace(
-            model=self.client.model,
-            dimensions=dims,
-            text_prep=TEXT_PREP_VERSION,
-            query_prefix=self.query_prefix,
-            passage_prefix=self.passage_prefix,
-        )
-
-    @property
-    def stats(self) -> EmbeddingStats:
-        return self.batcher.stats
-
-    def _cache(self) -> CachedEmbeddings:
-        fp = self.space.fingerprint
-        if self._cached is None or self._cached_for != fp:
-            self._cached = CachedEmbeddings(self.batcher, NamespacedStore(self.store, fp))
-            self._cached_for = fp
-        return self._cached
-
-    def _embed(self, texts: list[str], prefix: str, kind: str) -> np.ndarray:
-        prepared = [prefix + prepare_text(t) for t in texts]
-        unique = list(dict.fromkeys(prepared))  # identical inputs are embedded once per call
-        cache = self._cache()
-        with self.tracer.span(
-            "embed", kind=kind, model=self.client.model, space=self._cached_for, texts=len(texts), unique=len(unique)
-        ) as span:
-            hits_before, misses_before, retries_before = cache.hits, cache.misses, self.stats.retries
-            vectors = cache.embed(unique) if unique else []
-            span.set_attribute("cache_hits", cache.hits - hits_before)
-            span.set_attribute("cache_misses", cache.misses - misses_before)
-            span.set_attribute("retries", self.stats.retries - retries_before)
-            span.set_attribute("zero_vectors", sum(1 for v in vectors if not any(v)))
-            span.set_attribute("tokens_sent_total", self.stats.tokens_sent)
-        by_text = dict(zip(unique, vectors))
-        dims = self.client.dimensions
-        if not prepared:
-            return np.zeros((0, dims))
-        return np.asarray([by_text[p] for p in prepared], dtype=np.float64)
-
-    def embed_passages(self, texts: list[str]) -> np.ndarray:
-        return self._embed(texts, self.passage_prefix, "passage")
-
-    def embed_queries(self, texts: list[str]) -> np.ndarray:
-        return self._embed(texts, self.query_prefix, "query")
-
-    def embed_query(self, text: str) -> np.ndarray:
-        return self.embed_queries([text])[0]
-
-
-__all__ = [
-    "BatchingEmbeddings",
-    "EmbeddingPipeline",
-    "EmbeddingStats",
-    "NamespacedStore",
-    "TEXT_PREP_VERSION",
-    "prepare_text",
-]
-```
-
-### Quality evaluation
-
-The evaluation module is the minimum needed to compare models and catch regressions; Chapter 14 builds the full retrieval metric suite. The critical function collapses retrieved items to the level at which labels were written:
-
-```python
-# path: book/projects/examples/ch08/embedlab/quality.py  (excerpt; full file on disk)
-def ranked_ids(
-    query_matrix: np.ndarray,
-    corpus_matrix: np.ndarray,
-    corpus_ids: Sequence[str],
-    group_of: Callable[[str], str] = lambda x: x,
-    depth: int = 50,
-) -> list[list[str]]:
-    """Rank the corpus for every query, then collapse items to their group (for example
-    section -> document) keeping first occurrence, so metrics are measured at the level
-    the labels were written at."""
-    sims = l2_normalize_rows(query_matrix) @ l2_normalize_rows(corpus_matrix).T
-    out: list[list[str]] = []
-    for row in sims:
-        order = np.argsort(-row, kind="stable")[:depth]
-        seen: dict[str, None] = {}
-        for i in order:
-            seen.setdefault(group_of(corpus_ids[i]), None)
-        out.append(list(seen))
-    return out
-
-
-def evaluate_retrieval(
-    pipeline: EmbeddingPipeline,
-    queries: Sequence[LabeledQuery],
-    corpus_ids: Sequence[str],
-    corpus_texts: Sequence[str],
-    k: int = 3,
-    group_of: Callable[[str], str] = lambda x: x,
-) -> RetrievalReport:
-    corpus = pipeline.embed_passages(list(corpus_texts))
-    qm = pipeline.embed_queries([q.query for q in queries])
-    return score_rankings(ranked_ids(qm, corpus, corpus_ids, group_of), queries, k)
-
-
-def truncation_report(
-    query_matrix: np.ndarray,
-    corpus_matrix: np.ndarray,
-    corpus_ids: Sequence[str],
-    queries: Sequence[LabeledQuery],
-    dims_list: Sequence[int],
-    k: int = 3,
-    group_of: Callable[[str], str] = lambda x: x,
-) -> list[TruncationRow]:
-    """Does a prefix of the vector keep the ranking? A model trained Matryoshka-style is built so
-    that it does; any other model must be measured, never assumed."""
-    full = ranked_ids(query_matrix, corpus_matrix, corpus_ids, group_of)
-    rows = []
-    for d in dims_list:
-        ranked = ranked_ids(truncate(query_matrix, d), truncate(corpus_matrix, d), corpus_ids, group_of)
-        rep = score_rankings(ranked, queries, k)
-        overlap = float(np.mean([len(set(a[:k]) & set(b[:k])) / k for a, b in zip(full, ranked)]))
-        rows.append(TruncationRow(d, rep.recall, rep.mrr, overlap))
-    return rows
-```
-
-### Use-case modules
-
-Dedup, routing, and anomaly detection are shown in full because their threshold logic is the lesson. Clustering, classification, and recommendation are excerpted. The section "Embeddings beyond retrieval" after the Code walkthrough explains each threshold choice and its results; skim it first if the code feels unmotivated. In each module, look for where it declines to decide (returns `None`, abstains, or flags for review) when the evidence is weak.
-
-```python
-# path: book/projects/examples/ch08/embedlab/usecases/dedup.py
-"""Semantic deduplication with a threshold chosen from labeled pairs, not guessed."""
-from __future__ import annotations
-
-from dataclasses import dataclass
-from typing import Sequence
-
-import numpy as np
-
-from ..pipeline import EmbeddingPipeline
-from ..vector_math import l2_normalize_rows
-
-
-@dataclass(frozen=True)
-class LabeledPair:
-    a: str
-    b: str
-    is_duplicate: bool
-
-
-@dataclass(frozen=True)
-class ThresholdPoint:
-    threshold: float
-    precision: float
-    recall: float
-    f1: float
-    tp: int
-    fp: int
-    fn: int
-
-
-def pair_scores(pipeline: EmbeddingPipeline, pairs: Sequence[LabeledPair]) -> np.ndarray:
-    a = l2_normalize_rows(pipeline.embed_passages([p.a for p in pairs]))
-    b = l2_normalize_rows(pipeline.embed_passages([p.b for p in pairs]))
-    return (a * b).sum(axis=1)
-
-
-def sweep_thresholds(scores: np.ndarray, labels: Sequence[bool], thresholds: Sequence[float] | None = None) -> list[ThresholdPoint]:
-    y = np.asarray(labels, dtype=bool)
-    if thresholds is None:
-        thresholds = sorted(set(np.round(scores, 4).tolist()))  # every distinct score is a candidate
-    points = []
-    for t in thresholds:
-        pred = scores >= t
-        tp = int((pred & y).sum())
-        fp = int((pred & ~y).sum())
-        fn = int((~pred & y).sum())
-        precision = tp / (tp + fp) if tp + fp else 1.0
-        recall = tp / (tp + fn) if tp + fn else 0.0
-        f1 = 2 * precision * recall / (precision + recall) if precision + recall else 0.0
-        points.append(ThresholdPoint(float(t), precision, recall, f1, tp, fp, fn))
-    return points
-
-
-def select_threshold(points: Sequence[ThresholdPoint], min_precision: float = 0.95) -> ThresholdPoint | None:
-    """Highest recall among thresholds that meet the precision floor; ties go to the higher
-    (safer) threshold. None means no threshold is safe and dedup must not be automatic."""
-    ok = [p for p in points if p.precision >= min_precision and p.tp > 0]
-    if not ok:
-        return None
-    return max(ok, key=lambda p: (p.recall, p.threshold))
-
-
-def find_duplicates(matrix: np.ndarray, threshold: float) -> list[tuple[int, int, float]]:
-    """All pairs at or above threshold. O(n^2): fine for thousands, use ANN (Chapter 9) beyond."""
-    m = l2_normalize_rows(matrix)
-    sims = m @ m.T
-    i, j = np.where(np.triu(sims, k=1) >= threshold)
-    return sorted(((int(a), int(b), float(sims[a, b])) for a, b in zip(i, j)), key=lambda x: -x[2])
-
-
-def duplicate_groups(n: int, pairs: Sequence[tuple[int, int, float]]) -> list[list[int]]:
-    """Union-find over duplicate pairs. Each group keeps its lowest index as the canonical item."""
-    parent = list(range(n))
-
-    def find(x: int) -> int:
-        while parent[x] != x:
-            parent[x] = parent[parent[x]]
-            x = parent[x]
-        return x
-
-    for a, b, _ in pairs:
-        ra, rb = find(a), find(b)
-        if ra != rb:
-            parent[max(ra, rb)] = min(ra, rb)
-    groups: dict[int, list[int]] = {}
-    for x in range(n):
-        groups.setdefault(find(x), []).append(x)
-    return [g for g in groups.values() if len(g) > 1]
-
-
-__all__ = ["LabeledPair", "ThresholdPoint", "duplicate_groups", "find_duplicates", "pair_scores", "select_threshold", "sweep_thresholds"]
-```
-
-```python
-# path: book/projects/examples/ch08/embedlab/usecases/routing.py
-"""Intent routing by similarity to example utterances, with an explicit fallback.
-
-The router answers "which handler?" in one embedding call. When it is unsure (best score too
-low, or two routes too close), it returns no route and the caller falls back, typically to an
-LLM classifier (Chapter 7) or a clarifying question."""
-from __future__ import annotations
-
-from dataclasses import dataclass
-from typing import Literal, Sequence
-
-import numpy as np
-from pydantic import BaseModel, Field
-
-from ..pipeline import EmbeddingPipeline
-from ..vector_math import l2_normalize_rows
-
-
-class Route(BaseModel):
-    name: str
-    description: str = ""
-    utterances: list[str] = Field(min_length=1)
-
-
-@dataclass(frozen=True)
-class RouteDecision:
-    route: str | None
-    score: float
-    margin: float
-    reason: Literal["matched", "below_threshold", "ambiguous"]
-
-
-class IntentRouter:
-    def __init__(self, pipeline: EmbeddingPipeline, routes: Sequence[Route], threshold: float = 0.3, min_margin: float = 0.05) -> None:
-        self.pipeline = pipeline
-        self.routes = list(routes)
-        self.threshold = threshold
-        self.min_margin = min_margin
-        texts = [u for r in self.routes for u in r.utterances]
-        self.owner = np.asarray([n for n, r in enumerate(self.routes) for _ in r.utterances])
-        # Route utterances play the passage role; incoming messages are queries.
-        self.matrix = l2_normalize_rows(pipeline.embed_passages(texts))
-
-    def scores(self, text: str) -> np.ndarray:
-        """Best exemplar similarity per route (max, not mean: one close example is enough)."""
-        sims = self.matrix @ l2_normalize_rows(self.pipeline.embed_query(text))[0]
-        per_route = np.full(len(self.routes), -1.0)
-        np.maximum.at(per_route, self.owner, sims)
-        return per_route
-
-    def route(self, text: str) -> RouteDecision:
-        s = self.scores(text)
-        order = np.argsort(-s, kind="stable")
-        best = float(s[order[0]])
-        margin = best - float(s[order[1]]) if len(order) > 1 else best
-        if best < self.threshold:
-            return RouteDecision(None, best, margin, "below_threshold")
-        if margin < self.min_margin:
-            return RouteDecision(None, best, margin, "ambiguous")
-        return RouteDecision(self.routes[order[0]].name, best, margin, "matched")
-
-    def calibrate(self, labeled: Sequence[tuple[str, str | None]], thresholds: Sequence[float]) -> list[dict[str, float]]:
-        """For each candidate threshold: accuracy (None is the right answer for out-of-scope),
-        wrong-route rate (the expensive error), and fallback rate (the cheap one)."""
-        all_scores = [self.scores(text) for text, _ in labeled]
-        rows = []
-        for t in thresholds:
-            correct = wrong = fallback = 0
-            for s, (_, gold) in zip(all_scores, labeled):
-                order = np.argsort(-s, kind="stable")
-                best = float(s[order[0]])
-                margin = best - float(s[order[1]]) if len(order) > 1 else best
-                pred = self.routes[order[0]].name if best >= t and margin >= self.min_margin else None
-                if pred is None:
-                    fallback += 1
-                if pred == gold:
-                    correct += 1
-                elif pred is not None:
-                    wrong += 1
-            n = len(labeled)
-            rows.append({"threshold": t, "accuracy": correct / n, "wrong_route": wrong / n, "fallback": fallback / n})
-        return rows
-
-
-__all__ = ["IntentRouter", "Route", "RouteDecision"]
-```
-
-```python
-# path: book/projects/examples/ch08/embedlab/usecases/anomaly.py
-"""Anomaly detection by distance to the nearest class centroid, and a batch drift score.
-
-The threshold is a quantile of distances seen on known-normal data, so "anomalous" means
-"farther from every known topic than 95% (say) of normal traffic was"."""
-from __future__ import annotations
-
-from dataclasses import dataclass
-from typing import Sequence
-
-import numpy as np
-
-from ..vector_math import centroid, l2_normalize_rows
-
-
-@dataclass(frozen=True)
-class AnomalyScore:
-    distance: float  # 1 - cosine to the nearest centroid
-    nearest: str
-    is_anomaly: bool
-
-
-class CentroidAnomalyDetector:
-    def __init__(self, quantile: float = 0.95) -> None:
-        self.quantile = quantile
-        self.names: list[str] = []
-        self.centroids = np.zeros((0, 0))
-        self.threshold = 1.0
-
-    def fit(self, vectors: np.ndarray, labels: Sequence[str] | None = None) -> "CentroidAnomalyDetector":
-        """With labels, one centroid per class (normal traffic is multi-modal: a single global
-        centroid sits between topics and flags nothing useful). Without labels, one centroid."""
-        x = l2_normalize_rows(vectors)
-        if labels is None:
-            self.names, self.centroids = ["all"], centroid(x)[None, :]
-        else:
-            lab = np.asarray(labels)
-            self.names = sorted(set(labels))
-            self.centroids = np.vstack([centroid(x[lab == c]) for c in self.names])
-        self.threshold = float(np.quantile(self._distances(x), self.quantile))
-        return self
-
-    def calibrate(self, held_out_normal: np.ndarray) -> "CentroidAnomalyDetector":
-        """Re-set the threshold on known-normal items the centroids were NOT fit on. Distances
-        on the fitting data are optimistic (each item pulled its own centroid closer), so an
-        in-sample threshold flags more than 1 - quantile of new normal traffic."""
-        self.threshold = float(np.quantile(self._distances(l2_normalize_rows(held_out_normal)), self.quantile))
-        return self
-
-    def flag_rate(self, vectors: np.ndarray) -> float:
-        """Share of a batch flagged. On normal traffic it should sit near 1 - quantile; a sustained
-        rise is a drift signal that, unlike drift_score, also catches new topics hidden in a mix."""
-        return float(np.mean([s.is_anomaly for s in self.score(vectors)])) if len(vectors) else 0.0
-
-    def _distances(self, x: np.ndarray) -> np.ndarray:
-        return 1.0 - (x @ self.centroids.T).max(axis=1)
-
-    def score(self, vectors: np.ndarray) -> list[AnomalyScore]:
-        x = l2_normalize_rows(vectors)
-        sims = x @ self.centroids.T
-        nearest = sims.argmax(axis=1)
-        dist = 1.0 - sims.max(axis=1)
-        return [AnomalyScore(float(d), self.names[n], bool(d > self.threshold)) for d, n in zip(dist, nearest)]
-
-
-def drift_score(reference: np.ndarray, current: np.ndarray) -> float:
-    """1 - cosine between batch centroids. Zero means the batch points the same way as the
-    reference; track it per day or per tenant and alert on a sustained rise. It only sees a
-    shift of the mean: a new topic that is 5% of traffic barely moves it, so pair it with
-    CentroidAnomalyDetector.flag_rate."""
-    return float(1.0 - centroid(reference) @ centroid(current))
-
-
-__all__ = ["AnomalyScore", "CentroidAnomalyDetector", "drift_score"]
-```
-
-```python
-# path: book/projects/examples/ch08/embedlab/usecases/clustering.py  (excerpt; full file on disk)
-def cluster(vectors: np.ndarray, k: int, seed: int = 0) -> ClusterResult:
-    """k-means minimizes Euclidean distance; on unit vectors that approximately follows cosine
-    (spherical k-means, which re-normalizes centroids, makes it exact), so normalize first."""
-    x = l2_normalize_rows(vectors)
-    km = KMeans(n_clusters=k, n_init=10, random_state=seed).fit(x)
-    sil = float(silhouette_score(x, km.labels_, metric="cosine")) if 1 < k < len(x) else 0.0
-    return ClusterResult(k, km.labels_, l2_normalize_rows(km.cluster_centers_), sil)
-
-
-def describe_clusters(texts: Sequence[str], labels: np.ndarray, top_n: int = 5) -> dict[int, list[str]]:
-    """Class-based term weighting: words frequent inside the cluster and rare across clusters."""
-    per_cluster: dict[int, Counter[str]] = {}
-    for text, lab in zip(texts, labels):
-        per_cluster.setdefault(int(lab), Counter()).update(tokenize(text))
-    n_clusters = len(per_cluster)
-    cluster_df = Counter(w for c in per_cluster.values() for w in c)
-    out = {}
-    for lab, counts in per_cluster.items():
-        total = sum(counts.values()) or 1
-        scored = {w: (c / total) * np.log(1 + n_clusters / cluster_df[w]) for w, c in counts.items()}
-        out[lab] = [w for w, _ in sorted(scored.items(), key=lambda kv: (-kv[1], kv[0]))[:top_n]]
-    return dict(sorted(out.items()))
-```
-
-```python
-# path: book/projects/examples/ch08/embedlab/usecases/classify.py  (excerpt; full file on disk)
-class CentroidClassifier:
-    """One normalized mean vector per class; predict the closest. Cheap (one row per class),
-    robust to label noise, weak when a class has several distinct sub-topics."""
-
-    def __init__(self, min_similarity: float = 0.0, min_margin: float = 0.0) -> None:
-        self.min_similarity, self.min_margin = min_similarity, min_margin
-        self.classes: list[str] = []
-        self.centroids = np.zeros((0, 0))
-
-    def fit(self, vectors: np.ndarray, labels: Sequence[str]) -> "CentroidClassifier":
-        x = l2_normalize_rows(vectors)
-        self.classes = sorted(set(labels))
-        lab = np.asarray(labels)
-        self.centroids = np.vstack([centroid(x[lab == c]) for c in self.classes])
-        return self
-
-    def predict(self, vector: np.ndarray) -> Prediction:
-        sims = self.centroids @ l2_normalize_rows(vector)[0]
-        order = np.argsort(-sims, kind="stable")
-        top = float(sims[order[0]])
-        margin = top - float(sims[order[1]]) if len(order) > 1 else top
-        evidence = [(int(i), float(sims[i])) for i in order[:3]]
-        if top < self.min_similarity or margin < self.min_margin:
-            return Prediction(None, top, margin, evidence)
-        return Prediction(self.classes[order[0]], top, margin, evidence)
-
-# KNNClassifier: similarity-weighted vote over the k nearest labeled examples, same abstain rule.
-# leave_one_out(vectors, labels, make) -> ClassificationReport(accuracy_on_answered, coverage, overall_accuracy, confusions)
-```
-
-```python
-# path: book/projects/examples/ch08/embedlab/usecases/recommend.py  (excerpt; full file on disk)
-def mmr(
-    query: np.ndarray,
-    candidates: np.ndarray,
-    k: int,
-    lambda_: float = 0.7,
-    exclude: Sequence[int] = (),
-    min_relevance: float = 0.0,
-) -> list[int]:
-    """Greedy MMR: pick the candidate maximizing lambda*sim(query) - (1-lambda)*max sim(selected).
-
-    `min_relevance` drops weak candidates before diversifying. Without it, MMR happily fills the
-    list with unrelated items, because an unrelated item is maximally "diverse"."""
-    c = l2_normalize_rows(candidates)
-    q = l2_normalize_rows(query)[0]
-    rel = c @ q
-    skip = set(exclude)
-    pool = [i for i in range(len(c)) if i not in skip and rel[i] >= min_relevance]
-    chosen: list[int] = []
-    while pool and len(chosen) < k:
-        if chosen:
-            redundancy = (c[pool] @ c[chosen].T).max(axis=1)
-        else:
-            redundancy = np.zeros(len(pool))
-        scores = lambda_ * rel[pool] - (1 - lambda_) * redundancy
-        best = pool[int(np.argmax(scores))]
-        chosen.append(best)
-        pool.remove(best)
-    return chosen
-```
-
-### Tests
-
-The tests use `FakeEmbeddings(vocabulary=...)` with a dozen-word vocabulary, so similarity is predictable: shared words mean closeness, no shared words mean orthogonality, and unknown text embeds to a zero vector. An excerpt:
-
-```python
-# path: book/projects/examples/ch08/tests/test_ch08_pipeline_space.py  (excerpt; full file on disk)
-def test_changing_the_space_never_returns_stale_cached_vectors():
-    store: dict[str, bytes] = {}
-    a = EmbeddingPipeline(fake(), store=store)
-    b = EmbeddingPipeline(fake(), store=store, passage_prefix="passage: ")
-    assert a.space.fingerprint != b.space.fingerprint
-    a.embed_passages(["refund receipt"])
-    b.embed_passages(["refund receipt"])
-    assert b.stats.texts_sent == 1  # miss: different namespace
-    assert len(NamespacedStore(store, a.space.fingerprint)) == 1
-    assert len(NamespacedStore(store, b.space.fingerprint)) == 1
-
-
-def test_transient_provider_errors_are_retried_per_batch():
-    sleeps: list[float] = []
-    client = FlakyClient(2, RateLimitError("slow down", provider="fake", retry_after_s=0.25))
-    batcher = BatchingEmbeddings(client, retry=RetryPolicy(max_attempts=3, jitter=False), sleep=sleeps.append)
-    assert len(batcher.embed(["refund", "vpn"])) == 2
-    assert batcher.stats.retries == 2 and sleeps == [0.25, 0.25]  # provider hint honored
-    assert batcher.stats.requests == 1  # only the successful call is metered as sent
-
-
-def test_index_refuses_mixed_spaces_and_wrong_dimensions():
-    pipe = EmbeddingPipeline(fake())
-    index = VectorIndex(pipe.space)
-    index.add(["a", "b"], pipe.embed_passages(["refund receipt", "vpn tunnel"]), pipe.space, [{"tenant": "retail"}, {"tenant": "shared"}])
-    other = EmbeddingSpace(**{**pipe.space.model_dump(), "model": "other-model"})
-    with pytest.raises(SpaceMismatchError):
-        index.add(["c"], pipe.embed_passages(["pto"]), other)
-    with pytest.raises(SpaceMismatchError):
-        index.search(pipe.embed_query("refund"), other)
-    with pytest.raises(SpaceMismatchError):
-        index.add(["d"], np.ones((1, 3)), pipe.space)
-    hits = index.search(pipe.embed_query("refund"), pipe.space, k=2)
-    assert hits[0].id == "a"
-    shared_only = index.search(pipe.embed_query("refund"), pipe.space, k=2, where=lambda m: m["tenant"] == "shared")
-    assert [h.id for h in shared_only] == ["b"]
-
-
-def test_settings_select_the_model_without_code_changes():
-    fake_client = make_client(Settings(embedding_provider="fake"), corpus_texts=["refund policy", "refund window"])
-    assert isinstance(fake_client, FakeEmbeddings) and fake_client.vocabulary == ["refund"]
-    real = make_client(Settings(embedding_provider="openai", embedding_model="example-embedding-model", openai_api_key="sk-test"))
-    assert isinstance(real, OpenAICompatibleEmbeddings) and real.model == "example-embedding-model"
-```
-
-```python
-# path: book/projects/examples/ch08/tests/test_ch08_usecases.py  (excerpt; full file on disk)
-def test_no_threshold_is_returned_when_the_model_cannot_separate_a_pair(pipe):
-    # "delay" is outside the vocabulary, so both texts embed identically (cosine 1.0) although
-    # they describe different issues. No threshold can be fully precise; automation must stop.
-    pairs = [
-        LabeledPair("refund without receipt", "refund with no receipt", True),
-        LabeledPair("card refund at store", "store card refund delay", False),
-    ]
-    scores = pair_scores(pipe, pairs)
-    assert scores[1] == pytest.approx(1.0)
-    assert select_threshold(sweep_thresholds(scores, [True, False]), min_precision=1.0) is None
-```
-
-The suite has 41 offline tests and one integration test, skipped unless `EMBEDDING_PROVIDER` points at a real model, which checks that the model places "my computer was taken from my car" closer to "laptop stolen from vehicle" than to the PTO policy, a paraphrase the bag-of-words fake cannot see.
-
-## Code walkthrough
-
-**Start with the space.** `EmbeddingSpace` is a frozen pydantic model. Its fingerprint is a hash of every field, so changing the model name, the dimensions, the text-preparation version, either prefix, or a post-processing step produces a new fingerprint. `VectorIndex._check` compares spaces on every `add` and every `search`. Notice that a search with a query from a different space raises rather than returning poor results. That is the behavior you want during a migration: if a deployment rolls the query service to the new model before the new index is live, every request fails loudly in the first minute instead of returning subtly wrong neighbors for a week.
-
-**The index stores float32 unit vectors.** `add` normalizes when the space says so and downcasts to float32, which halves memory with no measurable ranking change; lower precision is a quantization decision Chapter 9 covers. `search` computes one matrix-vector product, sorts, and applies an optional metadata predicate after scoring, which is fine in memory and breaks down in approximate indexes, as Chapter 9 explains.
-
-**`plan_reembed` makes migration cost visible.** It returns `None` when the spaces match. Otherwise it lists which fields changed and estimates tokens and cost by counting the source text, because there is no shortcut: vectors from one model cannot be mapped into another model's space with acceptable fidelity, so the corpus text, not the vectors, is the source of truth. Keep the text. Teams that store only vectors discover this during their first forced model retirement.
-
-**The pipeline composes three layers.** Order matters. `EmbeddingPipeline._embed` prepares text and applies the prefix, then de-duplicates identical inputs inside the call, then hands the unique texts to `CachedEmbeddings` from `aie_core`, whose inner client is `BatchingEmbeddings`. So the cache sees every text, but only misses reach the batcher, and only the batcher talks to the provider. Cost and token metering live in the batcher, which means `stats.tokens_sent` is what you actually paid for, not what you asked for. The demo shows this: the second embedding pass over 225 sections sent zero new tokens.
-
-**The cache key is namespaced by the whole space.** `aie_core`'s `CachedEmbeddings` already salts every key with a fingerprint of what it can see: the provider, model name, dimensions, instruction, and text-preparation version (the prefixes reach the key through the prepared text itself). `NamespacedStore` wraps any mutable mapping (a dict here, a Redis client in production) and prefixes every key with the full space fingerprint. Its main value is operational: it makes it possible to list or purge one space's entries in a shared store, and it guarantees that two spaces never share an entry. Note that the cache holds raw provider output, before normalization and post-processing; a change to post-processing alone does not make a cached vector stale, so it belongs in the index fingerprint, and namespacing the cache on it forgoes valid hits; the code accepts that cost so one fingerprint serves both. A test proves that two pipelines sharing one store but differing only in their passage prefix do not see each other's entries.
-
-**Batches are bounded twice and retried per batch.** Providers limit both the number of inputs per request and the total tokens per request. `BatchingEmbeddings.batches` closes a batch when either limit would be exceeded. Token counts come from `aie_core.llm.tokens.count_tokens`, an estimate, so set `max_batch_tokens` below the provider's real limit to leave headroom. The batcher applies `aie_core`'s `RetryPolicy` itself (`ModelGateway` from Chapter 3 wraps chat completions, not embeddings): rate-limit, timeout, and unavailable errors are retried per batch with backoff, honoring a provider's retry-after hint, while non-retryable errors such as an over-long input surface at once so the caller can choose a degraded mode.
-
-Retrying is safe because an embedding call has no side effects, and retrying per batch means a failure at batch 900 does not re-send batches 1 to 899. Retries are counted in `stats.retries` and on every span.
-
-**Quality functions take matrices, not clients.** `truncation_report` and `ranked_ids` operate on precomputed matrices, so you embed the gold queries and corpus once (cached) and then try metrics, truncations, and groupings without another provider call. One detail: an OpenAI-compatible client learns its dimensions from the first response, so the `space` property probes once if they were not configured. That probe goes straight to the client, so its tokens do not appear in the batcher's stats; configure dimensions explicitly in production.
-
 ## Embeddings beyond retrieval
 
-Each use case below follows the same shape: embed, compare against something labeled or learned, apply a threshold derived from labeled data, and return "not sure" when the evidence is weak. Results come from `demo.py` with the bag-of-words fake on the Northwind tickets; they illustrate the mechanics, and a real model will produce different numbers.
+Before the code, here is what each non-RAG use case is for and how its threshold is chosen. Each follows the same shape: embed, compare against something labeled or learned, apply a threshold derived from labeled data, and return "not sure" when the evidence is weak. The modules live in `embedlab/usecases/` (see Implementation). Results come from `demo.py` with the bag-of-words fake on the Northwind tickets; they illustrate the mechanics, and a real model will produce different numbers.
 
 ### Semantic deduplication
 
@@ -1356,6 +256,578 @@ The related *drift score*, one minus the cosine between the centroid of a refere
 
 "Tickets like this one" and "see also" links are nearest-neighbor queries, with one twist: the top five neighbors are often near-duplicates of each other. Maximal marginal relevance (MMR) picks items greedily, trading relevance to the query against similarity to items already picked. MMR has a trap the demo exposes. For the ticket "Register 3 declines every card since opening," plain MMR returns a gift card issue at the register, then a warehouse PIN issue and a VPN error, because once relevance is low, an unrelated item is maximally "diverse." Adding a relevance floor of 0.2 returns only the two genuinely related register tickets. For personalized recommendations, the same machinery works with a profile vector, the centroid of items a user engaged with, excluding items already seen; collaborative signals from behavior usually beat pure content similarity once you have enough interaction data.
 
+## Implementation
+
+The code is a small library, `embedlab`, built on `aie_core.embeddings`, plus a demo that runs every experiment on the Northwind documents and tickets. All tests run offline with `FakeEmbeddings(vocabulary=...)`, and configuration alone switches every example to a real model. The listings below are excerpts that carry the ideas; the full files are on disk. The project layout:
+
+```
+book/projects/examples/ch08/
+  pyproject.toml  README.md  .env.example  conftest.py  demo.py
+  embedlab/
+    vector_math.py   corpus.py   space.py   pipeline.py   quality.py
+    usecases/  dedup.py  clustering.py  classify.py  routing.py  anomaly.py  recommend.py
+  data/  retrieval_pairs.jsonl  dedup_pairs.jsonl  routes.json
+  tests/ test_ch08_vector_math.py  test_ch08_pipeline_space.py  test_ch08_quality.py  test_ch08_usecases.py
+```
+
+Configuration is the `aie_core` settings, nothing new:
+
+| Variable | Default | Effect in this chapter |
+|---|---|---|
+| `EMBEDDING_PROVIDER` | `fake` | `fake` builds `FakeEmbeddings(vocabulary=...)` over the corpus; `openai` uses any OpenAI-compatible endpoint |
+| `EMBEDDING_MODEL` | `fake-embedding` | model name sent to the provider and recorded in the embedding space (the fake ignores it and records `fake-bow-v1`) |
+| `LLM_BASE_URL` | unset | endpoint for an OpenAI-compatible server, a self-hosted model, or a proxy |
+| `OPENAI_API_KEY` | unset | credential |
+
+Run it:
+
+```bash
+uv pip install --python .venv/bin/python -e book/projects/aie_core   # or: pip install -e ../../aie_core
+.venv/bin/python -m pytest book/projects/examples/ch08 -q
+cd book/projects/examples/ch08 && ../../../../.venv/bin/python demo.py
+# the same experiments against a real model:
+EMBEDDING_PROVIDER=openai EMBEDDING_MODEL=<model> OPENAI_API_KEY=... ../../../../.venv/bin/python demo.py
+```
+
+### VectorMath
+
+The math module is deliberately small. Everything operates on `(n, d)` NumPy matrices, Euclidean is returned as negative distance so that "higher is more similar" holds for every metric, and zero vectors stay zero instead of becoming NaN (the bag-of-words fake returns a zero vector for text with no known words, and a real system meets empty strings too). The excerpt shows normalization, the three metrics, and truncation; `similarity_profile`, used to read thresholds, is on disk.
+
+```python
+# path: book/projects/examples/ch08/embedlab/vector_math.py (excerpt; full file on disk)
+def l2_normalize_rows(vectors: ArrayLike) -> np.ndarray:
+    """Divide each row by its L2 norm. Zero rows stay zero instead of becoming NaN."""
+    m = as_matrix(vectors)
+    norms = np.linalg.norm(m, axis=1, keepdims=True)
+    safe = np.where(norms == 0.0, 1.0, norms)
+    return m / safe
+
+
+def pairwise(a: ArrayLike, b: ArrayLike, metric: Metric = "cosine") -> np.ndarray:
+    """Score every row of `a` against every row of `b`. Higher is always more similar,
+    so Euclidean is returned as negative distance."""
+    x, y = as_matrix(a), as_matrix(b)
+    if x.shape[1] != y.shape[1]:
+        raise ValueError(f"dimension mismatch: {x.shape[1]} vs {y.shape[1]}")
+    if metric == "cosine":
+        return l2_normalize_rows(x) @ l2_normalize_rows(y).T
+    if metric == "dot":
+        return x @ y.T
+    if metric == "euclidean":
+        sq = (x**2).sum(1)[:, None] + (y**2).sum(1)[None, :] - 2.0 * (x @ y.T)
+        return -np.sqrt(np.maximum(sq, 0.0))
+    raise ValueError(f"unknown metric {metric!r}")
+
+
+def truncate(vectors: ArrayLike, dims: int, renormalize: bool = True) -> np.ndarray:
+    """Keep the first `dims` coordinates (Matryoshka-style). Re-normalize, because a prefix
+    of a unit vector is shorter than 1, by a different amount for each vector, and
+    un-normalized dot products would re-rank by prefix length."""
+    m = as_matrix(vectors)
+    if not 0 < dims <= m.shape[1]:
+        raise ValueError(f"dims must be in 1..{m.shape[1]}, got {dims}")
+    cut = m[:, :dims]
+    return l2_normalize_rows(cut) if renormalize else cut
+
+
+# ... (on disk: similarity_profile, as_matrix, is_normalized, rank, centroid, mean_center)
+```
+
+### Corpus loading and the client factory
+
+`corpus.py` loads documents (with a minimal front-matter parser), tickets, and the chapter's labeled fixtures, and splits documents into title-prefixed sections. Two functions matter for the rest of the chapter: the section splitter, and `make_client`, the single place the chapter decides which model it talks to. With the default settings it builds a vocabulary from the corpus and returns the bag-of-words fake; with `EMBEDDING_PROVIDER=openai` it delegates to `aie_core.settings.make_embedding_client`.
+
+```python
+# path: book/projects/examples/ch08/embedlab/corpus.py (excerpt; full file on disk)
+def split_sections(doc: Doc) -> list[Section]:
+    """One section per `## ` heading. Each section text carries the document title and heading,
+    so a section about "Troubleshooting" still says which product it troubleshoots.
+    Chapter 11 owns real chunking; this is the simplest structure-aware split."""
+    parts = re.split(r"(?m)^## +", doc.body)
+    sections: list[Section] = []
+    preamble = parts[0].strip()
+    if preamble:
+        sections.append(Section(f"{doc.id}#s0", doc.id, "", f"{doc.title}\n\n{preamble}"))
+    for n, part in enumerate(parts[1:], start=1):
+        heading, _, content = part.partition("\n")
+        sections.append(Section(f"{doc.id}#s{n}", doc.id, heading.strip(), f"{doc.title} > {heading.strip()}\n\n{content.strip()}"))
+    return sections
+
+# ... (on disk: Doc, Section, Ticket, load_docs, load_tickets, load_jsonl, build_vocabulary)
+
+def make_client(settings: Settings | None = None, corpus_texts: Iterable[str] | None = None) -> EmbeddingClient:
+    """The one place the chapter decides which embedding model it talks to."""
+    settings = settings or Settings()
+    if settings.embedding_provider == "fake":
+        texts = list(corpus_texts) if corpus_texts is not None else default_corpus_texts()
+        return FakeEmbeddings(vocabulary=build_vocabulary(texts), model="fake-bow-v1")
+    return make_embedding_client(settings)
+```
+
+### Embedding spaces and the versioned index
+
+`EmbeddingSpace` is the frozen record of everything that shapes a vector (see "The embedding space and its fingerprint" in Core concepts); `VectorIndex` stores unit vectors tagged with one space. Watch `VectorIndex._check`: it is the method that makes mixed spaces an exception. `plan_reembed` turns a space change into a cost and a migration window before anyone commits to it.
+
+```python
+# path: book/projects/examples/ch08/embedlab/space.py (excerpt; full file on disk)
+class EmbeddingSpace(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    model: str
+    dimensions: int
+    text_prep: str = "v1"
+    query_prefix: str = ""
+    passage_prefix: str = ""
+    normalized: bool = True
+    post_process: str = "none"  # e.g. "mean-center:<hash>" or "truncate:256"
+
+    @property
+    def fingerprint(self) -> str:
+        blob = json.dumps(self.model_dump(), sort_keys=True).encode("utf-8")
+        return hashlib.sha256(blob).hexdigest()[:16]
+
+
+class VectorIndex:
+    """Exact cosine search over one embedding space. Chapter 9 replaces the matrix with ANN."""
+    # ...
+
+    def _check(self, space: EmbeddingSpace) -> None:
+        if space != self.space:
+            raise SpaceMismatchError(
+                f"index space {self.space.fingerprint} ({self.space.model}) != "
+                f"incoming space {space.fingerprint} ({space.model}); re-embed instead of mixing"
+            )
+
+    def add(self, ids: list[str], vectors: Any, space: EmbeddingSpace, metadata: list[dict[str, Any]] | None = None) -> None:
+        self._check(space)
+        # ... (length and dimension checks raise SpaceMismatchError)
+        if self.space.normalized:
+            m = l2_normalize_rows(m)
+        # float32 halves memory versus float64 with no measurable ranking change for retrieval
+        self._matrix = np.vstack([self._matrix, m.astype(np.float32)])
+        # ... (search calls the same _check, then ranks by cosine; delete removes ids)
+
+
+def plan_reembed(
+    index: VectorIndex,
+    new_space: EmbeddingSpace,
+    texts_by_id: Mapping[str, str],
+    price_per_million_tokens: float,
+    tokens_per_minute: float | None = None,
+) -> ReembedPlan | None:
+    """None when the spaces match. Otherwise every stored item must be re-embedded: there is no
+    safe way to translate vectors between two models, so the corpus text is the source of truth.
+    Pass the provider's tokens-per-minute limit to get the migration window, not just the bill."""
+    if new_space == index.space:
+        return None
+    changed = [k for k, v in new_space.model_dump().items() if index.space.model_dump()[k] != v]
+    tokens = sum(count_tokens(texts_by_id[i]) for i in index.ids)
+    return ReembedPlan(
+        old_space=index.space.fingerprint,
+        new_space=new_space.fingerprint,
+        items=len(index),
+        estimated_tokens=tokens,
+        estimated_cost_usd=round(tokens / 1_000_000 * price_per_million_tokens, 6),
+        estimated_minutes=round(tokens / tokens_per_minute, 2) if tokens_per_minute else None,
+        reason="changed: " + ", ".join(changed),
+    )
+```
+
+### The pipeline: preparation, prefixes, batching, caching, cost
+
+The pipeline layers text preparation, a cache, and a batcher in front of the provider: `texts -> prepare -> prefix -> cache lookup -> batch misses -> client.embed -> cache write`. Follow `_embed` to see the order, and note that tokens are metered in the batcher, after the cache.
+
+```python
+# path: book/projects/examples/ch08/embedlab/pipeline.py (excerpt; full file on disk)
+def prepare_text(text: str, max_chars: int = 8000) -> str:
+    """Deterministic normalization. Any change here changes vectors, so bump TEXT_PREP_VERSION."""
+    t = unicodedata.normalize("NFC", text)
+    t = " ".join(t.split())
+    return t[:max_chars]
+
+
+class NamespacedStore(MutableMapping[str, bytes]):
+    # ...
+    def __init__(self, inner: MutableMapping[str, bytes], namespace: str) -> None:
+        self.inner = inner
+        self.prefix = f"emb:{namespace}:"
+    # ... (every MutableMapping method applies self.prefix to the key)
+
+
+class BatchingEmbeddings:
+    # ...
+    def batches(self, texts: list[str]) -> Iterator[list[int]]:
+        batch: list[int] = []
+        tokens = 0
+        for i, t in enumerate(texts):
+            n = count_tokens(t)
+            if batch and (len(batch) >= self.max_batch_texts or tokens + n > self.max_batch_tokens):
+                yield batch
+                batch, tokens = [], 0
+            batch.append(i)
+            tokens += n
+        if batch:
+            yield batch
+
+    def _embed_with_retry(self, chunk: list[str]) -> list[list[float]]:
+        attempt = 1
+        while True:
+            try:
+                return self.inner.embed(chunk)
+            except LLMError as err:
+                if not self.retry.should_retry(err, attempt):
+                    raise  # non-retryable (bad input) or attempts exhausted: caller degrades
+                self.stats.retries += 1
+                self._sleep(self.retry.delay_for(attempt, err.retry_after_s, self._rng))
+                attempt += 1
+    # ... (embed() meters requests, texts, tokens, and cost for each successful batch)
+
+
+class EmbeddingPipeline:
+    # ... (__init__ wires the client, prefixes, tracer, BatchingEmbeddings, and the store)
+
+    @property
+    def space(self) -> EmbeddingSpace:
+        dims = self.client.dimensions
+        if not dims:  # OpenAI-compatible clients learn dimensions from the first response
+            self.client.embed(["dimension probe"])
+            dims = self.client.dimensions
+        return EmbeddingSpace(
+            model=self.client.model,
+            dimensions=dims,
+            text_prep=TEXT_PREP_VERSION,
+            query_prefix=self.query_prefix,
+            passage_prefix=self.passage_prefix,
+        )
+
+    def _cache(self) -> CachedEmbeddings:
+        fp = self.space.fingerprint
+        if self._cached is None or self._cached_for != fp:
+            self._cached = CachedEmbeddings(self.batcher, NamespacedStore(self.store, fp))
+            self._cached_for = fp
+        return self._cached
+
+    def _embed(self, texts: list[str], prefix: str, kind: str) -> np.ndarray:
+        prepared = [prefix + prepare_text(t) for t in texts]
+        unique = list(dict.fromkeys(prepared))  # identical inputs are embedded once per call
+        cache = self._cache()
+        with self.tracer.span(
+            "embed", kind=kind, model=self.client.model, space=self._cached_for, texts=len(texts), unique=len(unique)
+        ) as span:
+            hits_before, misses_before, retries_before = cache.hits, cache.misses, self.stats.retries
+            vectors = cache.embed(unique) if unique else []
+            span.set_attribute("cache_hits", cache.hits - hits_before)
+            # ... (cache_misses, retries, zero_vectors, tokens_sent_total)
+        by_text = dict(zip(unique, vectors))
+        # ...
+        return np.asarray([by_text[p] for p in prepared], dtype=np.float64)
+
+    def embed_passages(self, texts: list[str]) -> np.ndarray:
+        return self._embed(texts, self.passage_prefix, "passage")
+    # ... (embed_queries and embed_query use self.query_prefix)
+```
+
+### Quality evaluation
+
+The evaluation module is the minimum needed to compare models and catch regressions; Chapter 14 builds the full retrieval metric suite. The critical function collapses retrieved items to the level at which labels were written:
+
+```python
+# path: book/projects/examples/ch08/embedlab/quality.py  (excerpt; full file on disk)
+def ranked_ids(
+    query_matrix: np.ndarray,
+    corpus_matrix: np.ndarray,
+    corpus_ids: Sequence[str],
+    group_of: Callable[[str], str] = lambda x: x,
+    depth: int = 50,
+) -> list[list[str]]:
+    """Rank the corpus for every query, then collapse items to their group (for example
+    section -> document) keeping first occurrence, so metrics are measured at the level
+    the labels were written at."""
+    sims = l2_normalize_rows(query_matrix) @ l2_normalize_rows(corpus_matrix).T
+    out: list[list[str]] = []
+    for row in sims:
+        order = np.argsort(-row, kind="stable")[:depth]
+        seen: dict[str, None] = {}
+        for i in order:
+            seen.setdefault(group_of(corpus_ids[i]), None)
+        out.append(list(seen))
+    return out
+
+
+# ... (on disk: evaluate_retrieval embeds the gold queries and corpus once, then calls ranked_ids and score_rankings)
+
+
+def truncation_report(
+    query_matrix: np.ndarray,
+    corpus_matrix: np.ndarray,
+    corpus_ids: Sequence[str],
+    queries: Sequence[LabeledQuery],
+    dims_list: Sequence[int],
+    k: int = 3,
+    group_of: Callable[[str], str] = lambda x: x,
+) -> list[TruncationRow]:
+    """Does a prefix of the vector keep the ranking? A model trained Matryoshka-style is built so
+    that it does; any other model must be measured, never assumed."""
+    full = ranked_ids(query_matrix, corpus_matrix, corpus_ids, group_of)
+    rows = []
+    for d in dims_list:
+        ranked = ranked_ids(truncate(query_matrix, d), truncate(corpus_matrix, d), corpus_ids, group_of)
+        rep = score_rankings(ranked, queries, k)
+        overlap = float(np.mean([len(set(a[:k]) & set(b[:k])) / k for a, b in zip(full, ranked)]))
+        rows.append(TruncationRow(d, rep.recall, rep.mrr, overlap))
+    return rows
+```
+
+### Use-case modules
+
+"Embeddings beyond retrieval" explained what each use case is for and what its numbers mean; the excerpts below show where each threshold lives. In each module, look for where it declines to decide (returns `None`, abstains, or flags for review) when the evidence is weak.
+
+Dedup turns labeled pairs into a threshold. Every distinct score is a candidate, and the selection refuses to return a threshold that misses the precision floor:
+
+```python
+# path: book/projects/examples/ch08/embedlab/usecases/dedup.py (excerpt; full file on disk)
+def sweep_thresholds(scores: np.ndarray, labels: Sequence[bool], thresholds: Sequence[float] | None = None) -> list[ThresholdPoint]:
+    y = np.asarray(labels, dtype=bool)
+    if thresholds is None:
+        thresholds = sorted(set(np.round(scores, 4).tolist()))  # every distinct score is a candidate
+    points = []
+    for t in thresholds:
+        pred = scores >= t
+        tp = int((pred & y).sum())
+        fp = int((pred & ~y).sum())
+        fn = int((~pred & y).sum())
+        precision = tp / (tp + fp) if tp + fp else 1.0
+        recall = tp / (tp + fn) if tp + fn else 0.0
+        f1 = 2 * precision * recall / (precision + recall) if precision + recall else 0.0
+        points.append(ThresholdPoint(float(t), precision, recall, f1, tp, fp, fn))
+    return points
+
+
+def select_threshold(points: Sequence[ThresholdPoint], min_precision: float = 0.95) -> ThresholdPoint | None:
+    """Highest recall among thresholds that meet the precision floor; ties go to the higher
+    (safer) threshold. None means no threshold is safe and dedup must not be automatic."""
+    ok = [p for p in points if p.precision >= min_precision and p.tp > 0]
+    if not ok:
+        return None
+    return max(ok, key=lambda p: (p.recall, p.threshold))
+
+# ... (on disk: pair_scores, find_duplicates for all pairs above a threshold, duplicate_groups via union-find)
+```
+
+The router scores a message against every exemplar, keeps the best per route, and applies the two guards:
+
+```python
+# path: book/projects/examples/ch08/embedlab/usecases/routing.py (excerpt; full file on disk)
+class IntentRouter:
+    def __init__(self, pipeline: EmbeddingPipeline, routes: Sequence[Route], threshold: float = 0.3, min_margin: float = 0.05) -> None:
+        # ...
+        # Route utterances play the passage role; incoming messages are queries.
+        self.matrix = l2_normalize_rows(pipeline.embed_passages(texts))
+
+    def scores(self, text: str) -> np.ndarray:
+        """Best exemplar similarity per route (max, not mean: one close example is enough)."""
+        sims = self.matrix @ l2_normalize_rows(self.pipeline.embed_query(text))[0]
+        per_route = np.full(len(self.routes), -1.0)
+        np.maximum.at(per_route, self.owner, sims)
+        return per_route
+
+    def route(self, text: str) -> RouteDecision:
+        s = self.scores(text)
+        order = np.argsort(-s, kind="stable")
+        best = float(s[order[0]])
+        margin = best - float(s[order[1]]) if len(order) > 1 else best
+        if best < self.threshold:
+            return RouteDecision(None, best, margin, "below_threshold")
+        if margin < self.min_margin:
+            return RouteDecision(None, best, margin, "ambiguous")
+        return RouteDecision(self.routes[order[0]].name, best, margin, "matched")
+
+    # ... (calibrate sweeps thresholds and reports accuracy, wrong_route, and fallback separately)
+```
+
+The anomaly detector sets its threshold from a quantile of distances on known-normal data, and the drift score compares batch centroids:
+
+```python
+# path: book/projects/examples/ch08/embedlab/usecases/anomaly.py (excerpt; full file on disk)
+class CentroidAnomalyDetector:
+    # ...
+
+    def fit(self, vectors: np.ndarray, labels: Sequence[str] | None = None) -> "CentroidAnomalyDetector":
+        """With labels, one centroid per class (normal traffic is multi-modal: a single global
+        centroid sits between topics and flags nothing useful). Without labels, one centroid."""
+        x = l2_normalize_rows(vectors)
+        if labels is None:
+            self.names, self.centroids = ["all"], centroid(x)[None, :]
+        else:
+            lab = np.asarray(labels)
+            self.names = sorted(set(labels))
+            self.centroids = np.vstack([centroid(x[lab == c]) for c in self.names])
+        self.threshold = float(np.quantile(self._distances(x), self.quantile))
+        return self
+
+    def calibrate(self, held_out_normal: np.ndarray) -> "CentroidAnomalyDetector":
+        """Re-set the threshold on known-normal items the centroids were NOT fit on. Distances
+        on the fitting data are optimistic (each item pulled its own centroid closer), so an
+        in-sample threshold flags more than 1 - quantile of new normal traffic."""
+        self.threshold = float(np.quantile(self._distances(l2_normalize_rows(held_out_normal)), self.quantile))
+        return self
+
+    def _distances(self, x: np.ndarray) -> np.ndarray:
+        return 1.0 - (x @ self.centroids.T).max(axis=1)
+
+    # ... (score flags items farther than the threshold; flag_rate is the share flagged in a batch)
+
+
+def drift_score(reference: np.ndarray, current: np.ndarray) -> float:
+    """1 - cosine between batch centroids. Zero means the batch points the same way as the
+    reference; track it per day or per tenant and alert on a sustained rise. It only sees a
+    shift of the mean: a new topic that is 5% of traffic barely moves it, so pair it with
+    CentroidAnomalyDetector.flag_rate."""
+    return float(1.0 - centroid(reference) @ centroid(current))
+```
+
+Clustering, classification, and recommendation are short. Note the cosine silhouette, the abstain rule in `predict`, and the relevance floor in `mmr`:
+
+```python
+# path: book/projects/examples/ch08/embedlab/usecases/clustering.py  (excerpt; full file on disk)
+def cluster(vectors: np.ndarray, k: int, seed: int = 0) -> ClusterResult:
+    """k-means minimizes Euclidean distance; on unit vectors that approximately follows cosine
+    (spherical k-means, which re-normalizes centroids, makes it exact), so normalize first."""
+    x = l2_normalize_rows(vectors)
+    km = KMeans(n_clusters=k, n_init=10, random_state=seed).fit(x)
+    sil = float(silhouette_score(x, km.labels_, metric="cosine")) if 1 < k < len(x) else 0.0
+    return ClusterResult(k, km.labels_, l2_normalize_rows(km.cluster_centers_), sil)
+
+
+# ... (on disk: describe_clusters names each cluster by class-based term weighting)
+```
+
+```python
+# path: book/projects/examples/ch08/embedlab/usecases/classify.py (excerpt; full file on disk)
+class CentroidClassifier:
+    """One normalized mean vector per class; predict the closest. Cheap (one row per class),
+    robust to label noise, weak when a class has several distinct sub-topics."""
+    # ...
+
+    def fit(self, vectors: np.ndarray, labels: Sequence[str]) -> "CentroidClassifier":
+        x = l2_normalize_rows(vectors)
+        self.classes = sorted(set(labels))
+        lab = np.asarray(labels)
+        self.centroids = np.vstack([centroid(x[lab == c]) for c in self.classes])
+        return self
+
+    def predict(self, vector: np.ndarray) -> Prediction:
+        sims = self.centroids @ l2_normalize_rows(vector)[0]
+        order = np.argsort(-sims, kind="stable")
+        top = float(sims[order[0]])
+        margin = top - float(sims[order[1]]) if len(order) > 1 else top
+        evidence = [(int(i), float(sims[i])) for i in order[:3]]
+        if top < self.min_similarity or margin < self.min_margin:
+            return Prediction(None, top, margin, evidence)
+        return Prediction(self.classes[order[0]], top, margin, evidence)
+
+# ... (on disk: KNNClassifier, a similarity-weighted vote over the k nearest labeled examples with the same abstain rule;
+# ... leave_one_out, which reports accuracy_on_answered, coverage, overall_accuracy, and confusions)
+```
+
+```python
+# path: book/projects/examples/ch08/embedlab/usecases/recommend.py  (excerpt; full file on disk)
+def mmr(
+    query: np.ndarray,
+    candidates: np.ndarray,
+    k: int,
+    lambda_: float = 0.7,
+    exclude: Sequence[int] = (),
+    min_relevance: float = 0.0,
+) -> list[int]:
+    """Greedy MMR: pick the candidate maximizing lambda*sim(query) - (1-lambda)*max sim(selected).
+
+    `min_relevance` drops weak candidates before diversifying. Without it, MMR happily fills the
+    list with unrelated items, because an unrelated item is maximally "diverse"."""
+    c = l2_normalize_rows(candidates)
+    q = l2_normalize_rows(query)[0]
+    rel = c @ q
+    skip = set(exclude)
+    pool = [i for i in range(len(c)) if i not in skip and rel[i] >= min_relevance]
+    chosen: list[int] = []
+    while pool and len(chosen) < k:
+        if chosen:
+            redundancy = (c[pool] @ c[chosen].T).max(axis=1)
+        else:
+            redundancy = np.zeros(len(pool))
+        scores = lambda_ * rel[pool] - (1 - lambda_) * redundancy
+        best = pool[int(np.argmax(scores))]
+        chosen.append(best)
+        pool.remove(best)
+    return chosen
+```
+
+### Tests
+
+The tests use `FakeEmbeddings(vocabulary=...)` with a dozen-word vocabulary, so similarity is predictable: shared words mean closeness, no shared words mean orthogonality, and unknown text embeds to a zero vector. Two tests pin the space and cache contracts:
+
+```python
+# path: book/projects/examples/ch08/tests/test_ch08_pipeline_space.py  (excerpt; full file on disk)
+def test_changing_the_space_never_returns_stale_cached_vectors():
+    store: dict[str, bytes] = {}
+    a = EmbeddingPipeline(fake(), store=store)
+    b = EmbeddingPipeline(fake(), store=store, passage_prefix="passage: ")
+    assert a.space.fingerprint != b.space.fingerprint
+    a.embed_passages(["refund receipt"])
+    b.embed_passages(["refund receipt"])
+    assert b.stats.texts_sent == 1  # miss: different namespace
+    assert len(NamespacedStore(store, a.space.fingerprint)) == 1
+    assert len(NamespacedStore(store, b.space.fingerprint)) == 1
+
+
+def test_index_refuses_mixed_spaces_and_wrong_dimensions():
+    pipe = EmbeddingPipeline(fake())
+    index = VectorIndex(pipe.space)
+    index.add(["a", "b"], pipe.embed_passages(["refund receipt", "vpn tunnel"]), pipe.space, [{"tenant": "retail"}, {"tenant": "shared"}])
+    other = EmbeddingSpace(**{**pipe.space.model_dump(), "model": "other-model"})
+    with pytest.raises(SpaceMismatchError):
+        index.add(["c"], pipe.embed_passages(["pto"]), other)
+    with pytest.raises(SpaceMismatchError):
+        index.search(pipe.embed_query("refund"), other)
+    # ...
+```
+
+And one use-case test shows the "not sure" path for dedup:
+
+```python
+# path: book/projects/examples/ch08/tests/test_ch08_usecases.py  (excerpt; full file on disk)
+def test_no_threshold_is_returned_when_the_model_cannot_separate_a_pair(pipe):
+    # "delay" is outside the vocabulary, so both texts embed identically (cosine 1.0) although
+    # they describe different issues. No threshold can be fully precise; automation must stop.
+    pairs = [
+        LabeledPair("refund without receipt", "refund with no receipt", True),
+        LabeledPair("card refund at store", "store card refund delay", False),
+    ]
+    scores = pair_scores(pipe, pairs)
+    assert scores[1] == pytest.approx(1.0)
+    assert select_threshold(sweep_thresholds(scores, [True, False]), min_precision=1.0) is None
+```
+
+The suite runs offline. One integration test, skipped unless `EMBEDDING_PROVIDER` points at a real model, checks that the model places "my computer was taken from my car" closer to "laptop stolen from vehicle" than to the PTO policy, a paraphrase the bag-of-words fake cannot see.
+
+## Code walkthrough
+
+**Start with the space.** `EmbeddingSpace` is a frozen pydantic model. Its fingerprint is a hash of every field, so changing the model name, the dimensions, the text-preparation version, either prefix, or a post-processing step produces a new fingerprint. `VectorIndex._check` compares spaces on every `add` and every `search`. Notice that a search with a query from a different space raises rather than returning poor results. That is the behavior you want during a migration: if a deployment rolls the query service to the new model before the new index is live, every request fails loudly in the first minute instead of returning subtly wrong neighbors for a week.
+
+**The index stores float32 unit vectors.** `add` normalizes when the space says so and downcasts to float32, which halves memory with no measurable ranking change; lower precision is a quantization decision Chapter 9 covers. `search` (on disk) computes one matrix-vector product, sorts, and applies an optional metadata predicate after scoring, which is fine in memory and breaks down in approximate indexes, as Chapter 9 explains.
+
+**`plan_reembed` makes migration cost visible.** It returns `None` when the spaces match. Otherwise it lists which fields changed and estimates tokens and cost by counting the source text, because there is no shortcut: vectors from one model cannot be mapped into another model's space with acceptable fidelity, so the corpus text, not the vectors, is the source of truth. Keep the text. Teams that store only vectors discover this during their first forced model retirement.
+
+**The pipeline composes three layers.** Order matters. `EmbeddingPipeline._embed` prepares text and applies the prefix, then de-duplicates identical inputs inside the call, then hands the unique texts to `CachedEmbeddings` from `aie_core`, whose inner client is `BatchingEmbeddings`. So the cache sees every text, but only misses reach the batcher, and only the batcher talks to the provider. Cost and token metering live in the batcher, which means `stats.tokens_sent` is what you actually paid for, not what you asked for. The demo shows this: the second embedding pass over 225 sections sent zero new tokens.
+
+**The cache is namespaced by the whole space.** `NamespacedStore` prefixes every key in any mutable mapping (a dict here, a Redis client in production) with the space fingerprint, so two spaces never share an entry and one space's entries can be listed or purged in a shared store. Because the cache holds raw provider output, a change to normalization or post-processing alone also moves the namespace and forgoes otherwise valid hits; the code accepts that cost so that one fingerprint serves both the cache and the index. The first test above proves that two pipelines differing only in their passage prefix do not see each other's entries.
+
+**Batches are bounded twice and retried per batch.** Providers limit both the number of inputs per request and the total tokens per request. `BatchingEmbeddings.batches` closes a batch when either limit would be exceeded. Token counts come from `aie_core.llm.tokens.count_tokens`, an estimate, so set `max_batch_tokens` below the provider's real limit to leave headroom. The batcher applies `aie_core`'s `RetryPolicy` itself (`ModelGateway` from Chapter 3 wraps chat completions, not embeddings): rate-limit, timeout, and unavailable errors are retried per batch with backoff, honoring a provider's retry-after hint, while non-retryable errors such as an over-long input surface at once so the caller can choose a degraded mode.
+
+Retrying is safe because an embedding call has no side effects, and retrying per batch means a failure at batch 900 does not re-send batches 1 to 899. Retries are counted in `stats.retries` and on every span; a test on disk checks that the provider's retry-after hint is honored and that only the successful call is metered.
+
+**Quality functions take matrices, not clients.** `truncation_report` and `ranked_ids` operate on precomputed matrices, so you embed the gold queries and corpus once (cached) and then try metrics, truncations, and groupings without another provider call. One detail: an OpenAI-compatible client learns its dimensions from the first response, so the `space` property probes once if they were not configured. That probe goes straight to the client, so its tokens do not appear in the batcher's stats; configure dimensions explicitly in production.
+
 ## Production considerations
 
 **Versioning.** Record the full embedding space with every stored vector or index, not just the model name. A model change, a dimension change, a new prefix, a text-normalization fix, or a post-processing step each means re-embedding every item. Run the migration as a new index built from source text, double-write during the build, evaluate in shadow against the gold set, then switch reads and retire the old index after a grace period. Hosted providers occasionally update a model behind a stable name; if you cannot pin a version, re-run the nearest-neighbor probes and the gold-set evaluation on a schedule and alert on change.
@@ -1390,8 +862,8 @@ The probe-set job is cheap and catches what nothing else does: embed the same fi
 ## Common mistakes
 
 - **Copying a threshold.** A 0.8 cosine threshold from another team or another model is a random number for yours. Derive thresholds from labeled pairs on your data and re-derive them on every model change.
-- **Mixing spaces in one index.** Embedding new documents with an upgraded model while old documents keep old vectors produces an index where similarity is meaningless across the boundary. The index should refuse it.
-- **Caching by text alone.** A cache keyed only on text, or on text and model name, returns stale vectors after a prefix, dimension, or text-preparation change.
+
+Mixing spaces in one index and caching by text alone are the two most expensive mistakes; they appear under Failure modes as silent space mismatch and stale cache.
 - **Forgetting the query prefix, or applying it to passages.** For asymmetric models this silently costs recall. Make prefixes configuration, applied in one function.
 - **Normalizing a model trained with unnormalized dot product, or not normalizing a cosine model's output before a dot-product index.** Check the model card and measure both.
 - **Evaluating on a public benchmark only.** Use it for the shortlist, then decide on 100 or more labeled queries from your own traffic.
@@ -1437,7 +909,24 @@ Evaluate an embedding model in three steps, cheapest first.
 
 In CI, run the offline tests and a recall floor on the gold set on every change; `test_regression_floor_on_lexical_queries_with_the_default_model` is the pattern. For real models, run the same suite as integration tests on a schedule and on every embedding-space change, storing results with the space fingerprint. The fake makes unit tests deterministic; it is not a quality proxy.
 
+## Before you ship
+
+- [ ] The full embedding space (model, dimensions, text-prep version, prefixes, normalization, post-processing) is stored with the index, and the query service compares its fingerprint with the index at startup and refuses to serve on a mismatch.
+- [ ] Embedding cache keys are namespaced by the space fingerprint, and a test shows that a prefix or dimension change produces zero cache hits on the first pass.
+- [ ] A gold set of 100 or more queries from real traffic exists, with slices for lexical queries, paraphrases, identifiers, and each language; recall@k and MRR are recorded together with the fingerprint.
+- [ ] CI runs the offline tests and a recall floor on the gold set for every change to text preparation, prefixes, or model configuration.
+- [ ] The index metric matches the model's training objective, and `is_normalized` has been checked on a sample of real provider output.
+- [ ] Every threshold (dedup, routing, classifier abstention, anomaly) was selected on labeled data with the current model, and the precision floor or error costs behind it are written down.
+- [ ] Inputs over the model's token limit are counted and alerted on; empty or failed inputs never enter the index as zero vectors.
+- [ ] Query embedding has a deadline and every consumer has a tested degraded mode (lexical-only retrieval, LLM routing, checks marked as skipped).
+- [ ] Source text is retained for every vector, and `plan_reembed` has been run for a full re-embed with your real price and tokens-per-minute limit.
+- [ ] Deleting a document removes its vectors and its embedding-cache entries, verified by an erasure test.
+- [ ] A daily probe-set job embeds fixed texts and alerts on any vector change or a shift in the random-pair similarity profile.
+- [ ] Router fallback rate, classifier abstention rate, drift score, and anomaly flag rate are on a dashboard per tenant, with alert thresholds set.
+
 ## Exercises
+
+**Start here:** K1, K3, E1, P1, D2 (about 4 hours). The rest go deeper.
 
 ### Knowledge questions
 
@@ -1465,13 +954,13 @@ In CI, run the offline tests and a recall floor on the gold set on every change;
 
 ### Practical exercises
 
-**P1.** Add a `dimensions` parameter to the experiment: using `truncation_report`, find the smallest prefix size at which recall@3 on the Northwind labeled queries stays within 0.03 of full-dimension recall. Then extend `VectorIndex` so a truncated space can be searched with a two-stage strategy: truncated vectors for top-50 candidates, full vectors to rescore.
+**P1.** (about 2 hours) Add a `dimensions` parameter to the experiment: using `truncation_report`, find the smallest prefix size at which recall@3 on the Northwind labeled queries stays within 0.03 of full-dimension recall. Then extend `VectorIndex` so a truncated space can be searched with a two-stage strategy: truncated vectors for top-50 candidates, full vectors to rescore.
 
-**P2.** Extend the labeled retrieval set with 15 queries containing identifiers (error codes, ticket numbers, endpoint names) and report recall@3 on that slice separately. Add a minimal lexical boost (for example, exact token overlap on identifier-like tokens) and show its effect on the slice and on the rest of the set.
+**P2.** (about 90 min) Extend the labeled retrieval set with 15 queries containing identifiers (error codes, ticket numbers, endpoint names) and report recall@3 on that slice separately. Add a minimal lexical boost (for example, exact token overlap on identifier-like tokens) and show its effect on the slice and on the rest of the set.
 
-**P3.** Implement a `CentroidClassifier` variant with several centroids per class (k-means within each class) and compare it with the single-centroid and kNN classifiers using `leave_one_out` on the tickets. Report accuracy on answered items and coverage at a fixed abstention rule.
+**P3.** (about 2 hours) Implement a `CentroidClassifier` variant with several centroids per class (k-means within each class) and compare it with the single-centroid and kNN classifiers using `leave_one_out` on the tickets. Report accuracy on answered items and coverage at a fixed abstention rule.
 
-**P4.** Back the embedding cache with Redis by passing a Redis-like mapping as the `store` to `EmbeddingPipeline`. Add a TTL, a per-namespace key count metric, and a test that a space change produces zero hits on the first pass.
+**P4.** (about 90 min) Back the embedding cache with Redis by passing a Redis-like mapping as the `store` to `EmbeddingPipeline`. Add a TTL, a per-namespace key count metric, and a test that a space change produces zero hits on the first pass.
 
 ### Debugging exercises
 
@@ -1504,3 +993,11 @@ The release notes for the change nine days ago say: "Improve similarity spread w
 - Batch by count and tokens, retry transient errors per batch, cache by full space fingerprint plus prepared text, meter tokens actually sent, and compute re-embedding cost and wall-clock time before committing to a migration.
 - Decide each consumer's degraded mode before the embedding provider fails (lexical-only retrieval, LLM routing, skipped checks marked as skipped), and alert on fingerprint mismatches, probe-set changes, and drift.
 - Embeddings beyond RAG (dedup, clustering, kNN and centroid classification, intent routing, anomaly detection, recommendation) are cheap, fast, and explainable, and work best as the first stage of a cascade with an LLM or a person behind them.
+
+## Further reading
+
+- *Sentence-BERT: Sentence Embeddings using Siamese BERT-Networks* (Reimers and Gurevych, 2019): the paper that made sentence-level embedding models practical; the clearest account of the bi-encoder setup this chapter assumes.
+- *Dense Passage Retrieval for Open-Domain Question Answering* (Karpukhin et al., 2020): contrastive training with in-batch and hard negatives for asymmetric question-passage retrieval.
+- *Matryoshka Representation Learning* (Kusupati et al., 2022): how prefix-trained embeddings are built, and why truncation works only for models trained this way.
+- *MTEB: Massive Text Embedding Benchmark* (Muennighoff et al., 2023): how public embedding benchmarks are constructed, which is what to know before using one to build a shortlist.
+- *BEIR: A Heterogeneous Benchmark for Zero-shot Evaluation of Information Retrieval Models* (Thakur et al., 2021): evidence that embedding quality varies sharply by domain, the argument for evaluating on your own data.

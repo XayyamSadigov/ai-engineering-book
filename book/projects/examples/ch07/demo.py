@@ -61,7 +61,7 @@ def main() -> None:
     print("ticket:", r.decision.route, "served_by", r.served_by, "escalated", r.escalated,
           [a.outcome for a in r.attempts])
     long_tools = CompletionRequest(
-        messages=[Message.user("incident timeline " * 60_000)], max_tokens=2_000,
+        messages=[Message.user("incident timeline " * 30_000)], max_tokens=2_000,
         tools=[ToolSpec(name="search_tickets", description="search tickets")])
     d = router.route(long_tools)
     print("long context + tools:", d.route, "->", d.candidates, d.substitutions)

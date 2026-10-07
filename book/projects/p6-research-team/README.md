@@ -104,14 +104,14 @@ Any agent log can be replayed with `agentkit.replay(store.load(run_id))`.
 The offline policy is the same for every configuration: same facet selection, same queries, same
 extraction. Offline numbers therefore measure coordination cost, context growth, and verification,
 not model quality. Latency and prices are simulated and illustrative. Results from
-`python -m research_team.eval.benchmark` (one simulated hallucination per four numeric claims):
+`python -m research_team.eval.benchmark` (one simulated hallucination per four numeric claims; token counts are deterministic, wall times vary by machine):
 
 | config | rubric (0-4) | unsupported claims shipped | tokens per question | model calls | wall ms |
 |---|---|---|---|---|---|
-| single | 2.62 | 7 | 17,213 | 6.5 | 736 |
-| single-batched | 2.62 | 7 | 7,479 | 3.0 | 463 |
-| single+verify | 3.25 | 0 | 21,387 | 8.5 | 1,057 |
-| team | 3.25 | 0 | 19,313 | 12.2 | 1,175 |
+| single | 2.62 | 7 | 16,722 | 6.5 | 770 |
+| single-batched | 2.62 | 7 | 7,320 | 3.0 | 458 |
+| single+verify | 3.25 | 0 | 20,576 | 8.5 | 995 |
+| team | 3.25 | 0 | 18,188 | 12.2 | 1,100 |
 
 The script prints the verdict: the team beats `single` only through verification, and
 `single+verify` recovers 100% of that gain. Against `single+verify` the team does not pay off on

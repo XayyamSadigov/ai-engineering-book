@@ -210,9 +210,9 @@ def chargeback(records: Iterable[Mapping[str, Any]], pricing: PricingTable | Non
     """Aggregate spend per tenant from span records (the dicts `JsonlTracer` writes).
 
     - `llm.complete` spans carry tokens and `cost_usd` (from the gateway). A cache hit is avoided
-      spend, not spend: the current gateway records `cost_usd=0` and `avoided_cost_usd=<price>`;
-      spans from older versions carried the original price in `cost_usd`. Both shapes land in
-      `avoided_usd`.
+      spend, not spend: the gateway records `cost_usd=0` and `avoided_cost_usd=<price>`. A hit span
+      without `avoided_cost_usd` contributes its `cost_usd` (or the table price) instead. Either way
+      the amount lands in `avoided_usd`.
     - Any other span with `cost_usd` (embedding, rerank, tool) counts toward `other_usd`.
     - `task` spans with a boolean `success` give the denominator for cost per successful task.
     - Spans without a `tenant` land in `_unattributed`; watch that share, it should be near zero.
@@ -237,11 +237,11 @@ def chargeback(records: Iterable[Mapping[str, Any]], pricing: PricingTable | Non
                 cached_input_tokens=int(attrs.get("cached_input_tokens", 0)),
             )
             if cost == 0.0 and pricing is not None and attrs.get("model"):
-                cost = pricing.cost_usd(str(attrs["model"]), usage)  # older spans without cost_usd
+                cost = pricing.cost_usd(str(attrs["model"]), usage)  # no cost_usd on the span: price it here
             if attrs.get("cache_hit"):
                 t.cache_hits += 1
                 avoided = attrs.get("avoided_cost_usd")
-                t.avoided_usd += float(avoided) if avoided else cost  # legacy spans: price in cost_usd
+                t.avoided_usd += float(avoided) if avoided else cost  # no avoided_cost_usd: use the span's cost
                 continue
             if rec.get("status") == "error" and not usage.input_tokens:
                 continue  # failed before the provider billed anything

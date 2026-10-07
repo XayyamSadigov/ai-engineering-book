@@ -227,6 +227,7 @@ Traces explain one request. Metrics show the population. `observability/metrics.
 - `rag_requests_total{mode, cache}`, plus cache lookups by layer.
 - `rag_degraded_total{reason}`: a nonzero rate is a page-worthy signal even while users get answers.
 - `rag_security_events_total{kind}` for flagged context, output redactions, and ACL violations.
+- `rag_withheld_sentences_total{code}` for streamed sentences the citation validator held back, labeled by issue code (Chapter 13).
 - `rag_ingest_jobs_total{change}` and `rag_freshness_lag_s`.
 
 **Freshness lag** is easy to omit because nothing errors when it grows. It is the time from the moment a change was observed (`submitted_at`, stamped by the producer) to the moment it became searchable (`indexed_at`, stamped at the registry commit). `GET /v1/index/status` reports its p95 and maximum against the freshness SLO, together with queue depth, dead letters, the age of the oldest pending purge, and breaker states. Freshness is one of the service's dependencies. When it degrades, users get stale answers without any error.

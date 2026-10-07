@@ -846,11 +846,11 @@ def chargeback(records: Iterable[Mapping[str, Any]], pricing: PricingTable | Non
                 cached_input_tokens=int(attrs.get("cached_input_tokens", 0)),
             )
             if cost == 0.0 and pricing is not None and attrs.get("model"):
-                cost = pricing.cost_usd(str(attrs["model"]), usage)  # older spans without cost_usd
+                cost = pricing.cost_usd(str(attrs["model"]), usage)  # no cost_usd on the span: price it here
             if attrs.get("cache_hit"):
                 t.cache_hits += 1
                 avoided = attrs.get("avoided_cost_usd")
-                t.avoided_usd += float(avoided) if avoided else cost  # legacy spans: price in cost_usd
+                t.avoided_usd += float(avoided) if avoided else cost  # no avoided_cost_usd: use the span's cost
                 continue
             if rec.get("status") == "error" and not usage.input_tokens:
                 continue  # failed before the provider billed anything

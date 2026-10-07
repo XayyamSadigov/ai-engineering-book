@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import json
+import logging
 
 import pytest
+from aie_core.llm.providers import FakeLLM
 from conftest import PTO_Q
 from fastapi.testclient import TestClient
 
 from rag_assistant.api.app import create_app
+from rag_assistant.adapters.llm import extractive_handler
 from rag_assistant.api.auth import issue_token
 
 SECRET = "test-secret"
@@ -66,6 +69,32 @@ def test_sse_streaming_contract(client):
         if kind == "text":
             assert set(data["eids"]) <= seen
     assert events[-1][1]["status"] in ("answered", "partial", "conflict")
+
+
+BAD_SENTENCE = "Unused days are paid out in cash every December [E9]."
+
+
+def test_withheld_sentences_are_counted_and_never_streamed(make_container, caplog):
+    inner = extractive_handler()
+
+    def handler(req):  # type: ignore[no-untyped-def]
+        out = inner(req)  # the streaming contract returns plain text; append a sentence citing no evidence
+        return f"{out} {BAD_SENTENCE}" if isinstance(out, str) else out
+
+    c = make_container(llm=FakeLLM(handler=handler), auth_secret=SECRET, inline_ingest=True)
+    api = TestClient(create_app(c))
+    with caplog.at_level(logging.WARNING, logger="rag_assistant.answering.service"):
+        r = api.post("/v1/ask", json={"question": PTO_Q, "stream": True}, headers=bearer())
+    assert r.status_code == 200
+    assert "paid out in cash" not in r.text and "E9" not in r.text
+    events = parse_sse(r.text)
+    assert "text" in [e for e, _ in events]
+    assert events[-1][1]["withheld"] == 1 and events[-1][1]["status"] == "partial"
+    assert c.metrics.counter("rag_withheld_sentences_total", code="unknown_citation") == 1
+    assert 'rag_withheld_sentences_total{code="unknown_citation"} 1' in c.metrics.render_prometheus()
+    logged = [rec.getMessage() for rec in caplog.records if "withheld sentence" in rec.getMessage()]
+    assert len(logged) == 1 and "code=unknown_citation" in logged[0] and "sha256=" in logged[0]
+    assert "paid out in cash" not in logged[0]  # the log carries a fingerprint, never the text
 
 
 def test_sse_with_accept_header_and_abstention(client):

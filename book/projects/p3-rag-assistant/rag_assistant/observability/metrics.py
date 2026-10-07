@@ -8,6 +8,7 @@ request path and the ingestion path reports here, with the same stage names as t
     rag_degraded_total{reason}                 rag_security_events_total{kind}
     rag_ingest_jobs_total{change}              rag_freshness_lag_s
     rag_cache_lookups_total{cache, result}     rag_evidence_tokens
+    rag_withheld_sentences_total{code}
 
 The reservoir keeps the last N observations per series, which is enough for a single replica's
 dashboard and tests. A deployment exports to Prometheus or OpenTelemetry instead (Chapter 31).

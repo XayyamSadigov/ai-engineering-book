@@ -20,6 +20,8 @@ groups, the packer re-checks, and nothing is ever filtered after generation.
 """
 from __future__ import annotations
 
+import hashlib
+import logging
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -51,6 +53,8 @@ from ..ingestion.registry import DocumentRegistry
 from ..observability.metrics import Metrics
 from ..retrieval.index import IndexSet
 from ..retrieval.wiring import build_pipeline
+
+log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -181,6 +185,12 @@ class AnswerService:
                             yield "text", {"text": verdict.text, "eids": ev.eids}
                         elif ev.type == "withheld":
                             withheld += 1  # logged and counted, never shown
+                            code = ev.issue.code if ev.issue else "validation"
+                            self.metrics.inc("rag_withheld_sentences_total", code=code)
+                            # the sentence itself may carry personal data: log a fingerprint, not the text
+                            digest = hashlib.sha256((ev.text or "").encode()).hexdigest()[:12]
+                            log.warning("withheld sentence request_id=%s code=%s sha256=%s chars=%d",
+                                        rid, code, digest, len(ev.text or ""))
                         elif ev.type == "error":
                             raise LLMError(ev.text or "stream error")
                         elif ev.type == "done" and ev.answer is not None:

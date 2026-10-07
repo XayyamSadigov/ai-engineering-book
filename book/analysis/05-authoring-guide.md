@@ -16,7 +16,9 @@ as one book, share one code base, one running example, and one quality bar.
 - Vendor neutrality: concepts must never depend on one vendor. Code uses the provider-neutral
   `aie_core` interfaces. When you mention concrete providers, say "for example". Never state current
   prices, context sizes, or model names as facts; if you need a number for a worked example, label it
-  "illustrative". Do not assert anything about model or protocol releases dated after mid-2026.
+  "illustrative". State a model or protocol release only when it is verified against its primary
+  source (specification, changelog, official announcement), and date it ("as of 2026", "the 2026-07-28
+  revision").
 - Every important concept must, somewhere in its section, answer: what it is, why it exists, how it
   works, when to use it, when not to, alternatives, trade-offs, how to implement, how it fails, how to
   test/evaluate it, how it behaves in production. Weave these in; do not print them as an 11-item list.

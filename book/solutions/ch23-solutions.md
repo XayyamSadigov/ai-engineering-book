@@ -100,7 +100,7 @@ and the failure is in generation. (4) Check the synthesizer mode: refine mode as
 13's grounded answer contract: cite-or-abstain prompt text (data is not instructions, answer only from
 evidence, reply with an abstention token otherwise) passed explicitly to the synthesizer, versioned in
 the registry, plus `CitationValidator` on the output. Confirm with the fixtures and with Chapter 24's
-faithfulness metric on the eval set.
+groundedness metric on the eval set.
 
 **E3.** A port shaped so both engines can implement it:
 

@@ -738,7 +738,7 @@ Both map onto the three mechanisms this chapter built:
 | `step_key()` (`run_id:node:visit`) | You build it from the thread or run id and the node | Workflow id plus activity id, stable across retries of one activity | You build it from the execution id and the state name |
 | `pause_before` plus `ResumeHandle` | Interrupt, then resume with a command | Workflow waits for a signal (an external message to a running workflow), with a durable timer as its timeout | A callback task that waits for a token to be returned, with a timeout |
 | Router function | Conditional edge | Ordinary `if` in the workflow function over a validated value | Choice state |
-| Graph version in the checkpoint | Same problem, same fix | Versioned workflow code; old runs must still replay deterministically | Versioned state machine definitions |
+| Graph version in the checkpoint (a production addition; see Operations) | Same problem, same fix | Versioned workflow code; old runs must still replay deterministically | Versioned state machine definitions |
 
 Two things do not change. Activities and tasks still execute at least once, so `send` still needs an idempotency key that the receiving side honors; the engine gives you a stable identity to build it from, not exactly-once delivery. And routing on model output still has to go through a validated, enumerated value.
 
@@ -791,7 +791,7 @@ Each entry names the failure, how it appears in telemetry, and the test that cat
 
 **Deterministic validator versus model validator versus both.** Code checks are cheap, fast, and auditable but catch only what you anticipated. A model judge catches more and costs a call per draft. The chapter layers them and lets code override the model, which is the usual production compromise; Chapter 24 covers calibrating the model judge.
 
-**Retry in the gateway versus retry in the engine.** The gateway's retry (Chapter 3) handles a single call's transient errors and is invisible to the workflow. The engine's retry handles the step as a unit and is visible in the trace. Having both is correct as long as the total attempt count is bounded and understood: three gateway attempts inside each of three engine attempts is nine calls per node, twenty-seven across the three model nodes.
+**Retry in the gateway versus retry in the engine.** The gateway's retry (Chapter 3) handles a single call's transient errors and is invisible to the workflow. The engine's retry handles the step as a unit and is visible in the trace. Stacked, they multiply: three gateway attempts inside each of three engine attempts is nine calls per node, twenty-seven across the three model nodes. Chapter 29's rule is to retry at one layer, the one closest to the failure, so when model nodes call through the gateway, give them a single engine attempt and let the gateway own retries; keep engine retries for steps whose client does not retry, such as this chapter's fake model.
 
 **Flexibility versus auditability.** Every router you replace with model judgment widens the set of possible paths and narrows what you can promise an auditor. For a regulated process the enumerable graph is a feature, and the cost is handling the unanticipated case by escalation to a human rather than by model improvisation.
 
@@ -812,7 +812,7 @@ Quality of the model steps is evaluated separately, with the evaluation harness 
 ## Before you ship
 
 - [ ] Every edge chosen by model output goes through a router that maps a validated, enumerated value onto a closed set of nodes, and every router edge (including the attempt-counter boundary) has a unit test.
-- [ ] Every node has an explicit retry policy: model nodes retry only transient errors with bounded attempts, backoff with jitter, and a delay cap; side-effecting nodes have no engine retry.
+- [ ] Every node has an explicit retry policy: transient errors are retried at exactly one layer (the gateway, for model calls behind it) with bounded attempts, backoff with jitter, and a delay cap; side-effecting nodes have no engine retry.
 - [ ] Total attempts per run (gateway retries times engine retries times model nodes) are written down, and a circuit breaker fails fast during a provider incident.
 - [ ] Every irreversible node passes a stable idempotency key to a receiver that suppresses duplicates, and a test re-executes the node after a failure that follows delivery and asserts exactly one effect.
 - [ ] Checkpoints go to a durable store with `(run_id, seq)` unique; the crash-and-resume test passes against that store, not only in memory.

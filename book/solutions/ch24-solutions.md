@@ -61,7 +61,7 @@ Split the golden and synthetic sets by policy-document group into dev and a froz
 **E2.** Replace the single score with a set of deterministic checks plus a narrow judge:
 
 - **Deterministic checks:** schema validity at 100%; field-level precision and recall per field, with exact match for ids and normalized match for names; numeric tolerance for amounts; consistency checks such as line items summing to the total within tolerance and currency in the ISO list; evidence location, meaning the extracted value appears on the page or span cited.
-- **Judge, only where needed:** free-text fields such as a "payment terms summary", judged for faithfulness against the source text with a short rubric and calibrated on about 150 human-labelled invoices.
+- **Judge, only where needed:** free-text fields such as a "payment terms summary", judged for faithfulness against the source text with a short rubric and calibrated on about 150 human-labeled invoices.
 - **Gate:** schema validity 100%; no regression beyond tolerance in per-field F1 for critical fields (total, vendor, due date) on the frozen holdout; invented-field rate (false positives on null gold) below a set ceiling; the judge dimension gated only if its false pass rate on calibration is acceptable.
 
 One judge score would hide which field regressed, cost more, and misjudge numbers.
@@ -84,7 +84,7 @@ Reducing flakiness, for example with repeated runs averaged per case, also lower
 **E4.** Design the study as follows:
 
 - **Sample:** 150 to 200 answers, stratified by policy area, tenant, answer length, and expected difficulty. Include outputs from the current system and at least one weaker variant so failures are present, plus 15 to 20 adversarial candidates that address the judge directly.
-- **Raters:** two trained raters, ideally one HR domain expert, labelling blind to system and to each other with the same 0 to 3 groundedness rubric and anchored examples. Train them on a 20-case calibration batch first. Adjudicate disagreements and record the rubric phrases that caused them.
+- **Raters:** two trained raters, ideally one HR domain expert, labeling blind to system and to each other with the same 0 to 3 groundedness rubric and anchored examples. Train them on a 20-case calibration batch first. Adjudicate disagreements and record the rubric phrases that caused them.
 - **Metrics:** human-human agreement and weighted kappa (the ceiling); judge versus adjudicated labels with plain and quadratic-weighted kappa; agreement on the gate's pass/fail decision; false pass rate and false fail rate overall and per slice; a list of every disagreement for review.
 - **Acceptance:** judge-human weighted kappa within a small margin of human-human kappa; false pass rate below an agreed ceiling, for example 10% (illustrative); no slice with a markedly worse false pass rate, otherwise that slice is not gated by the judge; a pass rate of zero on adversarial judge cases, meaning the judge never obeys the candidate.
 - **Recalibrate** when the rubric, judge prompt, or judge model changes (including alias resolution), when a new slice or language is added, and on a small monthly spot check of 30 cases to detect drift.
@@ -127,9 +127,9 @@ Acceptance:
 
 - **Sampling:** load a run JSON and its dataset; draw a stratified sample with `slices(prefix)` and per-slice quotas, falling back to random fill; write a CSV with `item_id` (an opaque random id), input, candidate output, and empty `rater_a` and `rater_b` columns, rows shuffled, with no system or prompt names.
 - **Mapping:** write a separate mapping file from `item_id` to `case_id`, readable only by the operator.
-- **Import:** read the labelled CSV, compute `cohens_kappa(rater_a, rater_b, weights="quadratic")` and agreement, then build adjudicated labels (use agreement where it exists, else flag the item for adjudication). Run `calibrate_judge(judge_labels, adjudicated, pass_threshold=..., ordinal_labels=[0, 1, 2, 3])` and print human-human kappa, judge-human kappa, false pass and false fail rates, and disagreement ids.
+- **Import:** read the labeled CSV, compute `cohens_kappa(rater_a, rater_b, weights="quadratic")` and agreement, then build adjudicated labels (use agreement where it exists, else flag the item for adjudication). Run `calibrate_judge(judge_labels, adjudicated, pass_threshold=..., ordinal_labels=[0, 1, 2, 3])` and print human-human kappa, judge-human kappa, false pass and false fail rates, and disagreement ids.
 
-Acceptance: the script is deterministic given a seed, includes at least five items per slice where available, and its tests pass on a synthetic labelled CSV.
+Acceptance: the script is deterministic given a seed, includes at least five items per slice where available, and its tests pass on a synthetic labeled CSV.
 
 **P4.** Expected implementation:
 
@@ -152,7 +152,7 @@ Acceptance: with `FakeEmbeddings(vocabulary=["reset", "vpn", "password", "laptop
 
 **D2.** Several causes are likely, and they combine:
 
-- **Holdout erosion.** Dev and holdout tracking within one point for six releases suggests the holdout has been tuned against, or that dev and holdout share groups (leakage), so the holdout no longer measures generalization. Confirm with `check_leakage` using `group_by` on entity and paraphrase family, by comparing holdout scores with a fresh production sample labelled this month, and by checking holdout access logs for case-level views.
+- **Holdout erosion.** Dev and holdout tracking within one point for six releases suggests the holdout has been tuned against, or that dev and holdout share groups (leakage), so the holdout no longer measures generalization. Confirm with `check_leakage` using `group_by` on entity and paraphrase family, by comparing holdout scores with a fresh production sample labeled this month, and by checking holdout access logs for case-level views.
 - **Staleness and distribution shift.** An eleven-month-old holdout predates product and policy changes, so production traffic contains intents and slices the holdout lacks. Confirm by comparing tag and intent distributions of recent production samples with the holdout, and by slicing correction-rate telemetry by intent to see whether the rise concentrates in slices missing from the holdout.
 - **A metric and outcome mismatch.** The judged metric improved, for example verbosity rewarded by the judge, while users correct more. Confirm by checking answer length deltas and judge calibration on recent outputs.
 

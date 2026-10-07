@@ -92,7 +92,7 @@ Then enumerate failure classes per layer. For Northwind Assist, a first taxonomy
 |---|---|---|---|---|
 | Retrieval miss | the PTO policy is not in the top 10 | retrieval | deterministic vs gold sources | recall@k (Ch 10, 14) |
 | Unsupported claim | answer states a 45-day deadline the policy does not contain | generation | judge with evidence | groundedness |
-| Wrong answer | claims carryover is 10 days, reference says 5 | generation | judge vs reference, or exact field | correctness |
+| Wrong answer | claims carryover is 5 days, reference says 10 | generation | judge vs reference, or exact field | correctness |
 | Off-topic answer | answers the leave question with expense rules | generation | judge | relevance |
 | Citation mismatch | cites the travel policy for a PTO claim | generation | deterministic: cited id in supporting set | citation precision |
 | Permission leak | HR-only content shown to a retail employee | system | deterministic: ACL check | leak count, must be 0 |

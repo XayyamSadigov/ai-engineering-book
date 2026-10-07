@@ -1064,7 +1064,7 @@ Track in production: the recall forbidden rate (via audit sampling), user correc
 - [ ] The poisoning test asserts that a rejected write never reaches the embedding provider, and every injection fixture in the threat model is in the write-policy evaluation set with zero false accepts.
 - [ ] Every kind has a TTL capped by policy, the read predicate excludes expired records, and the purge job runs daily with an alert after two missed runs.
 - [ ] The tenant and user isolation tests run against every store backend in CI, and the production database enforces row-level security on `tenant`.
-- [ ] `MEMORY_FINGERPRINT_SECRET` comes from the secret store, not the `dev-only-secret` default, and tombstones contain no content.
+- [ ] `MEMORY_FINGERPRINT_SECRET` comes from the secret store and is passed to the store as `fingerprint_secret=`, so the store never falls back to its `dev-only-secret` default, and tombstones contain no content.
 - [ ] A deletion test re-runs extraction over the original transcript after `forget` and asserts the fact is not re-created; `delete_owner` and `export` are wired to the data-subject request process.
 - [ ] The deletion design lists every other copy (traces, provider logs, backups, memory files, fine-tuning data) with its retention.
 - [ ] Recall uses a relevance gate, memory has a token cap inside the context budget, and recalled memories render as labeled data with source and date.

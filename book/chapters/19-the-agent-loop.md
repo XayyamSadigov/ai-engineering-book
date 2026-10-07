@@ -10,7 +10,7 @@ This chapter builds an agent the way you would build any other production softwa
 - Estimate how input tokens grow with the number of steps, and keep that growth in check with observation shaping.
 - Replay recorded trajectories to regression-test a harness change, or to see where a new model or prompt would decide differently.
 
-**Prerequisites:** Chapters 3 (`LLMClient`, the gateway, usage and cost), 16 (tool contracts and the governed `ToolExecutor`), and 17 (when a workflow is enough). | **Code:** `book/projects/agentkit/` (run: `cd book/projects/agentkit && pytest -q`) | **Builds:** the `agentkit` package (`AgentRuntime`), which Chapters 20, 21, 22, 38, and the capstone import, plus a Northwind incident example that pauses for approval, resumes, and replays itself.
+**Prerequisites:** Chapters 3 (`LLMClient`, the gateway, usage and cost), 16 (tool contracts and the governed `ToolExecutor`), and 17 (when a workflow is enough). | **Code:** `book/projects/agentkit/` (run: `cd book/projects/agentkit && pytest -q`) | **Builds:** the `agentkit` package (`AgentRuntime`), which Chapters 20, 22, 25, 37, 38, and the capstone import, plus a Northwind incident example that pauses for approval, resumes, and replays itself.
 
 ## Why this matters
 

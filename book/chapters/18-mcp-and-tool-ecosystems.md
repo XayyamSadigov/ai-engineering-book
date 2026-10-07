@@ -145,7 +145,7 @@ Once more than a handful of remote servers exist, organizations put an **MCP gat
 
 Because it terminates the protocol, it can also aggregate lists from many servers into one namespaced catalog and cache them.
 
-A gateway centralizes control, and the costs of centralization come with it: one more network hop on every tool call, a component whose outage disables every tool, and a team that becomes a bottleneck for every new integration. It also does not remove the need for host-side checks. The gateway knows the user and the tool; only the host knows the task, so per-task tool selection and approval binding stay in the host. Chapter 28's reference architecture places the gateway inside the tool layer, next to the model gateway, and the two share identity and audit plumbing.
+A gateway centralizes control, and the costs of centralization come with it: one more network hop on every tool call, a component whose outage disables every tool, and a team that becomes a bottleneck for every new integration. It also does not remove the need for host-side checks. The gateway knows the user and the tool; only the host knows the task, so per-task tool selection and approval binding stay in the host. In Chapter 28's reference architecture, an MCP gateway belongs in the tool layer, next to the model gateway, and the two share identity and audit plumbing.
 
 Third-party remote servers deserve a separate tier. Treat them as you would a third-party API that receives your data: vendor review, data-processing terms, an allowlist of exactly which tools are enabled, no access to sessions that hold restricted data, and monitoring of description changes.
 

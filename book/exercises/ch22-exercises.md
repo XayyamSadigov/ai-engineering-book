@@ -39,7 +39,7 @@ Solutions: `../solutions/ch22-solutions.md`
 
 **P3.** (about 90 min) Add a cost-based global budget: give the team a `PricingTable` and `max_cost_usd`, reserve cost as well as tokens at admission, and add a test showing that a run stops admitting researchers when the cost pool is exhausted even if tokens remain.
 
-**P4.** (about 3 hours) Replace the deterministic rubric's faithfulness criterion with an LLM judge built on Chapter 24's evalkit, run it on the offline answers with a scripted judge, and write the calibration procedure you would follow before trusting it on live answers.
+**P4.** (about 3 hours) Replace the deterministic rubric's groundedness criterion with an LLM judge built on Chapter 24's evalkit, run it on the offline answers with a scripted judge, and write the calibration procedure you would follow before trusting it on live answers.
 
 ### Debugging exercises
 

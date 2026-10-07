@@ -11,7 +11,7 @@ Solutions: `../solutions/ch14-solutions.md`
 
 **K2.** Why are forbidden-document cases excluded from recall averages, and what two checks replace recall for them?
 
-**K3.** Explain the difference between faithfulness and correctness for a RAG answer, and give a Northwind example that scores high on one and low on the other.
+**K3.** Explain the difference between groundedness and correctness for a RAG answer, and give a Northwind example that scores high on one and low on the other.
 
 **K4.** Name the five parts of a day-one RAG evaluation and, for each, a failure it catches that an end-to-end "answer quality" score from an LLM judge would miss.
 
@@ -23,11 +23,11 @@ Solutions: `../solutions/ch14-solutions.md`
 
 **E1.** Northwind is adding 2,000 scanned PDF invoices and contracts to the corpus. Design the additions to the gold set (labels, tags, permission contexts, abstention cases) and say which granularity of label you would use and why.
 
-**E2.** A team proposes a single "RAG score" = 0.4 × recall@5 + 0.4 × faithfulness + 0.2 × citation precision for the release dashboard. Write the response: what the score hides, and what you would put on the dashboard and in the gate instead.
+**E2.** A team proposes a single "RAG score" = 0.4 × recall@5 + 0.4 × groundedness + 0.2 × citation precision for the release dashboard. Write the response: what the score hides, and what you would put on the dashboard and in the gate instead.
 
 **E3.** Design the evaluation for adding a cross-encoder reranker: which metrics you compute on which lists, the k values, the slices, the latency budget, and the gate rules that would block it.
 
-**E4.** Your faithfulness judge's calibration shows a false pass rate of 8 percent overall and 30 percent on `conflicting-versions` cases. Decide how the gate should use the judge, and what you would change in the judge or the dataset.
+**E4.** Your groundedness judge's calibration shows a false pass rate of 8 percent overall and 30 percent on `conflicting-versions` cases. Decide how the gate should use the judge, and what you would change in the judge or the dataset.
 
 ### Practical exercises
 
@@ -43,6 +43,6 @@ Solutions: `../solutions/ch14-solutions.md`
 
 **D1.** After a retriever refactor, the stage table shows 0 `dropped-by-fusion` and 0 `dropped-by-rerank` cases for a week, while `not-retrieved` doubled. Recall@50 on first-stage lists is unchanged. Diagnose the likely cause and name the trace fields you would inspect.
 
-**D2.** Faithfulness rose from 0.86 to 0.97 after a prompt change, rubric coverage stayed flat, and the abstention table shows false abstains rising from 4 to 15. Explain what happened and how the report should have made it obvious.
+**D2.** Groundedness rose from 0.86 to 0.97 after a prompt change, rubric coverage stayed flat, and the abstention table shows false abstains rising from 4 to 15. Explain what happened and how the report should have made it obvious.
 
 **D3.** A candidate configuration passes the gate. In production, a retail store manager receives an answer citing a logistics incident report. The evaluation run shows `no_permission_leak` at 1.0 on all cases. List the ways the evaluation could have missed the leak, most likely first, and the change to the evaluation that would catch each.

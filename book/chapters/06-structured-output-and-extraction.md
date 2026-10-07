@@ -588,7 +588,7 @@ def decide(
 
 ### Prompts
 
-The prompts carry the rules that make the rest of the pipeline work: copy, do not compute; copy dates as written; keep inconsistent figures; quote evidence; treat the document as data. The repair prompt explicitly forbids balancing the books. The classification and ticket prompts, and `render_repair`, which formats the violation list, are on disk.
+The prompts carry the rules that make the rest of the pipeline work: copy, do not compute; copy dates as written; keep inconsistent figures; quote evidence; treat the document as data. The repair prompt explicitly forbids balancing the books. The classification and ticket prompts, and `render_repair`, which formats the violation list, are on disk. Project 1 keeps its prompts as constants under one `PROMPT_VERSION` rather than as registry files (Chapter 4); Chapter 7's How Part II composes explains that trade and how to switch.
 
 ```python
 # path: book/projects/p1-extraction-api/extraction_api/application/prompts.py  (excerpt; full file on disk)

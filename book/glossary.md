@@ -266,7 +266,8 @@ context relevance wastes tokens and distracts the generator even when recall is 
 Quality often degrades well before the hard limit. (Ch 2, 5)
 
 **ContextBuilder**: The book's component that assembles context under a token budget with priorities,
-ordering, source labels, and compaction. (Ch 5)
+ordering, source labels, and compaction. It owns the untrusted-data labels of every item it assembles;
+prompt templates label only their own variables. (Ch 5, 7)
 
 **Contextual chunk header**: A short prefix added to a chunk's indexed text that restores context the
 chunk lost when cut from its document, such as a heading breadcrumb or a document summary. It lets
@@ -702,6 +703,10 @@ confused when sizing. (Ch 2, 34)
 **ModelGateway**: The `aie_core` component that wraps a primary client with retries, fallbacks,
 rate limiting, caching, concurrency limits, cost accounting, and tracing. Every model call in the book
 goes through it. (Ch 3)
+
+**Model hint**: Metadata in a prompt file (a size tier, whether structured output is needed) that
+advises the router which models suit the prompt, instead of naming a vendor model. It is advice: policy
+routing rules outrank it. (Ch 4, 7)
 
 **Model pinning**: Referencing an exact model version rather than an alias that the provider may update.
 It keeps behavior stable between deliberate, evaluated upgrades. (Ch 7)

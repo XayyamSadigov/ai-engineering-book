@@ -10,7 +10,7 @@ This chapter is about choosing a model for a workload from evidence rather than 
 - Choose a cascade threshold by end-to-end utility, pricing in what a misrouted request costs.
 - Diagnose routing incidents (escalation storms, hidden fallbacks, retired pins) from router telemetry.
 
-**Prerequisites:** Chapters 3 and 6 (the `aie_core` client, gateway, and pricing table; confidence signals and calibration). | **Code:** `book/projects/examples/ch07/` (run: `cd book/projects/examples/ch07 && pytest -q`) | **Builds:** the chapter's model catalog, selection harness, `Router`, and cascade evaluator, running offline against `FakeLLM` instances that act as a small, a general, and a reasoning model on the Northwind ticket set.
+**Prerequisites:** Chapters 3 and 6 (the `aie_core` client, gateway, and pricing table; confidence signals and calibration); Chapters 4 and 5 for How Part II composes. | **Code:** `book/projects/examples/ch07/` (run: `cd book/projects/examples/ch07 && pytest -q`) | **Builds:** the chapter's model catalog, selection harness, `Router`, and cascade evaluator, running offline against `FakeLLM` instances that act as a small, a general, and a reasoning model on the Northwind ticket set.
 
 ## Why this matters
 
@@ -227,6 +227,89 @@ A migration off a retired or superseded pin follows a fixed procedure, and it st
 
 Error mapping matters on retirement day. A provider usually rejects a retired model with a "model not found" class of error, which `aie_core` maps to a non-retryable `InvalidRequestError`: the route fails loudly and an alert fires. That is the correct behavior, because a missing model will not come back on retry. Any layer that turns it into a retryable error, such as an internal proxy that answers 503 for every upstream failure, converts the outage into a silent fallback on every request, which shows up only as a cost increase.
 
+### How Part II composes
+
+Chapters 4 to 7 each built one component and tested it alone. A production request passes through all of them, and each one adds to the trace something the others cannot know. The prompt registry owns the versioned contract (instructions, decoding policy, model hint). The `ContextBuilder` owns what the model sees under a budget and the manifest that records it. The router owns which model serves the request. The gateway owns retries, limits, and the call span. `complete_structured` owns the schema and the repair loop. One grounded Northwind Assist answer, end to end:
+
+```mermaid
+sequenceDiagram
+    participant App as Application
+    participant Reg as PromptRegistry
+    participant CB as ContextBuilder
+    participant V as complete_structured
+    participant R as Router
+    participant GW as ModelGateway
+    App->>Reg: get assist.grounded at prod, render
+    Reg-->>App: system contract, decoding policy, model hint, PromptRef
+    App->>CB: contract as pinned trusted item, evidence items, query, scope
+    CB-->>App: messages with labeled evidence, manifest, prefix hash
+    App->>V: request with prompt identity and tier hint, GroundedAnswer schema
+    V->>R: complete
+    R->>R: policy rules, then hint rules, then capability check
+    R->>GW: request pinned to the chosen alias
+    GW-->>R: completion after retries, llm.complete span
+    R-->>V: completion, route decision recorded
+    V->>V: parse and validate; on failure, repair through the router again
+    V-->>App: GroundedAnswer
+    Note over App,GW: one trace: prompt version, context manifest, route decision, model calls
+```
+
+**Who labels untrusted text.** Part II has two labeling implementations. Chapter 4's template wraps an untrusted variable in `<untrusted_data label="...">`; Chapter 5's builder wraps an untrusted item in `<untrusted_data source="..." kind="...">`. Both use the same tag and both neutralize a forged closing tag, so one system instruction covers either. The rule that keeps them from overlapping is that untrusted text is labeled exactly once, by the component that places it in the prompt. Anything selected under a budget (retrieved evidence, tool results, memory, conversation state) is a `ContextItem`, and the builder owns its label, because only the builder knows its source id, its position, and whether it survived the budget. The template owns only its own slots: request-scoped values rendered into a prompt that has no builder in front of it, such as the ticket body in `ticket.classify`.
+
+A prompt that feeds a builder therefore declares no evidence slot. `assist.grounded` (in `examples/ch07/prompt_files/`) has a system section and nothing else, and it enters the builder as a pinned, trusted instructions item. Chapter 4's `assist.answer` keeps a `documents` slot because its regression suite renders it without a builder; in a service that has one, the evidence goes to the builder instead. Passing the same evidence both ways would label it twice and make the manifest wrong about what the model saw.
+
+The glue is short because each component already speaks `aie_core` types:
+
+```python
+# path: book/projects/examples/ch07/compose.py (excerpt; full file on disk)
+PROMPTS = PromptRegistry.from_directory(HERE / "prompt_files")
+HINT_ROUTES = {"small": "small_first", "medium": "general", "large": "reasoning"}
+
+# ... GroundedAnswer (the output schema) and Composed (answer, prompt, context, route, served_by)
+
+def hinted_router(catalog, clients, **kwargs) -> Router:
+    """Policy rules first; a prompt's tier hint decides only when no policy rule matched."""
+    hints = [Rule(f"prompt_hint_{tier}", route, lambda req, need, t=tier: req.metadata.get("prompt.tier") == t)
+             for tier, route in HINT_ROUTES.items()]
+    return Router(catalog, clients, northwind_routes(), default_route="general",
+                  rules=[*northwind_rules(), *hints], **kwargs)
+
+
+class _RouterClient:
+    """complete_structured expects an LLMClient; keep every RoutedCompletion for the result."""
+    provider = "router"
+
+    def __init__(self, router: Router) -> None:
+        self.router, self.routed = router, []
+
+    def complete(self, req):
+        self.routed.append(self.router.complete(req))
+        return self.routed[-1].completion
+
+
+def answer(question: str, evidence: list[ContextItem], scope, *, builder, router: Router,
+           tracer: Tracer | None = None, **request_metadata) -> Composed:
+    prompt = PROMPTS.get("assist.grounded", "prod").render({})               # 1. versioned contract
+    items = [ContextItem(kind="instructions", content=m.text, source_id=f"prompt:{prompt.ref}",
+                         trust=Trust.TRUSTED, pinned=True) for m in prompt.messages]
+    items += [*evidence, ContextItem(kind="query", content=question, source_id="user:request")]
+    with (tracer or NoopTracer()).span("assist.answer", **prompt.ref.span_attributes()):
+        built = builder.build(items, scope)                                   # 2. budget, order, labels
+        req = prompt.to_request(messages=built.messages)
+        req = req.model_copy(update={"metadata": {**req.metadata, **request_metadata,
+                                                  "prompt.tier": prompt.spec.model_hints.tier}})
+        client = _RouterClient(router)                                         # 3-4. route, then gateway
+        parsed, _ = complete_structured(client, req, GroundedAnswer)           # 5. validate and repair
+    last = client.routed[-1]
+    return Composed(parsed, prompt.ref, built, last.decision, last.served_by)
+```
+
+In the test, as in production, each router client is a `ModelGateway`, so retries stay below the routing decision, as the router's design requires. The prompt's decoding policy survives: `to_request` keeps its temperature and `max_tokens` and records that only `messages` was overridden. A repair is a new routed call, so it is costed and traced like the first attempt. `test_compose.py` runs the whole path on `FakeLLM` instances: it checks that the hint chose the route, that a forged closing tag inside evidence is neutralized and labeled once, that one malformed answer costs exactly one repair, and that the `assist.answer`, `context.build`, `router.complete`, and `llm.complete` spans all land in the same tracer.
+
+**What the router does with model hints.** The `Router` never reads `ModelHints`; it routes on the request and its metadata. The hint reaches it here only because the glue copies `model_hints.tier` into `req.metadata["prompt.tier"]` and `hinted_router` appends one rule per tier after the Northwind rules. Rule order is what makes a hint advice rather than a command: restricted data, high risk, long context, and the narrow-task rule all win first, and the second test pins that an on-prem request ignores a `medium` hint. The other hint fields need no rule. `needs_response_schema` and `min_context_tokens` restate requirements that `Requirements.from_request` derives from the request itself, so the router checks the real request rather than the claim. Without this glue, a hint is documentation in the prompt file: useful in review and in the selection harness, invisible at runtime.
+
+**Why Project 1 uses prompt constants.** Project 1 keeps its prompts as constants in `prompts.py`, labels the document with its own `<document>` tag, and stamps one `PROMPT_VERSION` on every result, span, and review item. That is a scope choice for a single service whose four prompts change together and ship with its code. It gives the property the registry exists for, an exact prompt behind every output, without the rest: no per-prompt versions, no content hash or lock, no alias to roll back without a deploy. A team that needs those moves each constant into a prompt file, declares `document` an untrusted variable so the template labels it and `render_document` goes away, records `rendered.ref` wherever `PROMPT_VERSION` is recorded today, and adds the lock check to CI. The document stays a template slot, because Project 1 sends one document per request and has nothing to select under a budget.
+
 ## How it works
 
 Follow one Northwind request through the router.
@@ -315,7 +398,10 @@ book/projects/examples/ch07/
 ├── cascade_eval.py   collect_outcomes, simulate, sweep, utility, calibration
 ├── config.py         RouterSettings from environment variables
 ├── demo.py           selection table, cascade sweeps, routing decisions
+├── compose.py        one request through registry, builder, router, gateway, validator
+├── prompt_files/     assist.grounded@1.0.0 and aliases.toml, the prompt compose.py serves
 ├── test_ch07.py      offline tests
+├── test_compose.py   offline test of the Part II composition
 ├── pyproject.toml
 ├── .env.example
 └── README.md

@@ -1,0 +1,3 @@
+# Which version each environment serves. Changing a line here is a deploy; the files are immutable.
+["assist.grounded"]
+prod = "1.0.0"

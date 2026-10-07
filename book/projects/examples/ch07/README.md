@@ -16,7 +16,10 @@ router.py         Router: rules, optional EmbeddingRouteClassifier, cascade esca
 cascade_eval.py   collect outcomes once, simulate any threshold, utility with misroute cost, calibration
 config.py         RouterSettings from environment variables
 demo.py           prints the selection table, cascade sweeps under three error costs, routing decisions
+compose.py        Part II end to end: registry prompt, ContextBuilder, Router, ModelGateway, complete_structured
+prompt_files/      the versioned prompt and alias map compose.py renders
 test_ch07.py      offline tests
+test_compose.py   offline tests for the composed path
 ```
 
 ## Run
@@ -24,7 +27,7 @@ test_ch07.py      offline tests
 From the repository root:
 
 ```bash
-uv pip install --python .venv/bin/python -e book/projects/aie_core   # or: pip install -e book/projects/aie_core
+book/tools/setup_dev.sh                                              # once, creates .venv
 .venv/bin/python -m pytest book/projects/examples/ch07 -q
 cd book/projects/examples/ch07 && ../../../../.venv/bin/python demo.py
 ```

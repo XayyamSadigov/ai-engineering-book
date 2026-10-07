@@ -150,7 +150,7 @@ Latency closes the question before quality does. With the illustrative numbers f
 
 Every item is either trusted or untrusted. Trusted items are text your team wrote and reviewed: the system contract, schemas, policies the application enforces. Untrusted items are anything a user, a document author, a web page, or a tool could influence. That includes retrieved documents, tool results, user-stated facts, and model-written summaries of user text. Each item also has a kind, such as instructions, evidence, or turn. The builder refuses to construct an instructions item marked untrusted, because text you did not write must never act as an instruction.
 
-Untrusted items are rendered inside explicit blocks that carry their source id. Conversation turns and the request are the exception, because their message role already marks them as user text:
+Untrusted items are rendered inside explicit blocks that carry their source id. Conversation turns and the request are the exception, because their message role already marks them as user text. The builder owns this labeling for everything it assembles; Chapter 4's template uses the same tag but labels only the variables it renders itself, so a versioned prompt enters the builder as a trusted instructions item with no evidence slot of its own (Chapter 7, How Part II composes):
 
 ```text
 <untrusted_data source="kb:laptop-replacement-runbook#2" kind="evidence">

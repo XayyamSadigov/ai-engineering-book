@@ -12,53 +12,46 @@ Retrieval-augmented generation (RAG) is how many production assistants answer fr
 
 **Prerequisites:** Chapters 3 (the `aie_core` LLM and embedding clients), 8 (what embeddings and cosine similarity measure), and 9 (exact versus approximate search, metadata filters). | **Code:** `book/projects/examples/ch10/` (run: `cd book/projects/examples/ch10 && pytest -q`) | **Builds:** `minimal_rag.py`, the baseline pipeline, and `failure_modes.py`, a deterministic reproduction of every failure in the catalogue with a detector for each.
 
+**First reading:** Why this matters; Mental model; Core concepts up to The stage model; How it works; Architecture; Implementation; Failure modes 1 to 7; Evaluation and testing; Before you ship. **Deep dives** (skip on a first pass): Map of Part IV; Code walkthrough; Production considerations; Common mistakes; Operational failures beyond the catalogue; Tradeoffs.
+
 ## Why this matters
 
-Northwind's People Operations team asks for an assistant that answers policy questions. A first prototype takes an afternoon: load the Markdown files, split them every 800 characters, embed the pieces, retrieve the four closest to the question, paste them into a prompt. The demo goes well. Then someone asks how many PTO days they can carry over, and the assistant says five. The current policy says ten. Both documents are in the index; the old FAQ simply matched the question's wording better. The next week an ordinary employee asks about salary bands and gets figures from an HR-only document, because nothing in the prototype knew that documents have readers.
+Northwind's People Operations team asks for an assistant that answers policy questions. A first prototype takes an afternoon: split the Markdown files every 800 characters, embed the pieces, retrieve the four closest to the question, paste them into a prompt. The demo goes well. Then someone asks how many PTO days they can carry over, and the assistant says five. The current policy says ten; the old FAQ simply matched the question's wording better. The next week an ordinary employee asks about salary bands and gets figures from an HR-only document, because nothing in the prototype knew that documents have readers.
 
-Neither failure is a model failure. The model faithfully summarized what it was shown. The failures happened in ingestion (no notion of which version supersedes which), in retrieval (no permission filter), and in the absence of any check between the model's text and the user. This is the general shape of RAG problems: most of them live in the search system and the plumbing around generation, and they cannot be fixed by rewording the prompt.
-
-RAG also underlies a large share of applied AI systems: internal assistants, support copilots, documentation search, and incident research all depend on it. An engineer who can name the naive failure modes and the stage that owns each can reason about any of these systems. One who cannot will spend weeks tuning prompts while the real bug sits in the chunker.
+Neither is a model failure: the model faithfully summarized what it was shown. The failures were in ingestion (no notion of supersession), in retrieval (no permission filter), and in the missing check on the model's text. Most RAG problems live in the search system and the plumbing around generation, where rewording the prompt cannot reach. An engineer who can name the stage that owns each failure can reason about any RAG system; one who cannot will tune prompts for weeks while the bug sits in the chunker.
 
 ## Mental model
 
 > **Mental model:** Retrieval quality usually dominates generation quality. If the evidence is not in the context, no prompt recovers it.
 
-At request time the whole flow is short: question → embed → search the index for nearby chunks → paste the top chunks into the prompt as labeled evidence → the LLM answers with citations → code validates them. Everything else in Part IV refines one step of that flow.
+At request time the flow is short: question → embed → search the index for nearby chunks → paste the top chunks into the prompt as labeled evidence → the LLM answers with citations → code validates them. The rest of Part IV refines one step of that flow.
 
-The second image to hold throughout Part IV is that **RAG is two systems joined by a contract**. The retrieval system answers one question: did we put the right evidence in front of the model? The generation system answers a different one: given that evidence, did the model produce a correct, grounded, cited answer, or abstain when it should? The two have different inputs, different metrics, different failure modes, and different owners in a mature team. The contract between them is the packed evidence block: a set of labeled chunks with stable identifiers, plus rules for how the model must use them (the grounding contract).
-
-When an answer is wrong, the first diagnostic question is therefore not "what should the prompt say?" but "was the required evidence in the context?" If not, the bug is upstream of the model. If yes, it is in the generation contract, the evidence ordering, or the model choice. Making this fork routinely prevents most of the random prompt tweaking that characterizes struggling RAG projects.
+The second image: **RAG is two systems joined by a contract**. Retrieval puts evidence in front of the model; generation turns it into a grounded, cited answer or an abstention. The contract is the packed evidence block: labeled chunks with stable ids, plus rules for how the model must use them (the grounding contract). So when an answer is wrong, ask first "was the required evidence in the context?", not "what should the prompt say?" If not, the bug is upstream of the model.
 
 ## Core concepts
 
 ### What RAG is and why it exists
 
-Retrieval-augmented generation is a design pattern in which the application searches an external store for material relevant to a request and inserts it into the model's input, so the model answers from that evidence rather than from what it memorized in training. It is a pattern, not an algorithm: the retrieval can be vector search, keyword search, SQL, a search API, or a combination. Chapter 9 lists the situations in which a vector index is unnecessary.
+Retrieval-augmented generation is a design pattern: the application searches an external store for material relevant to a request and inserts it into the model's input, so the model answers from that evidence rather than from its training. The search can be vector, keyword, SQL, a search API, or a combination (Chapter 9 lists when a vector index is unnecessary).
 
-The pattern exists because a model's weights are a poor knowledge store for most business problems, in four specific ways.
+The pattern exists because weights are a poor knowledge store for most business problems, in four ways:
 
-**Freshness.** Weights reflect the training data up to a cutoff. Northwind's PTO policy changed on 1 January 2026; no general model knows that, and fine-tuning one to know it would take days and would need repeating for every revision. A retrieval index updates when the document does.
+- **Freshness.** Weights stop at a training cutoff. Northwind's PTO policy changed on 1 January 2026; a retrieval index updates when the document does, while fine-tuning would need repeating for every revision.
+- **Private knowledge.** Runbooks, incident reports, and contracts were never in any training set.
+- **Citations.** An answer from retrieved evidence can point at the exact chunk it used; an answer from weights cannot. In policy, legal, and support domains, the citation is often the product.
+- **Permissions.** Each chunk carries its access-control list (ACL), so retrieval can filter per request. Anything a model learned in its weights, it can say to anyone.
 
-**Private knowledge.** Runbooks, incident reports, and contracts were never in any training set. The only ways to make a model use them are to put them in the context or to train on them.
-
-**Citations and auditability.** An answer from retrieved evidence can point at the exact chunk it used, which a reviewer can open and check. An answer from weights cannot say where it came from. For policy, legal, medical, and support domains, the citation is often the product.
-
-**Permissions.** Different users may see different documents. A retrieval filter can enforce that per request, because each chunk carries its access-control list. Weights cannot be permission-filtered: anything a model learned, it can say to anyone.
-
-Cost is a fifth, relative reason: four relevant chunks are far cheaper than everything, and an index update is cheaper than retraining.
+Cost is a fifth, relative reason: four chunks are far cheaper than everything, and reindexing is cheaper than retraining.
 
 ### RAG versus long context versus fine-tuning
 
-These three solve different problems and frequently coexist.
+**Long context** means putting whole documents, or the whole corpus, into the prompt. It removes retrieval and its decisions, at the cost of billing and prefilling every token on every request; models also use long contexts unevenly (Chapters 2 and 5).
 
-**Long context** means putting whole documents, or the whole corpus, into the prompt and letting the model find what it needs. It removes the retrieval system and its decisions. Its costs are the ones Chapter 2 describes: every input token is billed and prefilled, time-to-first-token grows with prompt length, KV-cache memory bounds concurrency, and models use long contexts unevenly (lost in the middle).
+A worked example: the 24 Northwind documents in `shared-data/docs` total about 22,600 tokens. This chapter's pipeline splits them into 155 chunks of about 165 tokens, and a typical request (system prompt, four chunks, question) is about 900 input tokens. Stuffing the whole corpus costs roughly 25 times more input per question. At an illustrative 50,000 questions per month, that is about 1.1 billion input tokens instead of 45 million. Prompt caching narrows the gap only while the stuffed prefix is identical across requests; permissions break that, because users in `hr` and users in `all` need different corpora, so the cache fragments.
 
-A worked example on the shared corpus makes the trade concrete. The 24 Northwind documents in `shared-data/docs` total about 22,600 tokens by the book's tokenizer. The minimal RAG pipeline in this chapter splits them into 155 chunks of about 165 tokens each, and a typical request (system prompt, four chunks, question) is about 900 input tokens. Stuffing the whole corpus costs roughly 25 times more input per question. At an illustrative 50,000 questions per month, that is about 1.1 billion input tokens instead of 45 million. Prompt caching narrows the gap when the stuffed prefix is identical across requests, but permissions break that assumption: users in `hr` and users in `all` must see different corpora, so each distinct combination of groups needs its own prefix, and the cache fragments.
+Now scale the corpus: an illustrative 30,000 documents at 1,500 tokens each is 45 million tokens, more than any context window. At this scale long context is a final step: once retrieval has narrowed the candidates to a few documents, send them whole, which removes many chunk-boundary failures.
 
-Now scale the corpus. Northwind's real knowledge base might hold an illustrative 30,000 documents at 1,500 tokens each: 45 million tokens. No context window holds that. At this scale long context is a technique for the final step: once retrieval has narrowed the candidates to a few documents, a long window lets you send them whole instead of as fragments, which removes many chunk-boundary failures.
-
-**Fine-tuning** changes the model's weights with task-specific examples (Chapter 33). It is the right tool for behavior: a consistent output format, a classification habit, a domain style, a smaller model imitating a larger one. It is the wrong tool for facts that change, facts with readers, or facts that must be cited. Teams that fine-tune on policy documents to "teach the model the policies" typically find that it learns their style and hallucinates their specifics with more confidence.
+**Fine-tuning** changes the model's weights (Chapter 33). It is the right tool for behavior (an output format, a domain style, a smaller model imitating a larger one) and the wrong tool for facts that change, have readers, or must be cited. Fine-tuned on policy documents, a model typically learns their style and hallucinates their specifics with more confidence.
 
 | Question | Prefer RAG | Prefer long context | Prefer fine-tuning |
 |---|---|---|---|
@@ -69,19 +62,19 @@ Now scale the corpus. Northwind's real knowledge base might hold an illustrative
 | Problem is behavior, format, or style | no | no | yes |
 | Retrieval evaluation is weak or absent | risky | simpler to get right | not relevant |
 
-The decision rule: use RAG when the problem is knowledge access over a corpus that is large, changing, private, or permissioned. Use long context when the corpus for one request is small enough to send whole, or as the last step after retrieval. Use fine-tuning when the problem is how the model behaves rather than what it knows, combined with retrieval when you need both. This is why Chapter 1's decision ladder puts retrieval on the second rung: it changes the input.
+The decision rule: use RAG for knowledge access over a corpus that is large, changing, private, or permissioned. Use long context when one request's corpus is small enough to send whole, or as the last step after retrieval. Use fine-tuning for how the model behaves rather than what it knows, combined with retrieval when you need both.
 
 ### RAG is two systems
 
-The retrieval system is a search engine, with quality measured by recall (did the needed evidence come back?) and precision (how much of what came back is useful?). Its vocabulary is information retrieval: inverted indexes, embeddings, nearest neighbors, reranking, filters. It can be evaluated without any language model, by checking whether known-relevant chunks appear in the top results for gold questions (a fixed set of questions with known required evidence).
+The retrieval system is a search engine, measured by recall (did the needed evidence come back?) and precision (how much of what came back is useful?). It can be evaluated without any language model, against gold questions (a fixed set of questions with known required evidence).
 
-The generation system is a constrained writer. Its input is the question and the packed evidence; its output is a cited answer or an abstention. Its quality is groundedness (every claim supported by cited evidence; Chapter 24 defines the terms), correctness against a rubric, citation precision (cited chunks actually support the claim) and citation recall (every claim that needs a citation has one), and abstention correctness. It can be evaluated with retrieval held fixed, by feeding it known evidence sets.
+The generation system is a constrained writer: question and packed evidence in, cited answer or abstention out. It is measured by groundedness (every claim supported by cited evidence), correctness, citation quality, and abstention correctness (Chapter 24 defines the terms), with retrieval held fixed.
 
-Separating the two buys you diagnosis. Suppose evaluation shows 70 percent answer correctness. If retrieval recall on the same questions is 72 percent, the generator is nearly perfect and every hour spent on prompts is wasted; the work is in chunking, ranking, and coverage. If recall is 98 percent, the evidence is there and the generator is mishandling it. A single end-to-end number hides which of these worlds you are in. Chapter 14 builds the evaluation that reports the two separately, stage by stage.
+Separating the two buys diagnosis. Suppose answer correctness is 70 percent. If retrieval recall on the same questions is 72 percent, the generator is nearly perfect and the work is in chunking, ranking, and coverage. If recall is 98 percent, the generator is mishandling evidence it has. One end-to-end number hides which world you are in.
 
 ### Retrieval metrics: the definitions
 
-"Recall" is used loosely in RAG discussions, so the book fixes one set of definitions here, and Chapters 8, 9, 12, and 14 use them as written. Each metric is computed per question from two inputs: the ranked list the retriever returned, and the gold labels for that question. The labels distinguish **required** items (the evidence the answer needs) from **acceptable** ones (relevant, but not sufficient alone). Items are usually documents; when a metric is computed over chunks, say so next to the number. Per-question values are averaged over the gold set.
+"Recall" is used loosely in RAG discussions, so the book fixes one set of definitions here; Chapters 8, 9, 12, and 14 use them as written. Each metric is computed per question from the ranked list the retriever returned and the gold labels for that question. The labels distinguish **required** items (the evidence the answer needs) from **acceptable** ones (relevant, but not sufficient alone). Per-question values are averaged over the gold set.
 
 | Metric | Definition for one question | What it answers | Use it when |
 |---|---|---|---|
@@ -91,7 +84,7 @@ Separating the two buys you diagnosis. Suppose evaluation shows 70 percent answe
 | MRR | 1/rank of the first required item, 0 if absent; averaged over questions (mean reciprocal rank) | Is the best source at the top? | Only the top one or two results are packed or shown |
 | nDCG@k | Sum of graded gains discounted by position, divided by the same sum for the ideal ordering (normalized discounted cumulative gain) | Is the ordering right when relevance has grades? | Required and acceptable items should rank in that order |
 
-A worked example makes the differences concrete. A question needs two documents, R1 and R2, and a third, A, is acceptable. The retriever returns `[X, R1, A, Y, R2]`.
+A worked example: a question needs two documents, R1 and R2, and a third, A, is acceptable. The retriever returns `[X, R1, A, Y, R2]`.
 
 - hit@1 is 0 and hit@3 is 1: the top result is useless, but something useful is in the top three.
 - recall@3 is 1/2 = 0.5 and recall@5 is 1.0: packing three results would leave the answer incomplete; packing five would not.
@@ -99,11 +92,11 @@ A worked example makes the differences concrete. A question needs two documents,
 - MRR is 1/2 = 0.5, because the first required document sits at rank 2.
 - nDCG@5 uses gain `2^grade - 1` with required at grade 2 (gain 3) and acceptable at grade 1 (gain 1), each divided by `log2(rank + 1)`. The list earns 3/1.585 + 1/2 + 3/2.585 = 3.55; the ideal order R1, R2, A earns 3/1 + 3/1.585 + 1/2 = 5.39; nDCG@5 = 0.66.
 
-The same list scores 0, 0.5, 0.6, and 1.0 depending on which metric you pick, which is why a retrieval number without its metric name, its k, and its unit (documents or chunks) is meaningless. Two rules keep comparisons honest: fix k across the configurations you compare, and report first-stage recall at a large k next to the final metric, because a document missing from the candidate pool can never be recovered by a later stage. Chapter 14 implements these functions in `ragkit.eval.rag_metrics`, adds permission leaks as a separate metric that no average may hide, and shows which metric to report at which stage.
+The same list scores 0, 0.5, 0.6, or 1.0 depending on the metric, so a retrieval number without its metric name, k, and unit (documents or chunks) is meaningless. Fix k across the configurations you compare, and report first-stage recall at a large k next to the final metric, because a document missing from the candidate pool cannot be recovered later. Chapter 14 implements these functions in `ragkit.eval.rag_metrics`.
 
 ### The stage model
 
-Every RAG system, from this chapter's short pipeline to a multi-region production service, can be described by the same nine stages. The first three run offline, when documents change. The last six run online, for every request. Each stage takes a defined input, produces a defined artifact, can fail in a characteristic way, and is deepened by a specific chapter.
+Every RAG system has the same nine stages. The first three run offline, when documents change; the last six run online, per request.
 
 | Stage | Responsibility | Artifact | Characteristic failure | Deepened in |
 |---|---|---|---|---|
@@ -117,27 +110,27 @@ Every RAG system, from this chapter's short pipeline to a multi-region productio
 | Generate | Answer from evidence under a grounding contract | Answer with citations | Unsupported claims, no abstention | Ch 13 |
 | Validate | Check citations, grounding, policy before returning | Accepted answer or fallback | Hallucinated citations pass through | Ch 13, Ch 27 |
 
-The minimal pipeline implements seven of the nine; the other two, query understanding and reranking, are identity functions: the raw question is the query, and the top-k by cosine is the final order. That is deliberate. Each missing or naive stage maps to a failure in the catalogue below, which is the argument for why the stage exists.
+The minimal pipeline implements seven of the nine. Query understanding and reranking are identity functions: the raw question is the query, and the top-k by cosine is the final order. Each missing or naive stage maps to a failure in the catalogue below.
 
-The stage model is more than vocabulary. Each stage boundary is a place to log: if the trace records candidate ids after retrieval, reranking, and packing, then "the gold chunk was retrieved at rank 9 and dropped by the reranker" becomes a query you can run instead of a debugging session. And each stage can be evaluated with the others held fixed, which is how a regression is attributed to the change that caused it.
+Each stage boundary is also a place to log and to evaluate with the others held fixed. If the trace records candidate ids after retrieval, reranking, and packing, then "the gold chunk was retrieved at rank 9 and dropped by the reranker" is a query, not a debugging session.
 
 ### Map of Part IV
 
-The stages above are built across several chapters and packages, and each package builds on the one before. Read this map once now and come back to it when a later chapter imports something you have not seen.
+> **Deep dive.** Which chapter and package builds each stage; skip on a first reading.
+
+Come back to this map when a later chapter imports something you have not seen; `ragkit` lives in `book/projects/ragkit/`. Chunk counts for the same 24 documents differ across these chapters (155 here, 231 to 246 in Chapters 9, 12, 14, and 15) because each uses a different chunker configuration.
 
 | Chapter | Stages it deepens | What it builds | Code |
 |---|---|---|---|
-| 8, Embeddings | Index (the embedding step) | Embedding evaluation, the space fingerprint, caching | `book/projects/examples/ch08/embedlab/` |
-| 9, Vector search | Index, retrieve (dense, filtered) | Project 2: the `VectorStore` protocol, NumPy and pgvector adapters, `/search` | `book/projects/p2-semantic-search/` (`semsearch`) |
+| 8, Embeddings | Index (embedding) | Embedding evaluation, fingerprint, caching | `book/projects/examples/ch08/embedlab/` |
+| 9, Vector search | Index, retrieve | Project 2: `VectorStore`, NumPy and pgvector adapters | `book/projects/p2-semantic-search/` (`semsearch`) |
 | 10, this chapter | All nine, naively | The baseline pipeline and the failure catalogue | `book/projects/examples/ch10/` |
-| 11, Ingestion and chunking | Ingest, chunk | Parsers, normalization, deduplication, chunkers with stable ids | `ragkit.parsers`, `ragkit.chunking`, `ragkit.documents` |
+| 11, Ingestion and chunking | Ingest, chunk | Parsers, deduplication, chunkers with stable ids | `ragkit.parsers`, `ragkit.chunking`, `ragkit.documents` |
 | 12, Retrieval engineering | Query understanding, retrieve, rerank | BM25, hybrid fusion, query rewriting, rerankers | `ragkit.retrieval` |
-| 13, Grounded generation | Pack, generate, validate | Evidence packing, grounded answers, citation and support checks, streaming | `ragkit.generation` |
-| 14, RAG evaluation | All, measured | Gold sets, the metrics above, judges, stage isolation, release gates | `ragkit.eval` |
-| 15, Production RAG | All, operated | Project 3: ingestion jobs, deletion, authority, tenancy, caches, degraded modes | `book/projects/p3-rag-assistant/` (`rag_assistant`) |
+| 13, Grounded generation | Pack, generate, validate | Packing, grounded answers, citation checks | `ragkit.generation` |
+| 14, RAG evaluation | All, measured | Gold sets, metrics, judges, release gates | `ragkit.eval` |
+| 15, Production RAG | All, operated | Project 3: ingestion jobs, deletion, tenancy, caches | `book/projects/p3-rag-assistant/` (`rag_assistant`) |
 | 37, Advanced retrieval | Beyond the stage model | Agentic RAG, GraphRAG, long-context hybrids | `book/projects/examples/ch37/` |
-
-`ragkit` lives in `book/projects/ragkit/`. The dependency direction is strict: `ragkit` uses `semsearch` for vector storage and `evalkit` for evaluation plumbing, and Project 3 assembles `ragkit`, `semsearch`, and the reliability and guardrail libraries into a service. This chapter's code depends on none of them, only on `aie_core`, so you can read it without the rest.
 
 ```mermaid
 flowchart LR
@@ -158,23 +151,23 @@ flowchart LR
 
 A RAG system has two paths that share only the index.
 
-The **ingestion path** runs when documents change. A loader reads each source and produces a document record: identifier, title, version, update timestamp, owner, tenant, ACL groups, and body. The chunker splits the body and copies version, date, and ACL onto every chunk (the minimal `Chunk` drops tenant, which Chapter 15 restores), along with a chunk id derived from the document id and position (`hr-pto-policy#c2`). The indexer embeds each chunk's text and stores the vector with the chunk. In the minimal pipeline all of this happens in memory at startup; in production it is a queue of idempotent jobs keyed by document hash (Chapter 15).
+The **ingestion path** runs when documents change. A loader turns each source into a document record (id, title, version, timestamp, owner, tenant, ACL groups, body). The chunker splits the body and copies version, date, and ACL onto every chunk, with an id built from document id and position (`hr-pto-policy#c2`, fragile under edits; Chapter 11 introduces content-derived ids); the minimal `Chunk` drops tenant, which Chapter 15 restores. The indexer embeds and stores each chunk. Here this happens in memory at startup; in production it is a queue of idempotent jobs (Chapter 15).
 
 The **query path** runs per request:
 
 1. The caller's identity resolves to a set of groups.
 2. The question is embedded with the same model that embedded the chunks.
-3. The retriever scores only chunks whose ACL intersects the caller's groups, before ranking, so a forbidden chunk never competes for a slot.
+3. The retriever scores only chunks whose ACL intersects the caller's groups, so a forbidden chunk never competes for a slot.
 4. The packer wraps each chunk in a labeled block.
-5. The generator receives a system prompt defining the contract (use only the evidence, cite ids, abstain with a fixed token) and a user message with the evidence followed by the question.
+5. The generator gets a system prompt with the contract (use only the evidence, cite ids, abstain with a fixed token), then the evidence and the question.
 6. The validator compares the cited ids with the ids actually shown.
-7. The caller receives the text, the evidence, the cited and invalid ids, and an abstention flag, so the application, not the model, decides what the user sees.
+7. The caller gets the text, evidence, cited and invalid ids, and an abstention flag, so the application, not the model, decides what the user sees.
 
-Step 2 hides a trap: a different embedding model or version makes the vectors incomparable and produces plausible garbage rather than an error.
+Step 2 hides a trap: a different embedding model or version makes the vectors incomparable and produces plausible garbage, not an error.
 
 ## Architecture
 
-The first diagram shows the two paths, the shared index, and where each stage sits. The dashed stages are identity functions in the minimal pipeline.
+The first diagram shows the two paths and the shared index. Dashed stages are identity functions in the minimal pipeline.
 
 ```mermaid
 flowchart LR
@@ -198,7 +191,7 @@ flowchart LR
     style RR stroke-dasharray: 5 5
 ```
 
-The second diagram follows one request through the minimal pipeline and marks the trust boundaries. Document text is untrusted: it was written by many people, some documents are external (the corpus includes an unreviewed vendor newsletter), and anything in it can carry instructions (Chapter 26). The model's output is untrusted too: its citations are claims to check.
+The second diagram follows one request and marks the trust boundaries. Document text is untrusted: any of it can carry instructions, and the corpus includes an unreviewed external newsletter (Chapter 26). The model's citations are untrusted claims to check.
 
 ```mermaid
 sequenceDiagram
@@ -218,7 +211,7 @@ sequenceDiagram
     App-->>App: RagAnswer: text, evidence, citations, abstained
 ```
 
-The third diagram is the debugging order for a wrong answer, adapted from the classic RAG decision tree. It walks the stages in the order in which evidence can be lost and stops at the first stage that lost it.
+The third diagram is the debugging order for a wrong answer: walk the stages in the order evidence can be lost, and stop at the first one that lost it.
 
 ```mermaid
 flowchart TD
@@ -237,11 +230,9 @@ flowchart TD
     Q6 -- yes --> F7[Check whether the gold answer is outdated]
 ```
 
-The last box matters: in a mature system, some "wrong" answers are correct answers graded against a gold set that predates a policy change.
+The last box matters: some "wrong" answers are correct answers graded against a gold set that predates a policy change.
 
 ## Implementation
-
-The example directory:
 
 ```
 book/projects/examples/ch10/
@@ -253,7 +244,7 @@ book/projects/examples/ch10/
   README.md, .env.example
 ```
 
-It depends on `aie_core` for the LLM client, the embedding client, and cosine top-k, and on `shared-data/shared_data.py` for the document loader. Configuration comes from the environment through `aie_core.Settings`; with no variables set, everything runs offline.
+Configuration comes from the environment; with no variables set, everything runs offline.
 
 | Variable | Default | Effect |
 |---|---|---|
@@ -262,7 +253,7 @@ It depends on `aie_core` for the LLM client, the embedding client, and cosine to
 | `OPENAI_API_KEY`, `ANTHROPIC_API_KEY` | unset | credentials |
 | `EMBEDDING_PROVIDER`, `EMBEDDING_MODEL` | `fake`, `fake-embedding` | `fake` uses a hashed bag of content words; `openai` uses real embeddings |
 
-The excerpt below is the core of the pipeline, in stage order: the data types, chunking, the index, packing and generation, validation, and the `answer` method that strings them together. Imports, constructors, and the offline wiring (a stand-in embedder and a scripted model) are on disk. Watch three things: the metadata a `Chunk` carries, where `search` applies the ACL, and how `validate_citations` checks ids. The Code walkthrough section below explains the design choices.
+The excerpt below is the core of the pipeline in stage order; imports, constructors, and the offline wiring are on disk. Watch three things: the metadata a `Chunk` carries, where `search` applies the ACL, and how `validate_citations` checks ids.
 
 ```python
 # path: book/projects/examples/ch10/minimal_rag.py (excerpt; full file on disk)
@@ -372,9 +363,9 @@ Submit the request in PeopleHub (`My Time > Request PTO`) **at least 14 calendar
 citations: ['hr-pto-policy#c2'] invalid: []
 ```
 
-The answer is right and correctly cited, and the output already shows two of the problems this chapter catalogues. The top-ranked chunk is from the parental leave policy, not the PTO policy, and the fourth slot went to an external vendor newsletter that has no business in a PTO answer. The pipeline got lucky because the right chunk made it into the top four. Run the script with no argument and it asks the default PTO carry-over question, which reproduces failure 4 below.
+The answer is right and cited, but the pipeline got lucky: the top chunk is from the parental leave policy, and the fourth slot went to an external vendor newsletter. With no argument, the script asks the PTO carry-over question, which reproduces failure 4 below.
 
-The failure script is longer; its key parts are shown here and the full file is on disk. Each demo builds a small situation, runs the real pipeline functions, and returns a `FailureCase` with the stage that failed, what the pipeline produced, a deterministic detection signal, and whether a minimal fix inside this chapter removes it.
+Each failure demo runs the real pipeline functions and returns a `FailureCase`: the stage that failed, what the pipeline produced, a deterministic detection signal, and whether a minimal fix in this chapter removes it.
 
 ```python
 # path: book/projects/examples/ch10/failure_modes.py (excerpt: detectors and the permission demo)
@@ -456,159 +447,133 @@ Running the whole catalogue:
     observed: unfiltered top-k includes ['hr-compensation-bands#c0']; salary figures in prompt: True
 ```
 
-(The `signal:` lines are omitted here for width.) The tests run offline with `.venv/bin/python -m pytest book/projects/examples/ch10 -q` from the repository root.
+(The `signal:` lines are omitted for width.)
 
 ## Code walkthrough
 
-**Chunks carry everything downstream stages need.** A `Chunk` holds version, update date, and ACL groups, not just text; it is the only way later stages can filter by permission, prefer newer versions, or show a source. The id is document id plus position, stable while the document version and chunker settings are unchanged. That is fragile (Chapter 11 discusses content-derived ids) but enough for citations within one index build.
+> **Deep dive.** The design reasons behind the excerpt; skip on a first reading.
 
-**Fixed-size chunking is the baseline to beat.** `chunk_fixed` slides an 800-character window with 100 characters of overlap and knows nothing about headings, sentences, or tables. Every chunker in Chapter 11 is measured against it on the gold set; a sophisticated strategy that does not beat it does not ship.
+**The index filters before it scores.** Scoring everything and dropping forbidden hits afterward has two defects: forbidden chunks consume top-k slots, so users silently get fewer results, and any code path that forgets the post-filter leaks. The `user_groups=None` default is naive on purpose, for the permission demo; a production retriever makes the scope a required argument (Chapter 15). Exact cosine over 155 rows takes milliseconds; approximate indexes (Chapter 9) are premature before a gold set can measure their recall loss.
 
-**The index filters before it scores.** `InMemoryIndex.search` builds the allowed rows first and runs `top_k` only over those. Scoring everything and dropping forbidden hits afterward has two defects: forbidden chunks consume top-k slots, so users silently get fewer results, and any code path that forgets the post-filter leaks. The `user_groups=None` default is naive on purpose so the permission demo can show its cost; a production retriever makes the scope a required argument (Chapter 15).
+**Evidence is labeled and delimited.** The id lets the model cite and the code check; the delimiters mark where data ends, which reduces but does not eliminate prompt injection (Chapter 26). The block omits version and date, which causes failure 4.
 
-**Exact search is enough here.** `top_k` from `aie_core.embeddings` computes cosine against every row with NumPy, a few milliseconds per query for 155 chunks and reasonable into the tens of thousands. Approximate indexes (Chapter 9) are premature before a gold set exists to measure their recall loss.
+**The contract is checkable by code.** A fixed abstention token lets the application branch to a "not found, open a ticket" path; "say you don't know if unsure" produces refusals no code can detect. A cited id that was not packed is a fabrication by definition.
 
-**Evidence is labeled, delimited, and separate from instructions.** `pack_evidence` wraps each chunk in an `<evidence id=... title=...>` block: the id lets the model cite and the code check, and the delimiters mark where data ends. "Evidence is data, not instructions" reduces but does not eliminate prompt injection from documents (Chapters 26 and 27). The block omits version and date, which is one of the catalogued failures.
-
-**The contract makes abstention and citations checkable.** The prompt asks for a fixed token, `INSUFFICIENT_EVIDENCE`, which `RagAnswer.abstained` tests, so the application can branch to a "not found, open a ticket" path. "Say you don't know if unsure" produces a dozen refusals no code can detect. `validate_citations` compares every `[doc#cN]` with the ids actually packed; any other id is a fabrication by definition, because the model never saw it.
-
-**The offline wiring is honest about what it is.** `ContentWordEmbeddings` (on disk) hashes content words into 2,048 dimensions, so similarity means shared vocabulary and nothing more. `extractive_fake_handler` (on disk) imitates a model by returning the evidence sentence with the most question words, cited, or abstaining. Set `EMBEDDING_PROVIDER` and `LLM_PROVIDER` and the same code runs on real models through `aie_core`'s gateway.
+**The offline wiring is honest about what it is.** `ContentWordEmbeddings` (on disk) hashes content words, so similarity means shared vocabulary; `extractive_fake_handler` returns the evidence sentence with the most question words, cited, or abstains.
 
 ## Production considerations
 
-The minimal pipeline is a correct skeleton with every production concern missing. Listing them is the outline of Part IV.
+> **Deep dive.** What production adds to each stage, as an outline of Part IV; skip on a first reading.
 
-**Ingestion becomes a pipeline.** Production ingestion parses PDFs, HTML, and Office files (Chapter 11), deduplicates, and records lineage: which source revision produced which chunks under which chunker and embedding model. It runs as idempotent jobs keyed by content hash and handles deletion: a withdrawn document's chunks, cached answers, and derived summaries must disappear within a stated freshness SLO (Chapter 15).
+The minimal pipeline is a correct skeleton. Before you ship covers scoping, tracing, and validation; production adds the rest.
 
-**Retrieval becomes hybrid and ranked.** Pure dense retrieval misses exact identifiers, error codes, and rare names; lexical retrieval misses paraphrases. Production systems combine both, retrieve a broad candidate set of twenty to fifty, and rerank to the best few with a model that reads query and chunk together (Chapter 12). The candidate funnel has a latency budget: if the Northwind target is p95 time-to-first-token under 2 seconds, retrieval plus reranking might get an illustrative 300 to 500 milliseconds of it.
+**Ingestion becomes a pipeline** of idempotent jobs that parse many formats (Chapter 11), deduplicate, record lineage, and handle deletion: a withdrawn document's chunks, cached answers, and summaries must disappear within a stated freshness SLO (Chapter 15).
 
-**Permissions and tenancy become non-negotiable.** Groups and tenant come from the authenticated identity, never the request body, and every retrieval call filters on both. Every cache key includes permission scope and index version, because an answer built from HR-only chunks must never be served outside HR. Zero cross-tenant leakage is verified by adversarial tests under restricted identities (Chapter 15).
+**Retrieval becomes hybrid and ranked.** Production combines lexical and dense retrieval, takes twenty to fifty candidates, and reranks to the best few (Chapter 12), within an illustrative 300 to 500 milliseconds of a 2-second p95 time-to-first-token target.
 
-**Generation becomes a structured contract.** Production answers are structured objects (claims, citations, confidence, missing-evidence notes) validated by schema, with conflict handling when evidence disagrees and explicit rules for stale sources (Chapter 13). Streaming adds a wrinkle: citations must be validated before or as text reaches the user, not after.
+**Caches are permission-scoped.** Every cache key includes permission scope, tenant, and index version, so an answer built from HR-only chunks is never served outside HR (Chapter 15).
 
-**Every stage is observed and budgeted.** Each request emits a span per stage with candidate ids and scores, filtered counts, packed ids and token count, prompt version, model, citations, validation outcome, and per-stage latency and cost (Chapter 31). The packer enforces a token budget rather than a fixed k, and embeddings are batched and cached by content hash (Chapter 30).
+**Generation becomes a structured contract** with schema-validated claims, citations, and conflict rules; with streaming, citations are validated as text reaches the user (Chapter 13).
 
-**Untrusted content is treated as such.** The vacation example retrieved an external vendor newsletter, which in the shared corpus contains an embedded instruction aimed at assistants. Production systems tag source trust at ingestion, exclude or quarantine unreviewed external content from sensitive flows, and keep the model's authority over tools separate from anything it reads (Chapters 26 and 27).
+**Untrusted content is quarantined.** The vendor newsletter in the vacation example carries an instruction aimed at assistants; production tags source trust at ingestion and keeps unreviewed external content out of sensitive flows (Chapters 26 and 27).
 
-**Evaluation gates every change.** A new chunker, embedding model, reranker, or prompt ships only after the gold set shows no regression in retrieval recall, groundedness, citation precision, and abstention correctness (Chapters 14 and 25).
+**Budgets and gates.** The packer enforces a token budget rather than a fixed k (Chapter 30), and a new chunker, embedding model, reranker, or prompt ships only if the gold set shows no regression (Chapter 14).
 
 ## Common mistakes
 
-**Treating the vector database as the RAG system.** A vector store answers "which vectors are near this one", which is one stage of nine. Teams that buy a vector database and expect correct answers discover that chunking, filters, ranking, packing, and the generation contract decide quality.
+> **Deep dive.** Habits that sink RAG projects; skip on a first reading.
 
-**Tuning prompts before measuring retrieval.** If the needed chunk is absent from the context on a third of failing questions, no prompt fixes that third. Measure recall first.
+**Treating the vector database as the RAG system.** It is one stage of nine; chunking, filters, ranking, packing, and the contract decide quality.
 
-**Dropping metadata at chunking.** A chunk without version, date, and source cannot be ranked by freshness, filtered by ACL, or cited. Recovering metadata later means re-ingesting everything.
+**Dropping metadata at chunking.** A chunk without version, date, ACL, and source cannot be ranked by freshness, filtered, or cited, and recovering it means re-ingesting everything.
 
-**Letting the model invent citation formats.** Asking for "sources" yields made-up URLs and titles. Give stable ids in the evidence and require exactly those.
-
-**Evaluating on questions written by the person who built the index.** Such questions reuse the documents' vocabulary, so lexical overlap makes retrieval look excellent. Real users paraphrase, misspell, and ask about things the corpus does not cover. The shared gold set (`shared-data/eval/retrieval_gold.jsonl`) deliberately includes paraphrases, conflicting versions, and questions that should be abstained on.
-
-**Quoting a retrieval number without its metric, k, and unit.** "Recall is 0.9" can mean hit@10 over documents or recall@3 over chunks, and the worked example in Core concepts shows one list scoring anywhere from 0 to 1. Write the metric name, k, and unit next to every number, and compare configurations only at the same k.
+**Evaluating on questions written by the person who built the index.** They reuse the documents' vocabulary, so retrieval looks excellent. Real users paraphrase and ask about things the corpus does not cover; the shared gold set includes both.
 
 ## Failure modes
 
-Every naive RAG pipeline exhibits these seven failures. Each entry gives the demo, why the naive pipeline allows it, the signal, and the fix. The demos use the real pipeline functions; only model behaviors are scripted, and the detectors never trust them.
+Every naive RAG pipeline exhibits these seven failures. The demos use the real pipeline functions; only model behaviors are scripted, and the detectors never trust them.
 
 ### 1. Wrong chunk boundary (chunk stage)
 
-**Demo.** A synthetic device-returns document, built inside the demo, says the old laptop "must be handed back to the service desk within 10 working days of receiving the replacement", and the chunk size cuts right before "10". The question "Within how many days must the old laptop be handed back to the service desk?" retrieves the first chunk, which matches most of the question's content words (all but "days" and "many") and ends with "...to the service desk within". The number sits in the next chunk, which shares almost no words with the question.
+**Demo.** A synthetic device-returns document says the old laptop "must be handed back to the service desk within 10 working days of receiving the replacement", and the chunk boundary falls right before "10". The question "Within how many days must the old laptop be handed back to the service desk?" retrieves the chunk ending "...to the service desk within": fixed-size chunking separated the words that make a chunk retrievable from the words that answer.
 
-**Why naive RAG allows it.** Fixed-size chunking ignores sentence boundaries. The words that make a chunk retrievable (the subject of a rule) and the words that answer (the value) are adjacent, and a boundary between them separates retrievability from usefulness.
+**Signal.** The gold fact is in the corpus but in no retrieved chunk; the retrieved chunk ends mid-sentence; document-level recall is fine while fact-level recall is poor.
 
-**Signal.** The gold fact is in the corpus but in no retrieved chunk; the retrieved chunk ends mid-sentence; document-level recall is fine while fact-level recall is poor (the right document is retrieved, but not the chunk holding the answer).
-
-**Fix.** An overlap of 80 characters removes it in the demo. Overlap is a patch; structure-aware chunking that keeps sentences, list items, and table rows intact is the fix (Chapter 11). Sending the parent section after retrieving a chunk also makes boundaries irrelevant at generation time.
+**Fix.** An 80-character overlap removes it in the demo, but overlap is a patch; structure-aware chunking is the fix (Chapter 11).
 
 ### 2. Missing evidence (ingest stage)
 
-**Demo.** "How many weeks of paid sabbatical do employees get after seven years?" Northwind has no sabbatical policy in the corpus; no chunk mentions the word. The retriever still returns four chunks, led by the parental leave policy with a cosine score of 0.22.
+**Demo.** "How many weeks of paid sabbatical do employees get after seven years?" The corpus has no sabbatical policy, yet the retriever returns four chunks, led by the parental leave policy at cosine 0.22. Top-k always returns k results, and cosine scores are not calibrated: the correct vacation chunk scored only 0.16, so any fixed threshold that rejects the irrelevant hit also rejects the correct one.
 
-**Why naive RAG allows it.** Top-k retrieval always returns k results, and cosine scores are relative to the corpus and model, not calibrated probabilities. The correct chunk for the vacation question scored 0.16, lower than this irrelevant top hit, so a fixed threshold that rejects one rejects the other.
+**Signal.** No retrieved chunk contains the question's key entity. In production the cause is often a document that failed to parse, was never connected, or was over-filtered.
 
-**Signal.** No retrieved chunk contains the question's key entity. In production the same pattern appears when a document failed to parse, was never connected, or was over-filtered by ACL.
-
-**Fix.** Coverage tests that every gold question's required documents are indexed (Chapter 14) and ingestion monitoring on parse failures and document counts (Chapter 15). Missing evidence is a retrieval-side fact; what the system does about it is the next failure.
+**Fix.** Coverage tests that every gold question's required documents are indexed (Chapter 14), and monitoring of parse failures and document counts (Chapter 15).
 
 ### 3. Distractor outranks evidence (retrieve and rank stages)
 
-**Demo.** "What is the return window for my old laptop?" The top chunk comes from the Retail Returns API reference, about customer purchase windows. The IT laptop runbook, which holds the answer (10 business days), ranks second. With a one-chunk budget the context holds only the distractor and the pipeline abstains; with four it happens to answer correctly.
+**Demo.** "What is the return window for my old laptop?" The top chunk is from the Retail Returns API reference, which shares the words "return" and "window"; the IT laptop runbook, which holds the answer (10 business days), ranks second. With a one-chunk budget the pipeline abstains; with four it happens to answer correctly.
 
-**Why naive RAG allows it.** First-stage similarity rewards shared vocabulary ("return", "window") and has no notion of domain. Without a reranker that reads query and chunk together, or metadata filters by tenant or document type, ranking is shallow.
-
-**Signal.** MRR (defined in Core concepts) below 1 on gold questions; citations into unexpected domains. A model that anchors on the first evidence block turns the distractor into the answer even when the right chunk is present.
+**Signal.** MRR below 1 on gold questions; citations into unexpected domains. A model that anchors on the first evidence block turns the distractor into the answer even when the right chunk is present.
 
 **Fix.** Hybrid retrieval, reranking, and metadata filters (Chapter 12); evidence ordering (Chapter 13). Recall@20 before reranking and MRR after it separate coverage problems from ordering problems.
 
 ### 4. Stale document version (ingest and pack stages)
 
-**Demo.** "How many unused PTO days can I carry over into next year?" The HR FAQ (version 1.4, June 2025) asks this question almost verbatim and answers "up to 5 unused days". The PTO Policy (version 3.0, effective January 2026) raised the limit to 10 and states that it supersedes older FAQ entries. Both are retrieved; the FAQ ranks first, and the answer says 5.
-
-**Why naive RAG allows it.** Nothing represents supersession. The FAQ matches the phrasing better, and the evidence block carries no version or date, so the model has no structured signal to prefer the newer source. (The FAQ's text admits it may be outdated; relying on the model noticing is relying on luck.)
+**Demo.** "How many unused PTO days can I carry over into next year?" The HR FAQ (version 1.4, June 2025) asks this almost verbatim and answers "up to 5 unused days". The PTO Policy (version 3.0, effective January 2026) raised the limit to 10 and supersedes older FAQ entries. Both are retrieved, the FAQ ranks first, and the answer says 5: nothing represents supersession, and the evidence carries no version or date.
 
 **Signal.** Retrieved documents that disagree on the same fact; citations to an older version when a newer one was also retrieved. The gold set holds this case as RQ-001 and RQ-002, tagged `conflicting-versions`.
 
-**Fix.** Version metadata in evidence and a conflict rule in the contract (Chapter 13); supersession links and freshness-aware ranking (Chapters 11 and 15); and an owner who retires the FAQ entry, since content cleanup removes the conflict at its source.
+**Fix.** Version metadata in evidence and a conflict rule in the contract (Chapter 13); supersession links and freshness-aware ranking (Chapters 11 and 15); and an owner who retires the FAQ entry.
 
 ### 5. No abstention (generate stage)
 
-**Demo.** The sabbatical question again, now passed to a scripted "eager" model that answers from prior knowledge unless the prompt gives it an explicit way out. With the tutorial prompt ("Answer the question based on the context"), it says employees receive 11 weeks of paid sabbatical after 7 years. With the chapter's contract, it returns `INSUFFICIENT_EVIDENCE`.
+**Demo.** The sabbatical question, passed to a scripted "eager" model that answers from prior knowledge unless the prompt offers a way out. With the tutorial prompt ("Answer the question based on the context"), it claims 11 weeks of paid sabbatical after 7 years. With the chapter's contract, it returns `INSUFFICIENT_EVIDENCE`.
 
-**Why naive RAG allows it.** The tutorial prompt has no abstention path, so helpfulness fills the gap. Real models routinely produce a plausible answer in the style of related but insufficient evidence.
+**Signal.** The grounding check finds "11 weeks" in the answer and in no evidence. It misses "7 years", which happens to appear in an unrelated retrieved chunk: number-and-unit matching is a cheap tripwire, not a groundedness check (Chapters 13 and 24).
 
-**Signal.** The grounding check finds "11 weeks" in the answer and in no evidence. It does not flag "7 years", which happens to appear in an unrelated retrieved chunk: number-and-unit matching is a cheap tripwire; real groundedness checking is covered in Chapters 13 and 24.
-
-**Fix.** A machine-detectable abstention token, a grounding check before returning, and an application branch that makes abstention useful (Chapter 13). The contract changes what a cooperative model does; only the check protects you from an uncooperative one.
+**Fix.** A machine-detectable abstention token, a grounding check before returning, and a useful abstention branch (Chapter 13). The contract changes what a cooperative model does; only the check protects you from an uncooperative one.
 
 ### 6. Hallucinated citation (validate stage)
 
-**Demo.** A scripted answer to the vacation question cites three ids. `hr-pto-policy#c9` does not exist; the PTO policy has fewer chunks, and the model was never shown that id. `hr-parental-leave-policy#c2` was shown, but it is attached to a sentence about managers answering within 5 working days, which that chunk does not contain. The third citation is fine.
+**Demo.** A scripted answer to the vacation question cites three ids. `hr-pto-policy#c9` does not exist and was never shown. `hr-parental-leave-policy#c2` was shown, but it backs a sentence about managers answering within 5 working days, which that chunk does not contain. The third is fine.
 
-**Why naive RAG allows it.** Models produce citation-shaped text fluently. Unvalidated, a fabricated id becomes a broken link or a confident pointer to the wrong document.
-
-**Signal.** `RagAnswer.invalid_citations` lists ids never shown; the support check lists shown ids whose chunk lacks the cited figures. A rising invalid-citation rate after a model or prompt change is an early regression signal.
+**Signal.** `RagAnswer.invalid_citations` lists ids never shown; the support check lists shown ids whose chunk lacks the cited figures. A rising invalid-citation rate after a change is an early regression signal.
 
 **Fix.** Drop or repair invalid citations, map ids to titles and links in code, and verify support at span level (Chapter 13).
 
 ### 7. Permission leak (retrieve stage, authorization)
 
-**Demo.** The corpus plus a synthetic `hr-compensation-bands` document with `acl_groups: ["hr"]`. An ordinary employee in group `all` asks for the senior software engineer salary band. Unfiltered retrieval puts the HR-only chunk in the top four, and the figure "104,000" is in the prompt. Filtering by the caller's groups inside retrieval removes it.
+**Demo.** The corpus plus a synthetic `hr-compensation-bands` document with `acl_groups: ["hr"]`. An employee in group `all` asks for the senior software engineer salary band; unfiltered retrieval puts the HR-only chunk in the top four, and "104,000" is in the prompt. Telling the model not to reveal it, or redacting its output, is not access control: the model has already read the document, and fragments leak through paraphrase.
 
-**Why naive RAG allows it.** Tutorials index everything into one collection and search without filters. The common patch, asking the model to "not reveal confidential information" or redacting its output afterward, is not access control: the model has already read the document, and fragments leak through paraphrase.
+**Signal.** Any packed chunk whose ACL does not intersect the caller's groups. The check is free, so log it as a security event on every request.
 
-**Signal.** Any packed chunk whose ACL does not intersect the caller's groups. It costs nothing to check on every request: log it as a security event and assert in tests that it never happens under restricted identities.
-
-**Fix.** Filter inside retrieval with a mandatory scope, plus tenant isolation, permission-scoped caches, and ACL propagation (Chapter 15). Here the minimal fix is the production fix in principle; production hardens the same mechanism.
+**Fix.** Filter inside retrieval with a mandatory scope, plus tenant isolation and permission-scoped caches (Chapter 15). Here the minimal fix is the production fix in principle.
 
 ### Operational failures beyond the catalogue
 
-The seven above are quality and safety failures visible in a single request. Three operational failures complete the picture:
+> **Deep dive.** Three failures that show up across many requests rather than in one; skip on a first reading.
 
-- **Index drift**: the source changed, the index did not, and answers are confidently stale; detect it by comparing source hashes with indexed hashes.
-- **Embedding mismatch**: queries embedded with a different model or version than the corpus, typically after an upgrade that did not re-embed everything; detect it by recording the embedding model and index version with both and asserting equality (Chapter 9 covers the migration).
-- **Silent empty retrieval**: a filter bug returns zero chunks and the model answers from nothing; detect it by alerting on the rate of requests with zero or very few hits.
+- **Index drift**: the source changed and the index did not. Compare source hashes with indexed hashes.
+- **Embedding mismatch**: queries and corpus embedded with different model versions after a partial upgrade. Record both and assert equality (Chapter 9 covers the migration).
+- **Silent empty retrieval**: a filter bug returns zero chunks and the model answers from nothing. Alert on the rate of requests with zero or very few hits.
 
 ## Tradeoffs
 
-**Chunk size.** Small chunks give retrieval a precise target and pack more distinct evidence into the budget, but split facts from their context. Large chunks preserve meaning but dilute similarity and waste tokens on irrelevant text. The minimal pipeline's 800 characters is a starting point, not a recommendation; Chapter 11 shows how to choose by measuring recall on the gold set.
+> **Deep dive.** The knobs to tune once the gold set exists; skip on a first reading.
 
-**k.** More chunks raise the chance the evidence is present and raise cost, latency, and distractor count. Fewer chunks are cheaper and cleaner but brittle, as the distractor demo shows at k of 1. Production systems decouple the two: retrieve wide, rerank, pack narrow.
+**Chunk size.** Small chunks give retrieval a precise target but split facts from their context. Large chunks preserve meaning but dilute similarity and waste tokens. Chapter 11 chooses by measuring recall on the gold set.
 
-**Naive simplicity versus stage completeness.** Every added stage adds latency, cost, and a component to evaluate. Add one when the gold set shows a failure class it fixes; keep it only if the metric improves.
+**k.** More chunks raise the chance the evidence is present, and raise cost, latency, and distractors; fewer are brittle (the distractor demo at k of 1). Production retrieves wide, reranks, and packs narrow.
 
-**RAG versus long context.** Core concepts gives the decision table. The tradeoff in one line: RAG buys cost and scale at the price of a search system you must build and evaluate. For small, static, single-permission corpora, long context can be the better engineering choice, and hybrids (retrieve documents, then read them whole) are common; Chapter 37 develops them.
+**Stage completeness.** Add a stage only when the gold set shows a failure class it fixes; each costs latency and evaluation.
 
-**Strict abstention versus helpfulness.** A strict contract reduces fabrication and increases abstentions, some wrong because retrieval missed existing evidence. Track false-answer and false-abstention rates and tune to your domain's costs: a wrong PTO answer that costs someone their carryover days is worse than an unnecessary escalation.
+**Strict abstention versus helpfulness.** A strict contract reduces fabrication and increases abstentions, some wrong because retrieval missed existing evidence. Track false-answer and false-abstention rates and tune to your domain: a wrong PTO answer that costs someone their carryover days is worse than an unnecessary escalation.
 
 ## Evaluation and testing
 
-The tests cover three layers. **Unit tests** check each stage's contract: exact overlap and stable chunk ids, ranking under `FakeEmbeddings(vocabulary=...)` so similarity is controllable, ACL filtering inside retrieval, the labeled evidence and contract in the prompt, and citation validation. **An end-to-end test** runs the default offline build on the real corpus and asserts the vacation answer says "14 calendar days" with a PTO-policy citation. **Failure-mode tests** assert that each failure reproduces, its detector fires, and the minimal fix works where one is claimed; if a corpus change makes a failure stop reproducing, the test breaks and forces someone to look.
+**Unit tests** check each stage's contract, with ranking under `FakeEmbeddings(vocabulary=...)` so similarity is controllable. **An end-to-end test** asserts the offline vacation answer says "14 calendar days" with a PTO-policy citation. **Failure-mode tests** assert that each failure reproduces, its detector fires, and the claimed minimal fix works, so a corpus change that stops a failure reproducing breaks the build.
 
-Beyond this chapter, evaluating a RAG system means evaluating its two systems separately and then together. For retrieval, the gold set in `shared-data/eval/retrieval_gold.jsonl` gives each question its required and acceptable document ids, the user groups and tenant to query under, and tags such as `paraphrase`, `conflicting-versions`, `forbidden-doc`, and `abstain`. Run every question through `index.search` with its groups and compute hit@k over the required documents (exercise P3). Gold sets must encode which evidence is required, not just which is relevant, because a question that needs two documents cannot be answered from one of them however good the generator is; Chapter 14 works the numbers and implements the metrics defined in Core concepts.
-
-For generation, hold retrieval fixed, feed known evidence sets including deliberately insufficient ones, and grade groundedness, correctness, citations, and abstention. For the whole system, walk the debugging tree on every failing question and record which stage lost the evidence; aggregated, that tells you where to invest. Chapter 14 builds this into a report.
-
-In production, the cheap deterministic checks from this chapter run on every request: invalid-citation rate, ACL-violation count (which must stay at zero), zero-hit rate, abstention rate, and the share of answers with unsupported numeric claims. Each one is a metric and an alert. None of them requires a model, which is why they belong in the request path rather than in a nightly batch.
+Beyond this chapter, evaluate the two systems separately, then together. For retrieval, the gold set in `shared-data/eval/retrieval_gold.jsonl` gives each question its required and acceptable document ids, the user groups and tenant to query under, and tags such as `paraphrase`, `conflicting-versions`, `forbidden-doc`, and `abstain`. Exercise P3 computes hit@k over it. For generation, hold retrieval fixed and feed known evidence sets, including insufficient ones. For the whole system, walk the debugging tree on every failing question and record which stage lost the evidence (Chapter 14).
 
 ## Before you ship
 

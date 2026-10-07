@@ -4,7 +4,7 @@
 Three pieces:
 - `LatencyBudget` holds per-stage budgets that must fit the end-to-end target and, for
   stages before the first visible token, the time-to-first-token target.
-- `Deadline` turns the budget into per-call timeouts: a stage gets min(its budget, time left).
+- `StageTimeouts` turns the budget into per-call timeouts: a stage gets min(its budget, time left).
 - `LatencyTracker` reads finished spans (live `Span` objects or JSONL dicts), groups them by
   request, and reports per-stage percentiles and budget violations.
 """
@@ -118,8 +118,8 @@ class LatencyBudget:
         return cls(total_ms=total_ms, stages=stages, ttft_ms=ttft_ms, reserve_ms=reserve)
 
 
-class Deadline:
-    """An absolute deadline derived from the end-to-end budget; hands out per-stage timeouts."""
+class StageTimeouts:
+    """Turns one request's end-to-end budget into per-stage timeouts inside one process."""
 
     def __init__(self, budget: LatencyBudget, *, clock: Callable[[], float] = time.monotonic, start: float | None = None) -> None:
         self.budget = budget
@@ -288,7 +288,7 @@ __all__ = [
     "BudgetError",
     "StageBudget",
     "LatencyBudget",
-    "Deadline",
+    "StageTimeouts",
     "percentile",
     "StageTiming",
     "Violation",

@@ -33,7 +33,7 @@ from caching import (
     normalize_text,
 )
 from cost import UNATTRIBUTED, CostModel, CostScenario, chargeback, load_jsonl
-from latency import BudgetError, Deadline, LatencyBudget, LatencyTracker, StageBudget, percentile
+from latency import BudgetError, LatencyBudget, LatencyTracker, StageBudget, StageTimeouts, percentile
 from parallel import MicroBatcher, Prefetcher, RequiredStepFailed, Step, fan_out
 
 # Illustrative prices only (USD per million tokens), matching Chapter 35's worked examples.
@@ -103,9 +103,9 @@ def test_from_measurements_refuses_infeasible_and_scales_feasible() -> None:
     assert sum(s.budget_ms for s in b.stages) + b.reserve_ms == pytest.approx(8000)
 
 
-def test_deadline_caps_stage_timeout_by_remaining_time() -> None:
+def test_stage_timeouts_cap_by_remaining_time() -> None:
     clock = FakeClock(0.0)
-    d = Deadline(northwind_budget(), clock=clock)
+    d = StageTimeouts(northwind_budget(), clock=clock)
     assert d.timeout_for("retrieve") == pytest.approx(0.6)
     clock.advance(7.5)  # something upstream ate the budget
     assert d.timeout_for("generate") == pytest.approx(0.5)

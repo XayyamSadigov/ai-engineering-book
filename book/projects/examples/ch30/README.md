@@ -5,7 +5,7 @@ Offline, runnable code for Chapter 30. Depends only on `aie_core` (see `book/pro
 | File | What it holds |
 |---|---|
 | `attribution.py` | `AttributingTracer`, `bind()`: stamp tenant, request id and feature onto every span |
-| `latency.py` | `LatencyBudget`, `Deadline`, `LatencyTracker`: allocate, enforce and audit a latency SLO |
+| `latency.py` | `LatencyBudget`, `StageTimeouts`, `LatencyTracker`: allocate, enforce and audit a latency SLO |
 | `caching.py` | `EmbeddingCache`, `RetrievalCache`, `ScopedResponseCache`, `SemanticCache`, `lint_cache_key` |
 | `cost.py` | `CostScenario`, `CostModel` (per successful task, mixes, monthly), `chargeback` from trace JSONL |
 | `budgets.py` | `SpendPolicy`, `SpendGuard`, `BudgetedClient`, `TaskTokenBudget` |

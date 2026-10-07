@@ -233,11 +233,11 @@ Applied in the wrong order, optimizations waste weeks and add risk for little ga
 
 ## How it works
 
-Follow one Northwind Assist answer through the pieces. The API boundary resolves tenant and groups and opens `bind(tenant="retail", request_id=..., feature="chat")`, so every later span carries them. A `Deadline` is created from the budget: 8 seconds in total, 1 second of the 2-second TTFT target for the stages before the first token.
+Follow one Northwind Assist answer through the pieces. The API boundary resolves tenant and groups and opens `bind(tenant="retail", request_id=..., feature="chat")`, so every later span carries them. A `StageTimeouts` is created from the budget: 8 seconds in total, 1 second of the 2-second TTFT target for the stages before the first token.
 
 The `BudgetedClient` around the gateway estimates the worst-case cost and asks the `SpendGuard` for a reservation. Retail is under its soft limit, so the request proceeds; past it, in `degrade` mode, the request would be rewritten to the small model with a 512-token cap.
 
-Retrieval runs as a fan-out under `deadline.timeout_for("retrieve")`. The query vector comes from the `EmbeddingCache`. The `RetrievalCache` misses, so lexical and vector search run concurrently, with the reranker as an optional step. The semantic cache, consulted with the same scope and versions, misses and logs a near miss. The context builder (Chapter 5) assembles the prompt with the stable prefix first; the gateway streams, and the provider reports 800 cached input tokens. Citations reached the client when retrieval returned; the first token arrives at 1.3 seconds. When the stream ends, the client commits the actual cost and the guard checks alert thresholds. The validated answer is stored in the semantic cache with its source ids. Offline, the `LatencyTracker` and `chargeback` read the same trace file for per-stage violations and per-tenant cost.
+Retrieval runs as a fan-out under `timeouts.timeout_for("retrieve")`. The query vector comes from the `EmbeddingCache`. The `RetrievalCache` misses, so lexical and vector search run concurrently, with the reranker as an optional step. The semantic cache, consulted with the same scope and versions, misses and logs a near miss. The context builder (Chapter 5) assembles the prompt with the stable prefix first; the gateway streams, and the provider reports 800 cached input tokens. Citations reached the client when retrieval returned; the first token arrives at 1.3 seconds. When the stream ends, the client commits the actual cost and the guard checks alert thresholds. The validated answer is stored in the semantic cache with its source ids. Offline, the `LatencyTracker` and `chargeback` read the same trace file for per-stage violations and per-tenant cost.
 
 ## Architecture
 
@@ -246,7 +246,7 @@ The first diagram shows the request path with its budget gates and caches. The c
 ```mermaid
 flowchart TD
     U[Employee] --> API["API: auth, bind tenant and request_id"]
-    API --> DL["Deadline from LatencyBudget"]
+    API --> DL["StageTimeouts from LatencyBudget"]
     DL --> SG{"SpendGuard reserve"}
     SG -- block --> E429["Budget exceeded response"]
     SG -- degrade --> DG["Rewrite to small model, cap max_tokens"]
@@ -332,7 +332,7 @@ The code is in `book/projects/examples/ch30/`:
 book/projects/examples/ch30/
   README.md          run instructions and file guide
   attribution.py     AttributingTracer, bind(): request-scoped span attributes
-  latency.py         LatencyBudget, StageBudget, Deadline, LatencyTracker, percentile
+  latency.py         LatencyBudget, StageBudget, StageTimeouts, LatencyTracker, percentile
   caching.py         Scope, TTLCache, EmbeddingCache, RetrievalCache, ScopedResponseCache,
                      SemanticCache, lint_cache_key, lint_cache_classes
   cost.py            CostScenario, CostModel, chargeback, load_jsonl
@@ -411,7 +411,7 @@ __all__ = ["AttributingTracer", "bind", "bound_attributes"]
 
 ### Latency budgets and the tracker
 
-The budget validates itself on construction, so an infeasible budget cannot exist in the program. `from_measurements` derives budgets from measured p95s and refuses when they do not fit; `Deadline` hands out timeouts.
+The budget validates itself on construction, so an infeasible budget cannot exist in the program. `from_measurements` derives budgets from measured p95s and refuses when they do not fit; `StageTimeouts` hands out timeouts.
 
 ```python
 # path: book/projects/examples/ch30/latency.py  (excerpt; full file on disk)
@@ -479,8 +479,8 @@ class LatencyBudget:
         return cls(total_ms=total_ms, stages=stages, ttft_ms=ttft_ms, reserve_ms=reserve)
 
 
-class Deadline:
-    """An absolute deadline derived from the end-to-end budget; hands out per-stage timeouts."""
+class StageTimeouts:
+    """Turns one request's end-to-end budget into per-stage timeouts inside one process."""
 
     def __init__(self, budget: LatencyBudget, *, clock: Callable[[], float] = time.monotonic, start: float | None = None) -> None:
         self.budget = budget
@@ -1101,7 +1101,7 @@ class Prefetcher:
 
 **Attribution.** `AttributingTracer.export` uses `setdefault`, so a span's own attribute wins over a bound one. Export runs when a span closes, so a span must close inside the `bind` block; a test checks that the gateway's own `llm.complete` span picks up the tenant.
 
-**Budgets and deadlines.** An infeasible `LatencyBudget` cannot be constructed. This chapter's `Deadline` is deliberately small: it turns a budget into per-stage timeouts inside one process. Chapter 29's `reliability.Deadline` is the production one, with a header to carry the remaining time across services, child deadlines and cancellation; a service using both creates the Chapter 29 deadline at the edge and asks this budget only for each stage's share. `Deadline.timeout_for` returns seconds, ready for `CompletionRequest.timeout_s` or `asyncio.wait_for`, and returns zero once time is gone so callers fail fast. `LatencyReport` carries both the wall-clock end-to-end p95 and the sum of stage p95s: when they are close, the path is serial and every stage's tail reaches the user. `worst_stage` ignores the synthetic `end_to_end` and `ttft` violations, which say that something was slow but not what.
+**Budgets and deadlines.** An infeasible `LatencyBudget` cannot be constructed. `StageTimeouts` only splits one budget into per-stage timeouts inside one process; Chapter 29's `reliability.Deadline` carries the remaining time across services with cancellation, so a production service creates that deadline at the edge and asks `StageTimeouts` only for each stage's share. `StageTimeouts.timeout_for` returns seconds, ready for `CompletionRequest.timeout_s` or `asyncio.wait_for`, and returns zero once time is gone so callers fail fast. `LatencyReport` carries both the wall-clock end-to-end p95 and the sum of stage p95s: when they are close, the path is serial and every stage's tail reaches the user. `worst_stage` ignores the synthetic `end_to_end` and `ttft` violations, which say that something was slow but not what.
 
 **Keys.** `make_key` hashes a sorted JSON object under a namespace, so component order never changes a key and a tenant prefix can be purged. `Scope.acl_scope` hashes sorted groups, so group order does not matter and group names stay out of keys. The embedding cache's `space` fingerprint changes with model version, dimensions, prefix or text preparation; the tests change each and assert a miss.
 
@@ -1174,7 +1174,7 @@ Performance needs realistic load: queueing, rate limits, cache hit rates and tai
 
 ## Before you ship
 
-- [ ] A `LatencyBudget` with p95 TTFT and completion targets exists in code, constructs without error, and each stage's timeout comes from `Deadline.timeout_for` or Chapter 29's deadline.
+- [ ] A `LatencyBudget` with p95 TTFT and completion targets exists in code, constructs without error, and each stage's timeout comes from `StageTimeouts.timeout_for` or Chapter 29's `Deadline`.
 - [ ] Dashboards show per-stage p50, p95 and p99 from traces, with an alert on each stage's p95 against its budget, and TTFT is also measured at the client.
 - [ ] Every model call has an explicit `max_tokens` sized for the answer format (and for reasoning tokens on reasoning models), and agent or chain tasks run under a `TaskTokenBudget` or step cap.
 - [ ] The cache-key linter runs in CI over every cache class, with zero errors; a two-scope test proves each cache misses when tenant or ACL scope differs.

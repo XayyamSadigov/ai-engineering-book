@@ -66,6 +66,7 @@ flowchart TD
             TREG["Tool registry"]
             POL["Policy engine"]
             SBX["Sandbox"]
+            MCPG["MCP gateway"]
         end
         MG["Model gateway"]
         CACHE[("Caches: response, embedding, retrieval, prefix")]
@@ -150,7 +151,7 @@ The table gives every component the same four facts: what it owns, the interface
 | Prompt registry | Prompt templates as versioned, tested artifacts | `get(name) -> PromptVersion`; the version id lands on every message | You cannot answer "which users got the bad prompt?" | 4 |
 | Context builder | The model's input within a token budget, stable prefix first | `build(prompt, history, evidence, budget) -> list[Message]` | Context grows until it fails on length, or evidence is cut from the middle | 5 |
 | Retrieval layer | Query plus context to ranked evidence, tenant and ACL filter inside the search | `search(ctx, query, k) -> list[Evidence]` | Missed identifiers (no lexical leg), noisy top results (no reranker), leaks or short lists (post-filtering) | 12, 15 |
-| Tool layer | Tool registry, policy engine, sandbox with egress allowlist | `propose(call) -> Decision`, `execute(call) -> ToolResult`, both audited | The model's proposal is the authorization; a URL-fetching tool is an exfiltration channel | 16, 27 |
+| Tool layer | Tool registry, policy engine, sandbox with egress allowlist, MCP gateway for external tool servers (Chapter 18) | `propose(call) -> Decision`, `execute(call) -> ToolResult`, both audited | The model's proposal is the authorization; a URL-fetching tool is an exfiltration channel | 16, 18, 27 |
 | Orchestration | Workflows as state machines; the agent loop with budgets and termination | `run(workflow_or_agent, inputs, ctx)`, checkpointed in the jobs table | Control flow lives in prompt text and cannot be tested, replayed or resumed | 17, 19, 38 |
 | Model gateway | Retries, fallback, rate limits, concurrency caps, response cache, cost accounting, spans | The `aie_core` `LLMClient` protocol | Every caller retries differently; a provider incident becomes a retry storm | 3 |
 | Persistence | Relational state, vectors, raw documents | SQL, filtered nearest-neighbor search, object keys | State dies with the process; raw documents bloat the database | 9, 11, 15 |

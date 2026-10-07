@@ -94,6 +94,8 @@ effect bypass rate must stay at zero, and the classifier's measured recall on th
 fall below the full-traffic recall by more than the confidence interval. Also replay a week of flagged
 traffic through both configurations and compare which requests reached tool-enabled paths.
 
+**E5.** Accept the first proposal conditionally and reject the second. A guard model is a sensor: it plugs in as a `Moderator` adapter behind `ModerationCheck` (category scores, per-category thresholds) and as an injection `Check` at the input and context stages that flags, fails open, and has a client timeout. Keep the heuristic in front of it as a cheap first pass unless the measurement shows it adds nothing. Before switching, require: the measurement script on your own labeled benign and attack sets, with false-positive and bypass rates and intervals at least as good as the current checks; per-language and per-category results for the languages you serve; p95 latency within the stage budget; a pinned model version and an owner for the GPU service. The recipient allowlist stays: it is a boundary with no false negatives on what it covers, it does not depend on recognizing the attack, and removing it would leave a sensor as the only control in front of an outbound effect. The red team with `--max-effect-bypass 0.0` must pass unchanged.
+
 ## Practical exercises
 
 **P1.** Expected: a regex and a validator function (for example a national identifier whose last digit is a

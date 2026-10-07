@@ -650,9 +650,10 @@ approval: it says who published a server, not that its descriptions or code were
 **MCP server**: A program that exposes tools, resources, and prompts over MCP, locally over stdio or
 remotely over HTTP. Its descriptions are untrusted input. (Ch 18)
 
-**MCP tasks**: An experimental MCP feature in which a request runs as a task: the requester gets a task
-handle at once and polls for status and the eventual result, or cancels it. It fits long-running tool
-calls that a single waiting request does not. (Ch 18)
+**MCP tasks**: An MCP feature, introduced as experimental and moved into a formal extension in the
+2026-07-28 revision, in which a request runs as a task: the requester gets a task handle at once and
+polls for status and the eventual result, or cancels it. It fits long-running tool calls that a single
+waiting request does not. (Ch 18)
 
 **Memory poisoning**: Getting false or malicious content written into an agent's long-term memory so
 it influences future sessions. Write policies and provenance are the defenses. (Ch 21, 26)
@@ -699,6 +700,11 @@ domains, not by default. (Ch 22)
 
 **Multi-query retrieval**: Generating several reformulations of a query, retrieving for each, and fusing
 the results to raise recall. (Ch 12)
+
+**Multi round-trip request (MCP)**: The 2026-07-28 MCP mechanism that replaces server-to-client calls
+in a stateless protocol: the server returns a result asking for input (for example an elicitation)
+plus an opaque request state, and the client re-issues the call with the answers and the echoed
+state. (Ch 18)
 
 **Multi-tenancy**: Serving several customers or business units from one system while keeping their data,
 quotas, and costs isolated. (Ch 9, 15, 29, 30)

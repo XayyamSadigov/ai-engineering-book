@@ -175,6 +175,12 @@ Implement their code when a real need appears; the capstone does not require it.
 
 ## 5. The accelerated path: 8 weeks
 
+**First-reading path.** Every chapter opens with a **First reading** line that names the sections to
+read first; the rest are marked **Deep dive** where they start. The first-reading sections are about
+half of each chapter and are enough for the chapter's "Start here" exercises. Both paths below can use
+them: read the first-reading sections on the first pass, do the core exercises, and return to the deep
+dives when a project or a production problem needs them.
+
 For engineers who already call LLM APIs in production and have shipped at least one prompt-based
 feature. You skip the conceptual on-ramp but not the projects, because the projects are where the
 production habits form.

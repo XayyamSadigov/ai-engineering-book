@@ -1,6 +1,16 @@
 # Chapter 33 — Fine-Tuning for Engineers
 
-After this chapter you will be able to decide, with evidence rather than enthusiasm, whether a task deserves fine-tuning; build a training set from production traces that survives a leakage audit; run an evaluation protocol with three baselines and a pre-agreed shipping rule; drive a hosted fine-tuning job through a provider-neutral interface; and operate the resulting model like any other versioned artifact. The code lives in `book/projects/examples/ch33/`: a dataset builder, an evaluation protocol with a decision rule, and a fine-tuning job runner with a fake provider so the whole pipeline runs offline. The running case is the Northwind ticket classifier: 40 categories, high volume, and a prompted strong model that is accurate but too expensive to keep.
+Fine-tuning changes a model's weights instead of its context, and it is the most expensive rung on the decision ladder to climb and to undo. This chapter is about deciding with evidence whether a task deserves it, and then doing the data, evaluation, and operations work that makes the result safe to ship. The running case is the Northwind ticket classifier: 40 categories, high volume, and a prompted strong model that is accurate but too expensive to keep.
+
+**You will be able to:**
+- Decide whether a task needs fine-tuning, or a prompt, retrieval, or a tool instead, and choose among SFT, LoRA, distillation, preference tuning, and reinforcement fine-tuning.
+- Build a training set from production traces that survives a leakage audit: consent, PII scrubbing, exact and near dedup, entity and time splits, artifact detection, and a data card.
+- Run an evaluation protocol with three baselines, slices, calibration, and a ship rule written before training.
+- Compose a fine-tuned small model with an escalation path and pick the confidence threshold on validation data.
+- Drive a hosted fine-tuning job through a provider-neutral interface that survives crashes and transient errors.
+- Operate the result as a versioned artifact: registry, flag rollout, drift monitoring, and evidence-based retraining.
+
+**Prerequisites:** Chapters 1 (the decision ladder), 6 (schema validation, confidence and calibration), and 24 (frozen evaluation sets and paired comparisons). | **Code:** `book/projects/examples/ch33/` (run: `cd book/projects/examples/ch33 && pytest -q`) | **Builds:** the Chapter 33 fine-tuning pipeline: a dataset builder, an evaluation protocol with a ship rule, and a job runner with a fake provider so everything runs offline.
 
 ## Why this matters
 
@@ -17,6 +27,8 @@ This chapter treats fine-tuning the way the rest of the book treats everything e
 Everything a model does at inference comes from two inputs: the weights and the context. Prompting, retrieval, and tools change the context, per request, with full visibility. Fine-tuning changes the weights, once, for every future request, with no visibility into what was learned. When you need to know *why* an output happened, or to make the model stop knowing something, context wins. When you need a behavior to be reliable at high volume without paying for instructions on every call, weights win.
 
 Two book-wide mental models carry the rest of the chapter. "Evaluate before optimizing" is why the evaluation protocol comes before the training script. "Model quality alone does not determine application quality" is why the Northwind decision is made on the composed system, a small model plus an escalation path, rather than on the small model's standalone score.
+
+If you want to see where the chapter is going before the mechanics, skip ahead to "The Northwind ticket classifier, end to end" near the end: it walks one project from the ship rule through data, baselines, training, the cascade, and three months of operations, with illustrative numbers. Every section before it explains one step of that story.
 
 ## Core concepts
 
@@ -104,11 +116,33 @@ Three mechanics matter to an engineer even when a hosted API hides them.
 
 **Loss is computed on assistant tokens.** The trainer masks the system and user tokens so the model is penalized only for what it should say, not for predicting the ticket text. Without the mask the model spends capacity learning to predict user input and the format conventions blur. The practical consequence is that the assistant turn must be exactly the output you want at inference, including whitespace, casing, and punctuation. A dataset that mixes `vpn`, `VPN`, and `VPN access` as targets for one class teaches three behaviors.
 
-**Epochs multiply exposure.** One epoch is one pass over the training set; hosted APIs default to a small number (three is common at the time of writing). More epochs on a narrow dataset lead to overfitting, where the model memorizes the training set instead of learning the task: training loss keeps falling while validation loss flattens and then rises, and the model starts reproducing training tickets verbatim. Watch both losses and the task metric on validation, because lower token loss does not guarantee better classification.
+**Epochs multiply exposure.** One epoch is one pass over the training set; hosted APIs default to a small number (three is a common default, illustrative). More epochs on a narrow dataset lead to overfitting, where the model memorizes the training set instead of learning the task: training loss keeps falling while validation loss flattens and then rises, and the model starts reproducing training tickets verbatim. Watch both losses and the task metric on validation, because lower token loss does not guarantee better classification.
 
 **Token-weighted loss favors long examples.** A 1,200-token ticket contributes more gradient than a 40-token one, even though both count as one row. Inspect length distributions in tokens, cap outliers, and truncate the user turn rather than let a handful of long rows dominate. Trainers that pack several short examples into one sequence must also mask attention across example boundaries; hosted APIs handle this, and in a hand-written script it is your job.
 
 Signs of overfitting that show up before production does: validation loss rising while training loss falls; training-set phrases emitted for unrelated inputs; high validation accuracy with a collapse on the time-split test set; confidence approaching 1.0 on everything, which destroys calibration.
+
+### Training data for tool calls
+
+To fine-tune a model to call tools, the training row is a whole trajectory, not a prompt-response pair: the tool schemas the model will see at inference, the user turn, an assistant turn carrying tool calls (a name and JSON arguments), a tool-role message with the result, and the final assistant answer. The shape below is illustrative; field names differ between providers.
+
+```json
+{"tools": [{"type": "function", "function": {"name": "get_service_status",
+   "parameters": {"type": "object", "properties": {"service": {"type": "string"}}, "required": ["service"]}}}],
+ "messages": [
+  {"role": "user", "content": "is the vpn down for logistics?"},
+  {"role": "assistant", "tool_calls": [{"id": "c1", "type": "function",
+     "function": {"name": "get_service_status", "arguments": "{\"service\": \"vpn\"}"}}]},
+  {"role": "tool", "tool_call_id": "c1", "content": "{\"service\": \"vpn\", \"status\": \"degraded\"}"},
+  {"role": "assistant", "content": "The VPN is degraded right now. IT is working on it."}
+]}
+```
+
+The SFT rules carry over with three additions. Loss falls on every assistant turn, including the tool-call arguments; tool results are inputs, like user turns. The schemas in the training rows must match what production sends byte for byte: rename a parameter after training and the model keeps emitting the old name. And the dataset must contain the turns where the right move is not to call a tool (answer directly, ask a clarifying question, recover from a tool error), or the model learns that every request deserves a call. Never include calls your policy would deny, such as `send_reply` without approval: the model learns the call even though the policy layer in code still blocks it (Chapter 16).
+
+The chapter's `validate_chat_jsonl` rejects the `tool` role on purpose, because the classifier never has tool turns. A tool-call pipeline needs its own validator: every call names a tool in the row's schema list, its arguments parse against that schema, and every call has a matching result.
+
+Evaluation changes most. Per-call accuracy is not enough: a model that picks the right tool on 95% of steps still fails a large share of five-step tasks, and a fine-tune can raise per-call accuracy while making loops longer. Evaluate tool-call fine-tunes on frozen trajectories: task success, call validity, steps and tokens per task, and policy violations, compared with the prompted baseline on the same tasks. Chapter 25 owns trajectory evaluation and Chapter 19 the loop it runs in.
 
 ### LoRA, QLoRA, and parameter-efficient fine-tuning
 
@@ -134,6 +168,24 @@ Knowledge distillation trains a smaller student to imitate a stronger teacher. I
 
 Distillation inherits two risks. The student learns the teacher's mistakes at scale, so teacher outputs must be filtered: keep rows where the agent confirmed the category; for rows where the agent overrode it, either drop them or use the agent's label as the target, and sample a slice for human review. And the student is only as good as the teacher's coverage, so rare categories the teacher rarely saw remain rare. Oversample them, or write labeling guidelines and collect human labels for exactly those.
 
+### Where confidence comes from
+
+A distilled small model is rarely shipped alone. The usual design is a cascade: the small model answers when it is confident and escalates to the strong model otherwise. That needs a number per prediction, and a chat API returns text, not class probabilities. There are three practical sources.
+
+- **Token log-probabilities.** If the serving engine returns log-probabilities for the emitted tokens, the probability of the label is the product of its tokens' probabilities, `exp(sum of logprobs)`. This works best when labels are short, distinct ids; long labels or labels that share a prefix make the number reflect tokenization as much as the decision. Self-hosted engines usually expose log-probabilities; hosted fine-tuned endpoints may not.
+- **A verifier score.** A separate, cheap check scores the pair (input, label): a small classifier, a rule that the label is consistent with extracted fields, or a model judge. It costs an extra call or computation but works when log-probabilities are unavailable.
+- **Agreement.** Sample several answers at a nonzero temperature and use the vote share. It needs no special API but multiplies cost by the number of samples.
+
+None of these numbers is trustworthy by default. You check them with reliability bins: group holdout predictions by confidence and compare each bin's mean confidence with its accuracy. An illustrative result for the Northwind candidate on its 5,200-row test set:
+
+| Confidence bin | Predictions | Mean confidence | Accuracy | Gap |
+|---|---|---|---|---|
+| 0.5 to 0.7 | 300 | 0.62 | 0.55 | 0.07 |
+| 0.7 to 0.9 | 900 | 0.81 | 0.79 | 0.02 |
+| 0.9 to 1.0 | 4,000 | 0.97 | 0.90 | 0.07 |
+
+Expected calibration error (ECE) is the count-weighted mean gap: `(300 · 0.07 + 900 · 0.02 + 4,000 · 0.07) / 5,200 ≈ 0.06`, the number the end-to-end case reports for the standalone model. The table says more than the number: the top bin, where most traffic lives, is seven points overconfident, so a threshold of 0.95 means less than it appears to. Over-training makes this worse by pushing nearly everything into the top bin, which is why the ship rule carries a maximum ECE and why the threshold is chosen on validation data, never on the test set. Chapter 6 owns calibration itself: the ECE definition, recalibration methods such as temperature scaling, and how much data a threshold needs. This chapter only uses it.
+
 ### Preference tuning in one section
 
 Supervised fine-tuning teaches a model to reproduce one gold response. Many tasks do not have one: several replies to a customer are acceptable, and one is better. Preference tuning optimizes for *better* rather than *equal to*. The data is pairs or rankings, `(prompt, chosen, rejected)`.
@@ -143,6 +195,26 @@ Reinforcement learning from human feedback (RLHF) is the classic pipeline: SFT f
 Direct Preference Optimization (DPO) skips the reward model and the RL loop: it turns preference pairs into a classification-like loss that raises the likelihood of the chosen response relative to the rejected one, still anchored to a reference model. Group-relative methods such as GRPO (Group Relative Policy Optimization) sample several candidates per prompt and use their relative scores as the signal, which works well when a verifier (unit tests, a schema check, an exact-match answer) can score candidates automatically.
 
 What this means for you as an application engineer: preference tuning is how model providers shape helpfulness, tone, refusal behavior, and reasoning, and it is where their alignment work happens. You will probably not run it yourself. The data is expensive and subtle, rater disagreement becomes noise, reward models get exploited, and verbosity and position biases creep in. If a hosted provider offers preference fine-tuning on pairs, use it only when SFT has plateaued on a judgment-heavy task, when you have a written rubric that two raters can apply consistently, and when you can measure the result with the same discipline as any other fine-tune. For everything else in this book, SFT with clean data is the tool.
+
+### Reinforcement fine-tuning with graders
+
+As of 2026, some hosted providers offer reinforcement fine-tuning (RFT), mostly on reasoning models. Instead of one gold response per prompt, you supply prompts and a grader. The provider samples several candidate responses per prompt, scores each with your grader, and moves the weights toward the higher-scoring ones: the group-relative idea from the previous section, run as a service.
+
+A **grader** is a scoring function from (prompt, response, optional reference) to a number, usually between 0 and 1. Common kinds: exact or normalized string match against a reference; a field-level comparison for structured output (per-field F1 for an invoice extraction); code you supply that runs tests or checks invariants; a model judge applying a written rubric. Graders combine as a weighted sum, for example 0.7 for correct fields plus 0.3 for valid schema.
+
+RFT beats SFT when the answer is checkable but the path to it is hard to demonstrate: multi-step reasoning, extraction from messy documents where rules interact, code that must pass tests. It also suits teams that have tens to hundreds of good prompts with checkable answers rather than thousands of gold responses, and tasks where SFT has plateaued because the model imitates the surface of answers without the reasoning behind them. It is the wrong tool for closed-label classification at volume (Northwind's classifier is an SFT and distillation problem: cheaper and more predictable), for tasks without a reliable grader, and whenever the grader is a model judge you have not calibrated against human labels (Chapter 24).
+
+The characteristic failure is **reward hacking**: the model learns what the grader rewards rather than what you meant. A field-level grader that gives partial credit for empty fields teaches the model to leave hard fields empty; a judge that prefers longer answers teaches verbosity. Test the grader like code before you pay for training: hand-written bad responses (empty, verbose, well-formatted but wrong, the reference copied from the prompt) must score low, and good ones high. Then evaluate the trained model with the same frozen holdout and ship rule as any fine-tune, scored by humans or a different grader than the one it was trained against. Budget for cost and variance too: RFT is typically billed by training compute and costs far more per example than SFT (illustrative; check the provider's terms), and results vary between runs, so run two seeds when the decision is close.
+
+### Fine-tuning embedding models and rerankers
+
+For a RAG system, the highest-return fine-tune is often not the generator. When general embedding models misread your vocabulary (product codes, internal shorthand, "PTO" filed under "leave"), the right chunk never reaches the generator, and no generator fine-tune can fix that. Measure first: recall@k on the RAG evaluation set (Chapter 10 defines the metrics), sliced by question type. If misses concentrate on domain vocabulary, a retrieval fine-tune is a candidate.
+
+The data is (query, relevant passage) pairs plus **hard negatives**: passages that look relevant but are not, mined by retrieving with the current model and removing the known positives. Sources include the training split of the RAG evaluation set, passages cited in answers users accepted, search click logs, and synthetic queries generated from chunks (Chapter 25 owns synthetic data). Training uses a contrastive loss that pulls each query toward its positive and away from the negatives. A few thousand pairs often produce a measurable gain (illustrative).
+
+Start with the reranker. A reranker (a cross-encoder that reads query and passage together, Chapter 12) runs at query time, so fine-tuning it changes nothing in the index: it ships and rolls back like any model version behind a flag. Fine-tuning the embedding model changes the vector space: every document must be re-embedded, the index rebuilt, and old and new vectors never mixed (Chapter 9 covers the migration, Chapter 8 the space fingerprint that enforces it). Do that only when first-stage recall is the bottleneck, meaning the positive is not in the candidate set at all, so no reranker can promote it. Hosted embedding APIs often do not offer fine-tuning, so this usually means an open-weights embedding model you serve yourself.
+
+The leakage and evaluation rules of this chapter apply unchanged. Split by document and by time, not by query, or a passage seen in training queries inflates test recall. The baseline is the current embedder and reranker; keep a general retrieval regression set so gains on domain vocabulary do not hide losses elsewhere; and authorization still filters candidates before scoring (Chapter 15).
 
 ## How it works: the adaptation experiment
 
@@ -194,7 +266,7 @@ Run every system on the same frozen holdout and report the same fields; `decide_
 
 **Three baselines.** A rules or keyword baseline tells you how much of the task is trivial. A prompted small model tells you what the base model can do before training, which separates the gain from fine-tuning from the gain from the base. A prompted strong model is the reference you are trying to match or replace.
 
-**Target metrics.** For classification: macro-F1, because it weights every category equally and exposes collapse on rare ones; per-class recall, because some categories (`security-incident`) are critical and a global number hides them; calibration, measured with reliability bins and expected calibration error (ECE), because the escalation policy depends on confidence meaning something.
+**Target metrics.** For classification: macro-F1, because it weights every category equally and exposes collapse on rare ones; per-class recall, because some categories (`security-incident`) are critical and a global number hides them; calibration, measured with reliability bins and ECE as shown in "Where confidence comes from", because the escalation policy depends on confidence meaning something.
 
 **Regression suite.** A fine-tune is a new model version. If the same model serves other prompts, run their evaluation suites too. A classifier that also lost its ability to follow the system prompt in another product is a regression even if macro-F1 went up. Losing unrelated abilities after narrow training is called catastrophic forgetting.
 
@@ -206,7 +278,7 @@ Run every system on the same frozen holdout and report the same fields; `decide_
 
 ### Training options
 
-**Hosted fine-tuning APIs.** Hosted fine-tuning APIs, at the time of writing, commonly follow a three-step flow: upload a JSONL training file (and optionally a validation file), create a job that references the file, the base model, and hyperparameters such as the number of epochs and a learning-rate multiplier (which scales how far each update moves the weights), then poll the job until it reaches a terminal state and returns a fine-tuned model id. The model id is then used in completion requests like any other model name. You never see the weights; the provider owns training, serving, and retention. Advantages: no hardware, no training code, and serving is solved. Costs: the base must be one the provider offers, the data leaves your boundary (check data-retention terms), and hyperparameters are limited. The chapter's `FineTuneProvider` protocol captures this flow so the rest of the pipeline is identical across vendors.
+**Hosted fine-tuning APIs.** As of 2026, hosted fine-tuning APIs commonly follow a three-step flow: upload a JSONL training file (and optionally a validation file), create a job that references the file, the base model, and hyperparameters such as the number of epochs and a learning-rate multiplier (which scales how far each update moves the weights), then poll the job until it reaches a terminal state and returns a fine-tuned model id. The model id is then used in completion requests like any other model name. You never see the weights; the provider owns training, serving, and retention. Advantages: no hardware, no training code, and serving is solved. Costs: the base must be one the provider offers, the data leaves your boundary (check data-retention terms), and hyperparameters are limited. The chapter's `FineTuneProvider` protocol captures this flow so the rest of the pipeline is identical across vendors.
 
 **Open-weights with PEFT.** You pick a base model with a license that allows your use, write or configure a training script, and run it on your own GPUs. The outline, library-agnostic, is short:
 
@@ -273,26 +345,16 @@ flowchart LR
 
 ## Implementation
 
-Three pipeline modules and one bridge to the shared library, all tested offline (`pytest book/projects/examples/ch33`). The dataset builder and the evaluation protocol depend only on pydantic, NumPy, and scikit-learn (for the TF-IDF fallback), and never call a model: one takes an embedding function, the other takes predictions. The job runner uses httpx for the OpenAI-compatible adapter and the `aie_core` error taxonomy for its failures. `aie_bridge.py` supplies the embedding function and the predictions from `aie_core` clients, so a real run goes through the same gateway, pricing, and tracing as every other model call in the book. The complete files are in that directory; the listings below show the public interfaces and the critical function bodies, with the routine parts (schemas, file I/O, the data-card dictionary) elided and marked.
+Three pipeline modules and one bridge to the shared library, all tested offline (`cd book/projects/examples/ch33 && pytest -q`). The dataset builder and the evaluation protocol depend only on pydantic, NumPy, and scikit-learn (for the TF-IDF fallback), and never call a model: one takes an embedding function, the other takes predictions. The job runner uses httpx for the OpenAI-compatible adapter and the `aie_core` error taxonomy for its failures. `aie_bridge.py` supplies the embedding function and the predictions from `aie_core` clients, so a real run goes through the same gateway, pricing, and tracing as every other model call in the book.
+
+The listings are excerpts that carry the ideas the walkthrough discusses. The schemas (`RawExample`, `CleanConfig`, `SplitConfig`, `EvalReport`), file I/O, the PII scrubber, the data-card dictionary, both provider classes, and the JSONL validator are on disk in the same directory.
 
 ### Dataset builder
 
+Each `RawExample` carries the text, the label, an `entity_id` (the grouping key for leakage-safe splits: account, customer, or template), a timestamp, a `source`, and a `consent` flag. The excerpt shows cleaning, near dedup, the entity split, and the order in which `build_dataset` runs them.
+
 ```python
-# path: book/projects/examples/ch33/dataset_builder.py  (excerpt; full file on disk, 486 lines)
-class RawExample(BaseModel):
-    """One labeled record as it comes out of the trace store or the labeling tool."""
-
-    id: str
-    text: str
-    label: str
-    entity_id: str  # the grouping key for leakage-safe splits: account, customer, template...
-    created_at: datetime
-    source: Source = "production_trace"
-    consent: bool = True  # False when the owner opted out of training use
-    labeler_ids: list[str] = Field(default_factory=list)
-    metadata: dict[str, str] = Field(default_factory=dict)
-
-
+# path: book/projects/examples/ch33/dataset_builder.py  (excerpt; full file on disk)
 def clean(examples: Iterable[RawExample], config: CleanConfig | None = None) -> tuple[list[RawExample], Counter]:
     """Drop examples that must not or cannot be trained on. Returns kept examples and drop reasons."""
     config = config or CleanConfig()
@@ -305,18 +367,7 @@ def clean(examples: Iterable[RawExample], config: CleanConfig | None = None) -> 
         if config.require_consent and not ex.consent:
             reasons["no_consent"] += 1
             continue
-        if len(text) < config.min_chars:
-            reasons["too_short"] += 1
-            continue
-        if len(text) > config.max_chars:
-            reasons["too_long"] += 1
-            continue
-        if not ex.label.strip():
-            reasons["empty_label"] += 1
-            continue
-        if config.allowed_labels is not None and ex.label not in config.allowed_labels:
-            reasons["unknown_label"] += 1
-            continue
+        # ... too_short, too_long, empty_label, unknown_label: same pattern, one reason each ...
         kept.append(ex.model_copy(update={"text": text}))
     return kept, reasons
 
@@ -326,13 +377,7 @@ def dedupe_near(
     embed_fn: EmbedFn | None = None,
     threshold: float = 0.90,
 ) -> tuple[list[RawExample], int, list[tuple[str, str]]]:
-    """Remove near-duplicates by cosine similarity, keeping the earliest of each cluster.
-
-    O(n^2) in memory for the similarity matrix: fine for tens of thousands of rows. Beyond that,
-    bucket by entity or use an approximate-nearest-neighbor index (Chapter 9).
-    """
-    if len(examples) < 2:
-        return list(examples), 0, []
+    # ...
     embed = embed_fn or tfidf_embed
     ordered = sorted(examples, key=lambda e: (e.created_at, e.id))
     vectors = embed([e.text for e in ordered])
@@ -354,13 +399,7 @@ def dedupe_near(
 
 
 def split_by_entity(examples: list[RawExample], config: SplitConfig) -> Splits:
-    """Assign whole entities to splits, filling train, then val, then test by example count.
-
-    Entities are visited in a seeded pseudo-random order (their hash), so the assignment is
-    stable across builds and independent of input order. Filling by example count rather than
-    by entity count keeps the fractions close to target even when a few entities hold most of
-    the rows, which is the normal shape of support traffic.
-    """
+    # ...
     groups: dict[str, list[RawExample]] = defaultdict(list)
     for ex in examples:
         groups[ex.entity_id].append(ex)
@@ -382,46 +421,8 @@ def split_by_entity(examples: list[RawExample], config: SplitConfig) -> Splits:
     return Splits(train=train, val=val, test=test)
 
 
-def split_by_time(examples: list[RawExample], config: SplitConfig) -> Splits:
-    # ... the past slice is split by entity; see the walkthrough ...
-
-
-def detect_label_artifacts(
-    examples: list[RawExample], min_support: int = 20, min_purity: float = 0.98
-) -> list[ArtifactHit]:
-    """Find tokens that almost perfectly predict one label.
-
-    A token present in >= min_support examples, of which >= min_purity share one label, is a
-    shortcut the model will learn instead of the task. Typical sources: an agent macro that
-    inserts a phrase when they pick a category, a template header, a ticket-system tag that
-    leaked into the body. Treat every hit as a question, not a verdict: "refund" predicting
-    the refund category is legitimate signal, "[auto-routed]" is not.
-    """
-    per_token: dict[str, Counter] = defaultdict(Counter)
-    for ex in examples:
-        for tok in set(tokenize(ex.text)):
-            per_token[tok][ex.label] += 1
-    hits: list[ArtifactHit] = []
-    for tok, counts in per_token.items():
-        support = sum(counts.values())
-        if support < min_support:
-            continue
-        label, top = counts.most_common(1)[0]
-        purity = top / support
-        if purity >= min_purity:
-            hits.append(ArtifactHit(token=tok, label=label, support=support, purity=round(purity, 4)))
-    return sorted(hits, key=lambda h: (-h.support, h.token))
-
-
 def build_dataset(
-    raw: list[RawExample],
-    *,
-    out_dir: Path,
-    system_prompt: str,
-    clean_config: CleanConfig | None = None,
-    split_config: SplitConfig | None = None,
-    embed_fn: EmbedFn | None = None,
-    near_threshold: float = 0.90,
+    # ... raw, out_dir, system_prompt, configs, embed_fn, near_threshold ...
 ) -> BuildResult:
     """Clean -> dedupe (exact, near) -> split -> write JSONL -> data card. Order matters:
     dedupe before split, otherwise the same text can land on both sides of the holdout."""
@@ -429,81 +430,38 @@ def build_dataset(
     kept, reasons = clean(raw, clean_config)
     kept, exact_removed, conflicts = dedupe_exact(kept)
     kept, near_removed, near_conflicts = dedupe_near(kept, embed_fn=embed_fn, threshold=near_threshold)
-    dedup = DedupStats(exact_removed=exact_removed, near_removed=near_removed,
-                       conflicting_pairs=conflicts + near_conflicts)
+    # ...
     splits = split(kept, split_config)
     if split_config.strategy == "entity":
         assert_no_entity_overlap(splits)
-    for name in ("train", "val", "test"):
-        if not getattr(splits, name):
-            raise ValueError(f"{name} split is empty: too few entities or a time cutoff outside the data range")
+    # ... refuse an empty split ...
     artifacts = detect_label_artifacts(splits.train)
+    # ... write train/val/test JSONL in the inference shape, then data_card.json ...
+```
 
-    files = {
-        "train": out_dir / "train.jsonl",
-        "val": out_dir / "val.jsonl",
-        "test": out_dir / "test.jsonl",
-    }
-    for name, path in files.items():
-        write_jsonl(path, (to_chat_example(e, system_prompt) for e in getattr(splits, name)))
-    card = data_card(splits, drop_reasons=reasons, dedup=dedup, split_config=split_config,
-                     artifacts=artifacts, system_prompt=system_prompt, files=files)
-    (out_dir / "data_card.json").write_text(json.dumps(card, indent=2, ensure_ascii=False), encoding="utf-8")
-    return BuildResult(splits=splits, card=card)
+`detect_label_artifacts` (on disk) counts, for every token in the training split, how many rows contain it and how pure their label distribution is; a token with at least 20 rows and 98% purity is reported. `split_by_time` (on disk) sends everything after the cutoff to test and runs `split_by_entity` on the past.
+
+One test shows the contract of near dedup: a typo variant collapses, a distinct ticket survives, and the earliest row is the one kept.
+
+```python
+# path: book/projects/examples/ch33/test_ch33.py  (excerpt; full file on disk)
+def test_dedupe_near_removes_paraphrase_but_keeps_distinct():
+    rows = [
+        ex(1, "cannot connect to the corporate vpn from home office this morning", "vpn", days=0),
+        ex(2, "cannot connect to the corporate vpn from home office this mornin", "vpn", days=1),  # typo variant
+        ex(3, "invoice total looks wrong for last month on the retail account", "billing", days=2),
+    ]
+    kept, removed, _ = dedupe_near(rows, threshold=0.9)
+    assert removed == 1
+    assert {r.id for r in kept} == {"t1", "t3"}
 ```
 
 ### Evaluation protocol
 
+The protocol consumes predictions (a label, a confidence, latency, and cost per holdout row), computes an `EvalReport` (macro-F1, per-class precision and recall, reliability bins and ECE, slices, cost per 1,000, latency percentiles), and gates on a `ShipRule`. The excerpt shows the rule, the gate, and the cascade.
+
 ```python
-# path: book/projects/examples/ch33/eval_protocol.py  (excerpt; full file on disk, 301 lines)
-class Prediction(BaseModel):
-    example_id: str
-    label: str
-    confidence: float = 1.0  # probability of the predicted label; 1.0 when the system has none
-    latency_ms: float = 0.0
-    cost_usd: float = 0.0  # illustrative accounting; use PricingTable from aie_core in projects
-
-
-def macro_f1(y_true: list[str], y_pred: list[str], labels: Iterable[str]) -> float:
-    """Unweighted mean of per-class F1. Every class counts equally, so rare classes can sink it.
-    That is the point: a 40-way classifier that nails the 5 big classes and guesses the rest
-    has a great accuracy and a poor macro-F1."""
-    labels = list(labels)
-    prf = per_class_prf(y_true, y_pred, labels)
-    return float(np.mean([prf[l]["f1"] for l in labels])) if labels else 0.0
-
-
-def calibration_bins(confidences: list[float], correct: list[bool], n_bins: int = 10) -> tuple[list[CalibrationBin], float]:
-    """Reliability bins plus expected calibration error (ECE).
-
-    A system is calibrated when predictions made with confidence 0.8 are right about 80% of the
-    time. Calibration matters here because the escalation policy (send low-confidence tickets
-    to a stronger model or a human) only works if confidence means something.
-    """
-    conf = np.asarray(confidences, dtype=float)
-    corr = np.asarray(correct, dtype=float)
-    edges = np.linspace(0.0, 1.0, n_bins + 1)
-    bins: list[CalibrationBin] = []
-    ece = 0.0
-    total = len(conf)
-    for i in range(n_bins):
-        lo, hi = edges[i], edges[i + 1]
-        mask = (conf >= lo) & ((conf < hi) if i < n_bins - 1 else (conf <= hi))
-        count = int(mask.sum())
-        if count == 0:
-            bins.append(CalibrationBin(lo=lo, hi=hi, count=0, mean_confidence=0.0, accuracy=0.0))
-            continue
-        mean_conf = float(conf[mask].mean())
-        acc = float(corr[mask].mean())
-        ece += (count / total) * abs(acc - mean_conf)
-        bins.append(CalibrationBin(lo=lo, hi=hi, count=count, mean_confidence=mean_conf, accuracy=acc))
-    return bins, float(ece)
-
-
-def evaluate(holdout: list[HoldoutExample], run: SystemRun, labels: list[str] | None = None) -> EvalReport:
-    # ... pairs predictions with holdout rows by id; computes target metrics, calibration, latency, cost, slices ...
-
-
+# path: book/projects/examples/ch33/eval_protocol.py  (excerpt; full file on disk)
 class ShipRule(BaseModel):
     """Thresholds agreed *before* training. Changing them after seeing results is how teams ship regressions."""
 
@@ -524,10 +482,7 @@ def decide_ship(
     rule: ShipRule,
     regression_pass_rate: float = 1.0,
 ) -> ShipDecision:
-    """Mechanical gate. Every failing check becomes a reason; an empty list means ship.
-
-    The reference is normally the prompted strong model: the thing you are trying to replace.
-    """
+    # ...
     reasons: list[str] = []
     # Same frozen holdout, every row answered: otherwise the two reports measure different things.
     if candidate.coverage < 1.0 or candidate.n != reference.n:
@@ -540,20 +495,7 @@ def decide_ship(
         rec = candidate.per_class.get(label, {}).get("recall", 0.0)
         if rec < rule.min_critical_recall:
             reasons.append(f"critical label {label!r} recall {rec:.3f} < {rule.min_critical_recall:.2f}")
-    for label, m in candidate.per_class.items():
-        if m["support"] > 0 and m["recall"] < rule.min_recall_floor:
-            reasons.append(f"label {label!r} recall {m['recall']:.3f} below floor {rule.min_recall_floor:.2f}")
-    for name, values in candidate.slice_macro_f1.items():
-        for value, score in values.items():
-            ref_score = reference.slice_macro_f1.get(name, {}).get(value)
-            if ref_score is not None and score < ref_score - rule.max_slice_drop:
-                reasons.append(f"slice {name}={value} macro-F1 {score:.3f} trails reference {ref_score:.3f}")
-    if reference.cost_per_1k_usd > 0:
-        ratio = candidate.cost_per_1k_usd / reference.cost_per_1k_usd
-        if ratio > 1 - rule.min_cost_reduction:
-            reasons.append(f"cost ratio {ratio:.2f} does not reach the required reduction of {rule.min_cost_reduction:.0%}")
-    if rule.max_latency_p95_ms is not None and candidate.latency_p95_ms > rule.max_latency_p95_ms:
-        reasons.append(f"p95 latency {candidate.latency_p95_ms:.0f} ms exceeds {rule.max_latency_p95_ms:.0f} ms")
+    # ... recall floor per label, per-slice drop, cost ratio, p95 latency: one reason each ...
     if candidate.ece > rule.max_ece:
         reasons.append(f"ECE {candidate.ece:.3f} exceeds {rule.max_ece:.2f}; escalation policy cannot trust confidence")
     if regression_pass_rate < rule.regression_suite_min_pass:
@@ -567,11 +509,7 @@ def cascade(
     threshold: float,
     name: str = "cascade",
 ) -> SystemRun:
-    """Compose a system: take the small model's answer when it is confident, otherwise the strong model's.
-
-    Cost and latency add up on escalated items (the small model was already called). Evaluate
-    the *composed* system; the small model's standalone score is not what users experience.
-    """
+    # ...
     strong_by_id = strong.by_id()
     merged: list[Prediction] = []
     for p in small.predictions:
@@ -585,13 +523,7 @@ def cascade(
 
 
 def choose_threshold(
-    validation: list[HoldoutExample],
-    small: SystemRun,
-    strong: SystemRun,
-    labels: list[str],
-    target_macro_f1: float,
-    candidates: Iterable[float] = tuple(np.round(np.arange(0.5, 1.0, 0.05), 2)),
-    score: Callable[[EvalReport], float] = lambda r: r.macro_f1,
+    # ... validation, small, strong, labels, target_macro_f1, candidate thresholds, score ...
 ) -> float | None:
     """Pick the lowest threshold whose cascade meets the target on *validation* data.
 
@@ -605,10 +537,14 @@ def choose_threshold(
     return None
 ```
 
+`macro_f1`, `per_class_prf`, and `calibration_bins` (on disk) are the textbook definitions with known-answer tests; `evaluate` pairs predictions with holdout rows by id, so a missing row lowers `coverage` instead of silently shrinking the denominator.
+
 ### Fine-tuning job runner
 
+The provider interface is deliberately small: upload, create, get, cancel, list events. Two implementations are on disk: `FakeProvider`, which advances a job one status per poll so tests terminate after a known number of polls, and `OpenAICompatibleFineTuneProvider`, which maps the interface onto `/files` and `/fine_tuning/jobs` style endpoints and maps HTTP failures into the `aie_core` error taxonomy. The excerpt shows the interface and the polling loop.
+
 ```python
-# path: book/projects/examples/ch33/finetune_job.py  (excerpt; full file on disk, 398 lines)
+# path: book/projects/examples/ch33/finetune_job.py  (excerpt; full file on disk)
 class FineTuneProvider(Protocol):
     """What every fine-tuning backend must offer. Keep it this small on purpose."""
 
@@ -630,103 +566,10 @@ class FineTuneProvider(Protocol):
     def list_events(self, job_id: str) -> list[JobEvent]: ...
 
 
-def validate_chat_jsonl(path: Path, min_examples: int = 10) -> dict[str, Any]:
-    """Reject files a hosted API would reject, before paying for the upload.
-
-    Rules: valid JSON per line; a ``messages`` list; roles only system/user/assistant; the last
-    message must be from the assistant (that is where the loss is computed); non-empty content.
-    Returns summary statistics for the data card and the job record.
-    """
-    # ... body omitted; full file on disk ...
-
-
-class FakeProvider:
-    """Simulates a hosted fine-tuning backend.
-
-    Each ``get_job`` call advances the job one step along validating -> queued -> running ->
-    succeeded, so a polling loop terminates after a known number of polls. ``fail_at`` makes the
-    job fail at a given status to exercise error handling.
-    """
-    # ... in-memory jobs, files, and events; full class on disk ...
-
-
-class OpenAICompatibleFineTuneProvider:
-    """Maps the Protocol onto the ``/files`` and ``/fine_tuning/jobs`` style endpoints.
-
-    The mapping is the whole point of the class: status strings differ per vendor, so
-    ``_STATUS`` normalizes them into our ``JobStatus``. Pass ``transport`` to test offline.
-    """
-    # ... other members omitted; full file on disk ...
-
-    def _send(self, method: str, url: str, **kwargs: Any) -> dict[str, Any]:
-        """One HTTP call, with failures mapped into the aie_core error taxonomy so callers can
-        branch on ``retryable`` exactly as they do for completion calls."""
-        try:
-            resp = self._client.request(method, url, **kwargs)
-        except httpx.TimeoutException as exc:
-            raise TimeoutError(f"fine-tuning API timed out: {exc}", provider="fine-tune") from exc
-        except httpx.HTTPError as exc:
-            raise ProviderUnavailableError(f"fine-tuning API unreachable: {exc}", provider="fine-tune") from exc
-        if not resp.is_success:
-            try:
-                body: Any = resp.json()
-            except ValueError:
-                body = resp.text
-            raise map_http_error(resp.status_code, body, dict(resp.headers), "fine-tune")
-        return resp.json()
-
-    def upload_training_file(self, path: Path) -> str:
-        validate_chat_jsonl(path)
-        with path.open("rb") as fh:
-            data = self._send("POST", "/files", data={"purpose": "fine-tune"}, files={"file": (path.name, fh, "application/jsonl")})
-        return data["id"]
-
-    def create_job(self, training_file_id: str, base_model: str, hyperparameters: Hyperparameters | None = None,
-                   validation_file_id: str | None = None, suffix: str | None = None) -> FineTuneJob:
-        hp = hyperparameters or Hyperparameters()
-        body: dict[str, Any] = {"training_file": training_file_id, "model": base_model,
-                                "hyperparameters": hp.model_dump(exclude_none=True)}
-        if validation_file_id:
-            body["validation_file"] = validation_file_id
-        if suffix:
-            body["suffix"] = suffix
-        return self._parse(self._send("POST", "/fine_tuning/jobs", json=body))
-
-
-class FineTunePollTimeout(FineTuneFailed):
-    """Polling gave up while the job was still running. The job is *not* cancelled: it keeps
-    training (and billing) at the provider. Resume with ``run_fine_tune(..., resume_job_id=...)``
-    or cancel it explicitly; never start a second job for the same dataset."""
-
-
-def _check_against_card(card_path: Path | None, train_path: Path, val_path: Path | None) -> None:
-    # ... body omitted; full file on disk: the train file must match the card, and no file may be the test set
-    ...
-
-
 def run_fine_tune(
-    provider: FineTuneProvider,
-    train_path: Path,
-    base_model: str,
-    *,
-    val_path: Path | None = None,
-    data_card_path: Path | None = None,
-    hyperparameters: Hyperparameters | None = None,
-    suffix: str | None = None,
-    poll_interval_s: float = 30.0,
-    max_polls: int = 2000,
-    sleep: Callable[[float], None] = time.sleep,
-    on_status: Callable[[FineTuneJob], None] | None = None,
-    resume_job_id: str | None = None,
-    max_consecutive_poll_errors: int = 5,
+    # ... provider, train_path, base_model, val_path, data_card_path, hyperparameters, poll and resume options ...
 ) -> FineTuneRecord:
-    """Drive a job to completion. ``sleep`` is injectable so tests run instantly.
-
-    A job runs for hours, so the poll loop must outlive transient API failures: retryable errors
-    (429, 5xx, timeouts) are absorbed up to ``max_consecutive_poll_errors`` in a row, while
-    non-retryable ones (bad key, unknown job) raise at once. Pass ``resume_job_id`` after a crash
-    to keep polling the job that already exists instead of uploading and paying for a second one.
-    """
+    # ...
     _check_against_card(data_card_path, train_path, val_path)   # right files, and never the test set
     train_stats = validate_chat_jsonl(train_path)
     if val_path is not None:
@@ -764,100 +607,42 @@ def run_fine_tune(
         raise FineTunePollTimeout(job, provider.list_events(job.id))
     if job.status != "succeeded" or not job.fine_tuned_model:
         raise FineTuneFailed(job, provider.list_events(job.id))
-    card_hash = hashlib.sha256(data_card_path.read_bytes()).hexdigest() if data_card_path and data_card_path.exists() else None
-    return FineTuneRecord(
-        fine_tuned_model=job.fine_tuned_model, base_model=job.base_model, job_id=job.id, training_file_id=train_id,
-        training_file_sha256=train_stats["sha256"], data_card_sha256=card_hash,
-        hyperparameters=job.hyperparameters, trained_tokens=job.trained_tokens,
-        finished_at=datetime.now(timezone.utc),
-    )
+    # ... return a FineTuneRecord: model id, base, job id, training-file and data-card hashes, hyperparameters ...
+```
+
+The test that pins the crash-recovery contract scripts a 503 and a 429 during polling of a resumed job and asserts that nothing is uploaded twice:
+
+```python
+# path: book/projects/examples/ch33/test_ch33.py  (excerpt; full file on disk)
+def test_poll_survives_transient_errors_and_resumes_existing_job(tmp_path: Path):
+    # ...
+    train = write_train_file(tmp_path / "train.jsonl")
+    script = iter([httpx.Response(200, json=_job_json("running")),
+                   httpx.Response(503, json={"error": {"message": "overloaded"}}),
+                   httpx.Response(429, headers={"retry-after": "7"}, json={"error": {"message": "slow down"}}),
+                   httpx.Response(200, json=_job_json("succeeded", done=True))])
+    seen: list[tuple[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append((request.method, request.url.path))
+        return next(script)
+
+    provider = OpenAICompatibleFineTuneProvider("https://example.invalid/v1", "k", transport=httpx.MockTransport(handler))
+    sleeps: list[float] = []
+    record = run_fine_tune(provider, train, "small-base", resume_job_id="ftjob-9", sleep=sleeps.append, poll_interval_s=30)
+    assert record.fine_tuned_model == "ft:small-base:org:r9" and record.training_file_id == "file-abc"
+    assert all(method == "GET" for method, _ in seen)  # resumed: no upload, no second paid job
+    assert sleeps == [30, 7.0]  # the 503 waited the poll interval, the 429 honored Retry-After
 ```
 
 ### Plugging into aie_core
 
+`aie_bridge.py` supplies the two things the pure modules take as parameters. `embed_fn_from_client` adapts any `aie_core` embedding client (hosted, `FakeEmbeddings`, or `CachedEmbeddings` around either) into the `EmbedFn` that `dedupe_near` expects, and `embedding_space` returns what the data card should record about it. `run_classifier` runs a classifier over the frozen holdout through any `LLMClient`, normally the production `ModelGateway`, and returns the `SystemRun` that `evaluate` and `cascade` consume.
+
 ```python
-# path: book/projects/examples/ch33/aie_bridge.py
-"""Where the Chapter 33 pipeline plugs into ``aie_core``.
-
-The dataset builder and the evaluation protocol are deliberately free of model clients: one
-takes an embedding *function*, the other takes *predictions*. This module supplies both from the
-shared library, so a real run uses the same clients, gateway, pricing, and tracing as the rest of
-the book:
-
-- ``embed_fn_from_client`` turns any ``aie_core`` ``EmbeddingClient`` (hosted, ``FakeEmbeddings``,
-  or ``CachedEmbeddings`` around either) into the ``EmbedFn`` that ``dedupe_near`` expects, and
-  reports the embedding space it used so the data card can record it.
-- ``run_classifier`` runs a classifier (a prompted baseline or the fine-tuned model id) over the
-  frozen holdout through any ``LLMClient``, normally a ``ModelGateway``, and returns the
-  ``SystemRun`` that ``evaluate`` and ``cascade`` consume. Cost comes from the gateway's pricing
-  table, latency from the completion, and a label outside the taxonomy becomes an invalid
-  prediction with zero confidence, so a cascade escalates it instead of routing it.
-"""
-from __future__ import annotations
-
-import hashlib
-from typing import Callable
-
-import numpy as np
-
-from aie_core import CompletionRequest, LLMClient, LLMError, Message
-from aie_core.embeddings import EmbeddingClient
-from aie_core.llm.types import Completion
-
-from dataset_builder import EmbedFn
-from eval_protocol import HoldoutExample, Prediction, SystemRun
-
-INVALID_LABEL = "__invalid__"
-
-ConfidenceFn = Callable[[Completion, str], float]
-
-
-def embed_fn_from_client(client: EmbeddingClient) -> EmbedFn:
-    """Adapt an ``aie_core`` embedding client to ``dedupe_near``'s ``EmbedFn`` (texts -> matrix).
-
-    Wrap a hosted client in ``CachedEmbeddings`` so a rebuild does not re-embed unchanged rows;
-    the cache keys on the embedding space, so changing model or instruction re-embeds instead of
-    mixing spaces.
-    """
-
-    def embed(texts: list[str]) -> np.ndarray:
-        vectors = client.embed(list(texts))
-        return np.asarray(vectors, dtype=np.float32)
-
-    return embed
-
-
-def embedding_space(client: EmbeddingClient) -> dict[str, str]:
-    """What the data card should record about the near-dedup embedder."""
-    fingerprint = getattr(client, "space_fingerprint", None)
-    return {
-        "model": client.model,
-        "provider": str(getattr(client, "provider", type(client).__name__)),
-        "space_fingerprint": fingerprint or "uncached",
-    }
-
-
-def prompt_sha256(system_prompt: str) -> str:
-    """Same fingerprint the data card stores as ``system_prompt_sha256``."""
-    return hashlib.sha256(system_prompt.encode()).hexdigest()[:16]
-
-
-def _no_confidence(completion: Completion, label: str) -> float:
-    """Chat APIs return text, not class probabilities. Without a real confidence source every
-    valid label gets 1.0, which makes a cascade escalate only invalid outputs."""
-    return 1.0
-
-
+# path: book/projects/examples/ch33/aie_bridge.py  (excerpt; full file on disk)
 def logprob_confidence(completion: Completion, label: str) -> float:
-    """Probability of the emitted label from token log-probabilities, when the server returned them.
-
-    Request them with ``OpenAICompatibleClient(extra_body={"logprobs": True})`` on an engine that
-    supports it. The label's probability is the product of its tokens' probabilities, that is
-    ``exp(sum of logprobs)``. Returns 1.0 when the response carries no log-probabilities, so the
-    caller can tell from the ECE check that confidence is missing rather than silently wrong.
-    """
-    import math
-
+    # ...
     choices = (completion.raw or {}).get("choices") or []
     content = ((choices[0].get("logprobs") or {}).get("content") or []) if choices else []
     if not content:
@@ -867,28 +652,9 @@ def logprob_confidence(completion: Completion, label: str) -> float:
 
 
 def run_classifier(
-    llm: LLMClient,
-    holdout: list[HoldoutExample],
-    *,
-    name: str,
-    model: str,
-    system_prompt: str,
-    labels: list[str],
-    user_template: str = "{text}",
-    expected_prompt_sha256: str | None = None,
-    max_tokens: int = 16,
-    confidence_fn: ConfidenceFn = _no_confidence,
-    expected_provider: str | None = None,
+    # ... llm, holdout, model, system_prompt, labels, expected_prompt_sha256, confidence_fn, expected_provider ...
 ) -> SystemRun:
-    """Classify every holdout row with ``model`` and return predictions for the protocol.
-
-    ``system_prompt`` and ``user_template`` must be the ones the training file was rendered with;
-    pass the data card's ``system_prompt_sha256`` as ``expected_prompt_sha256`` and a mismatch
-    raises before any call is made. ``confidence_fn(completion, label)`` supplies the probability
-    of the predicted label, for example from token log-probabilities that a self-hosted engine
-    returns in ``completion.raw``; whatever the source, the ECE check in the ship rule decides
-    whether the cascade may trust it.
-    """
+    # ...
     if expected_prompt_sha256 is not None and prompt_sha256(system_prompt) != expected_prompt_sha256:
         raise ValueError(
             "system prompt differs from the one the model was trained with; "
@@ -927,12 +693,9 @@ def run_classifier(
             )
         )
     return SystemRun(name=name, predictions=predictions)
-
-
-__all__ = ["INVALID_LABEL", "embed_fn_from_client", "embedding_space", "logprob_confidence", "prompt_sha256", "run_classifier"]
 ```
 
-The test modules `test_ch33.py` and `test_aie_bridge.py` (on disk in the same directory) build a deterministic four-category corpus, exercise each stage, drive both providers through `run_fine_tune` with an injected sleep and an `httpx.MockTransport`, including transient poll failures and a resumed job, and run the classifier through a `ModelGateway` over `FakeLLM` with an illustrative pricing table. `test_hardening.py` pins the edge cases: a candidate that skips rows, the test set offered for training, a resume with another base model, and nonsense hyperparameters.
+The rest of the test suite (on disk) builds a deterministic four-category corpus, checks each builder stage and each metric against hand-computed values, drives both providers through `run_fine_tune` with an injected sleep and an `httpx.MockTransport`, and runs the classifier through a `ModelGateway` over `FakeLLM` with an illustrative pricing table. `test_hardening.py` pins the edge cases: a candidate that skips rows, the test set offered for training, a resume with another base model, and nonsense hyperparameters.
 
 ## Code walkthrough
 
@@ -942,9 +705,9 @@ The test modules `test_ch33.py` and `test_aie_bridge.py` (on disk in the same di
 
 **Why `split_by_entity` fills by example count.** Hashing each entity into a bucket is simpler, but with a few hundred accounts that hold most of the traffic the fractions swing wildly from seed to seed, and a test set can come out empty. Visiting entities in seeded hash order and filling train, then val, then test until each hits its target keeps fractions close to the request while still moving whole entities together. The test checks that the result is independent of input order, which matters when the export query changes its sort.
 
-**`split_by_time` nests an entity split.** The future slice becomes the test set untouched. The past slice is still split by entity between train and validation so threshold tuning on validation is not flattered by accounts the model trained on.
+**`split_by_time` (on disk) nests an entity split.** The future slice becomes the test set untouched. The past slice is still split by entity between train and validation so threshold tuning on validation is not flattered by accounts the model trained on.
 
-**`detect_label_artifacts` returns questions, not verdicts.** It cannot know that `refund` legitimately predicts `billing`. It can tell you that `autorouted` appears in 25 rows and predicts `billing` 100% of the time, which is almost certainly a macro stamp. Run it on the training split only, so the holdout never influences cleaning decisions; a token that is pure in train but missing from new traffic is exactly the shortcut that will not generalize.
+**`detect_label_artifacts` (on disk) returns questions, not verdicts.** It cannot know that `refund` legitimately predicts `billing`. It can tell you that `autorouted` appears in 25 rows and predicts `billing` 100% of the time, which is almost certainly a macro stamp. Run it on the training split only, so the holdout never influences cleaning decisions; a token that is pure in train but missing from new traffic is exactly the shortcut that will not generalize.
 
 **`decide_ship` compares against a reference, not against an absolute.** The strong prompted model is what production currently delivers, so "within 0.01 macro-F1 of it" is the honest target. Critical-label recall and the per-slice check are the two guards that catch the regressions a macro average hides.
 
@@ -952,11 +715,11 @@ The test modules `test_ch33.py` and `test_aie_bridge.py` (on disk in the same di
 
 **`run_fine_tune` is built for a job that outlives the process.** A hosted job runs for hours while the process polling it can crash, be redeployed, or hit a provider that returns 503 for ten minutes. Three rules follow. Transient errors during polling are absorbed: the provider adapter maps HTTP failures into the same `aie_core` taxonomy as completion calls, so the loop branches on `retryable`, honors `Retry-After`, and gives up only after several consecutive failures, while a bad key or an unknown job raises at once. The job id is handed to `on_status` as soon as the job exists, so the caller can persist it; after a crash, `resume_job_id` keeps polling that job instead of uploading again and paying for a second run. And when polling gives up, `FineTunePollTimeout` carries the job and deliberately does not cancel it, because the training may be nearly done; cancelling or resuming is an operator decision.
 
-**`run_fine_tune` validates before uploading.** Hosted APIs validate too, but after the upload and sometimes after a wait in the queue; local validation catches a `tool` role or an empty assistant turn in milliseconds. Given the data card, it also refuses a training file that is not the card's train file and any file that is the frozen test set, and on resume it refuses a different base model. The returned `FineTuneRecord` carries the training file hash, the data card hash, the job's base model, and the hyperparameters: the minimum a registry needs to answer "what was this model trained on" six months later. Everything vendor-specific in the OpenAI-compatible adapter sits in `_STATUS` and the request bodies; another vendor gets another small class and nothing else changes.
+**`run_fine_tune` validates before uploading.** Hosted APIs validate too, but after the upload and sometimes after a wait in the queue; local validation (`validate_chat_jsonl`, on disk) catches a `tool` role or an empty assistant turn in milliseconds. Given the data card, `_check_against_card` (on disk) also refuses a training file that is not the card's train file and any file that is the frozen test set, and on resume it refuses a different base model. The returned `FineTuneRecord` carries the training file hash, the data card hash, the job's base model, and the hyperparameters: the minimum a registry needs to answer "what was this model trained on" six months later. Everything vendor-specific in the OpenAI-compatible adapter (on disk) sits in its `_STATUS` status map and the request bodies; another vendor gets another small class and nothing else changes.
 
 **`aie_bridge` keeps evaluation on the production path.** `run_classifier` builds every request with the system prompt and user template the training file was rendered with, and, given the data card's `system_prompt_sha256`, refuses to run when the prompt has drifted: a fine-tuned model evaluated or served under a different prompt is a different system. It calls whatever `LLMClient` it is given, normally the same `ModelGateway` production uses, so latency comes from the completion and cost from the gateway's pricing table rather than from a spreadsheet. A cache hit is charged at full price (`cost_usd` plus `avoided_cost_usd`) so a cached rerun cannot look free, and, given `expected_provider`, an answer the gateway's fallback served counts as invalid for the model under test. A label outside the taxonomy, or a provider error, becomes an invalid prediction with zero confidence, so the metrics count it as wrong and a cascade escalates it rather than routing a ticket to a queue that does not exist.
 
-Confidence is the one thing a chat API does not return. The default gives every valid label 1.0, which makes the cascade escalate only invalid outputs; a real cascade passes a `confidence_fn`: `logprob_confidence` computes the label's probability from token log-probabilities that an engine returns when the client is built with `extra_body={"logprobs": True}` (Chapter 34); a separate verifier's score is the alternative. Either way, the ECE check in the ship rule decides whether that number can be trusted. `embed_fn_from_client` lets `dedupe_near` use any `aie_core` embedding client; wrapped in `CachedEmbeddings`, rebuilds do not re-embed unchanged rows, and `embedding_space` returns the space fingerprint the data card should record so two builds' dedup results are comparable.
+**Confidence and embeddings come from `aie_core`.** The default `confidence_fn` gives every valid label 1.0, which makes the cascade escalate only invalid outputs. A real cascade passes `logprob_confidence`, which reads token log-probabilities that an engine returns when the client is built with `extra_body={"logprobs": True}` (Chapter 34), or a verifier's score; "Where confidence comes from" in Core concepts explains the choice, and the ECE check in the ship rule decides whether the number can be trusted. `embed_fn_from_client` (on disk) lets `dedupe_near` use any `aie_core` embedding client; wrapped in `CachedEmbeddings`, rebuilds do not re-embed unchanged rows, and `embedding_space` returns the space fingerprint the data card should record so two builds' dedup results are comparable.
 
 ## Production considerations
 
@@ -977,7 +740,6 @@ Confidence is the one thing a chat API does not return. The default gives every 
 ## Common mistakes
 
 - **Training before freezing a holdout**, then "just checking" the holdout while iterating on data. The holdout becomes a validation set and the shipping decision loses its evidence.
-- **Random row splits** on data with entities or time structure. The model scores well on its own accounts and regresses on new ones.
 - **Mixing target formats** (`vpn`, `VPN`, `VPN access`). The model learns three behaviors and the parser rejects a third of outputs.
 - **Distilling teacher mistakes at scale** without filtering by agent confirmation or sampling for review.
 - **Changing the system prompt after training** and wondering why quality dropped.
@@ -993,7 +755,7 @@ Each entry names the failure, how it shows in telemetry, and how to test for it.
 
 **Label artifact learned as the task.** The model keys on a template phrase or a macro stamp. Telemetry: accuracy collapses on a channel that lacks the phrase (a new intake form) while the holdout looked fine. Test: artifact detection on the training split; an adversarial slice with the phrase removed or added to the wrong class.
 
-**Leakage inflating the holdout.** Near-duplicates or shared accounts across splits. Telemetry: offline macro-F1 far above the early production estimate from agent overrides. Test: entity-overlap assertion, dedup before split, and a time-split test set whose score is the one you report.
+**Leakage inflating the holdout.** Near-duplicates or shared accounts across splits, usually from a random row split on data with entity or time structure: the model scores well on accounts it trained on and regresses on new ones. Telemetry: offline macro-F1 far above the early production estimate from agent overrides. Test: entity-overlap assertion, dedup before split, and a time-split test set whose score is the one you report.
 
 **Memorization of sensitive text.** The model completes training rows verbatim. Telemetry: PII detector hits on outputs that contain strings absent from the input. Test: prompt with training-row prefixes; scrub before training; cap epochs.
 
@@ -1047,7 +809,24 @@ Splitting: the most recent six weeks (5,200 rows) become the time-split test set
 
 **Step 7, rollout and operations.** The model id, data card hash, training file hash, base model, prompt version, and threshold are registered together. A flag sends 5% of traffic to the cascade for a week; override rate on the canary matches the strong model's within noise. Rollout completes. Dashboards track label mix against the card, escalation rate (baseline 14%, alert on a sustained move above 20%), and override rate per category. Retraining is triggered by any taxonomy change, by escalation above 20% for two consecutive weeks, or by 5,000 new agent-confirmed labels together with measured drift, whichever comes first. Three months in, a new product launch pushes escalation to 19%, just under the alert, and `hardware` share up by half; that label-mix shift is measured drift, 5,000 new confirmed labels have accumulated, and the next build adds the new rows, the card shows the shift, and the protocol runs again.
 
+## Before you ship
+
+- [ ] The ship rule, with numeric thresholds for macro-F1 drop, critical-label recall, per-label recall floor, slice drop, cost reduction, latency, maximum ECE, and regression pass rate, was committed before the first training run and has not changed since.
+- [ ] The test set is time-split, frozen, and hashed in the data card, and `run_fine_tune` receives the card so it refuses the test file.
+- [ ] Exact and near dedup ran before the split, `assert_no_entity_overlap` passes, and the card's dedup counts are plausible for the corpus (zero on traffic with outage storms is a red flag).
+- [ ] Consent filtering and PII scrubbing ran before any file was written, and a memorization probe on training-row prefixes finds no verbatim completions of sensitive strings.
+- [ ] Cohen's kappa on a double-labeled sample is at least 0.7, and every artifact-detector hit has a recorded decision (strip, keep, or relabel).
+- [ ] Rules, prompted small, and prompted strong baselines and the candidate were scored on the same complete holdout (coverage 1.0, identical n).
+- [ ] The escalation threshold was chosen on validation, and the composed system, not the standalone model, passed the ship rule on the test set.
+- [ ] Reliability bins for the candidate were reviewed, not only the ECE number, and the confidence source (log-probabilities or verifier) is the one production will use.
+- [ ] Regression suites for every other prompt that shares the model id pass at the agreed rate; for tool-call fine-tunes, a frozen trajectory set passes too.
+- [ ] The registry entry links model id, base model, job id, training-file hash, data-card hash, prompt version and hash, and threshold, and serving refuses a prompt whose hash differs.
+- [ ] A flag routes a canary slice first, the previous version stays deployable, and rollback has been rehearsed.
+- [ ] Alerts exist for label mix against the card, escalation rate, and per-category override rate; retrain triggers and the base model's deprecation date are written down.
+
 ## Exercises
+
+**Start here:** K1, K4, E2, P2, D1 (about 3 hours). The rest go deeper.
 
 ### Knowledge questions
 
@@ -1063,6 +842,8 @@ Splitting: the most recent six weeks (5,200 rows) become the time-split test set
 
 **K6.** Distinguish exact deduplication, near deduplication, and entity-grouped splitting. Give one leak each one catches that the other two miss.
 
+**K7.** Explain what a grader is in reinforcement fine-tuning, name one task where RFT would beat SFT and one where it would not, and describe a grader that invites reward hacking.
+
 ### Engineering questions
 
 **E1.** Northwind wants to fine-tune the same small base for three tasks: ticket classification, invoice field extraction, and reply drafting in house style. Design the versioning and serving scheme: adapters or merged weights, how many model ids, what the registry records, and how a prompt change on one task is gated.
@@ -1073,15 +854,17 @@ Splitting: the most recent six weeks (5,200 rows) become the time-split test set
 
 **E4.** A hosted provider announces the base model behind your adapter will be retired in 90 days. Write the migration plan, including what the registry must already contain for this to be routine.
 
+**E5.** Northwind's HR assistant misses answers to questions phrased in internal shorthand ("PTO carryover", "WFH stipend"), and recall@8 on those questions is far below the rest of the evaluation set. Decide between fine-tuning the generator, the reranker, or the embedding model: what measurement settles it, what training data you would build and from where, how you would split it, and what the rollout costs for each option.
+
 ### Practical exercises
 
-**P1.** Make the near-dedup embedder part of the dataset's provenance. Extend `build_dataset` so the data card records which embedder ran (`tfidf`, or the `embedding_space` of an `aie_core` client passed through `embed_fn_from_client`) and the threshold. Then write a test with `FakeEmbeddings(vocabulary=...)` that shows a reworded pair the TF-IDF fallback keeps and the vocabulary embedder removes, and asserts that two builds with different embedders produce cards that say so.
+**P1.** (about 2 hours) Make the near-dedup embedder part of the dataset's provenance. Extend `build_dataset` so the data card records which embedder ran (`tfidf`, or the `embedding_space` of an `aie_core` client passed through `embed_fn_from_client`) and the threshold. Then write a test with `FakeEmbeddings(vocabulary=...)` that shows a reworded pair the TF-IDF fallback keeps and the vocabulary embedder removes, and asserts that two builds with different embedders produce cards that say so.
 
-**P2.** Add a stratification check to the data card: for each label, the share in train, val, and test, and a warning list of labels whose test share is zero or whose train share is below a floor. Add a test with a corpus that triggers the warning.
+**P2.** (about 60 min) Add a stratification check to the data card: for each label, the share in train, val, and test, and a warning list of labels whose test share is zero or whose train share is below a floor. Add a test with a corpus that triggers the warning.
 
-**P3.** Implement a memorization probe: given the training JSONL and a prediction function, prompt with the first half of each user turn for a sample of rows and report how many completions reproduce the second half above a similarity threshold. Test it with a fake model that memorizes.
+**P3.** (about 90 min) Implement a memorization probe: given the training JSONL and a prediction function, prompt with the first half of each user turn for a sample of rows and report how many completions reproduce the second half above a similarity threshold. Test it with a fake model that memorizes.
 
-**P4.** Write a second `FineTuneProvider` adapter for a different REST shape of your choosing (different endpoint names and status vocabulary), tested with `httpx.MockTransport`, and show that `run_fine_tune` and its tests do not change.
+**P4.** (about 2 hours) Write a second `FineTuneProvider` adapter for a different REST shape of your choosing (different endpoint names and status vocabulary), tested with `httpx.MockTransport`, and show that `run_fine_tune` and its tests do not change.
 
 ### Debugging exercises
 
@@ -1103,3 +886,12 @@ Splitting: the most recent six weeks (5,200 rows) become the time-split test set
 - Evaluate the composed system. A small model plus an escalation path to a strong model often meets the quality bar at most of the savings, and it is what users experience.
 - A fine-tune is a model version: register base, adapter, data card, prompt, and threshold together; roll out behind a flag; keep rollback one flip away; monitor label mix, escalation, and override rates; retrain on evidence, not on the calendar.
 - Training loss sees none of the failures that matter: forgetting, artifacts, leakage, memorization, calibration collapse, rare-class collapse. Only the protocol does.
+
+## Further reading
+
+- *LoRA: Low-Rank Adaptation of Large Language Models* (Hu et al., 2022): the method behind most adapters you will train or serve, with the parameter arithmetic this chapter uses.
+- *QLoRA: Efficient Finetuning of Quantized LLMs* (Dettmers et al., 2023): how a quantized frozen base makes single-GPU adaptation possible, and what it costs.
+- *LIMA: Less Is More for Alignment* (Zhou et al., 2023): evidence that a small, carefully curated SFT set goes further than a large noisy one.
+- *Training Language Models to Follow Instructions with Human Feedback* (Ouyang et al., 2022): the SFT-then-RLHF pipeline that preference tuning starts from.
+- *Direct Preference Optimization: Your Language Model is Secretly a Reward Model* (Rafailov et al., 2023): how preference tuning works without a reward model or RL loop.
+- *On Calibration of Modern Neural Networks* (Guo et al., 2017): reliability diagrams and ECE, the vocabulary behind the cascade threshold and the ship rule's calibration check.

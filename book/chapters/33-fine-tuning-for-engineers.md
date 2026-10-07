@@ -248,7 +248,7 @@ flowchart LR
     J --> FT[Fine-tune job]
     DC --> REG[(Model registry)]
     FT --> REG
-    J -. test.jsonl frozen .-> EV[Evaluation protocol]
+    J -. "test.jsonl frozen" .-> EV[Evaluation protocol]
     REG --> EV
     EV --> SD{Ship rule}
 ```

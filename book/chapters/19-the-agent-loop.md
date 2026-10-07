@@ -63,7 +63,7 @@ stateDiagram-v2
     CallModel --> Stopped: model error
     CallModel --> ProcessCalls: ModelDecision with tool calls
     CallModel --> Verify: ModelDecision without tool calls
-    ProcessCalls --> ProcessCalls: next call: deny, or approve and execute
+    ProcessCalls --> ProcessCalls: next call, deny or approve and execute
     ProcessCalls --> AwaitApproval: call needs a human
     ProcessCalls --> Stopped: repeated action, tool budget, fatal error
     ProcessCalls --> CheckLimits: StepCompleted

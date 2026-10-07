@@ -1,6 +1,16 @@
 # Chapter 18 — MCP and Tool Ecosystems
 
-After this chapter you will be able to explain what the Model Context Protocol (MCP) standardizes and what it deliberately leaves to you, read and write its JSON-RPC messages, choose between stdio and HTTP deployment, and put an MCP server behind a host that decides on its own which tools a given user may see and call. You will build a minimal MCP-style server and client in plain Python over stdio that expose two Northwind ticket tools, one runbook resource, and one prompt; a host-side adapter that converts discovered tools into `aie_core` `ToolSpec`s, pins their descriptions in a reviewed lockfile, and authorizes every call independently of discovery; and tests that spawn the server as a subprocess and prove that a poisoned server cannot reach the model. The code lives in `book/projects/examples/ch18/`.
+The Model Context Protocol (MCP) lets the team that owns a system publish one integration that every AI application can use, and it also lets code you did not write describe tools to your model. This chapter covers what the protocol standardizes, what it deliberately leaves to you, and the host-side gatekeeping that makes a pluggable tool ecosystem safe.
+
+**You will be able to:**
+- Explain the host, client, and server roles and the three capability kinds, and read MCP's JSON-RPC messages, including its two error channels.
+- Choose between stdio and HTTP transports, per-tenant instances and multi-tenant servers, and direct connections and a gateway.
+- Build a host adapter that converts discovered tools into `aie_core` `ToolSpec`s, pins reviewed descriptions in a lockfile, quarantines drifted tools, and authorizes every call per principal regardless of what the server advertised.
+- Design the credential flow for a remote server: per-user, audience-bound tokens obtained through the protocol's OAuth-based authorization, and no token passthrough.
+- Decide when to use in-process tools, MCP, provider-hosted connectors, Agent Skills, or an agent-to-agent protocol.
+- Test that a poisoned server cannot reach the model.
+
+**Prerequisites:** Chapters 3 (`aie_core`, `ToolSpec`, `FakeLLM`) and 16 (tool schemas, side-effect classes, call-time authorization). | **Code:** `book/projects/examples/ch18/` (run: `cd book/projects/examples/ch18 && pytest -q`) | **Builds:** a minimal MCP-style stdio server and client for two Northwind ticket tools, one runbook resource, and one prompt, plus the host adapter whose tests spawn the server as a subprocess.
 
 ## Why this matters
 
@@ -88,7 +98,7 @@ Early HTTP designs assumed a long-lived session: the server could issue a sessio
 
 Stateless protocol does not mean stateless application. A long-running export still has a job record in a database; a multi-step workflow still has a checkpoint (Chapter 17). The protocol simply stops being the place where that state lives.
 
-> **Freshness note.** MCP is versioned by date and has changed materially since its introduction in late 2024: transports, authorization, batching, structured output, and the session model have all been revised. Proposals in circulation at the time of writing include a stateless core request flow without a mandatory handshake, routing hints in headers, cacheable list results, and an extensions mechanism; treat them as a direction, not as facts about a specific revision. This chapter's code follows the handshake of the 2025 revisions. The concepts here (roles, capability kinds, discovery versus authorization, the security model) are stable across revisions; the exact message shapes are not. Before you build, read the current specification and changelog, and check which revisions your SDK and hosts implement.
+> **Freshness note.** MCP is versioned by date and has changed materially since its introduction in late 2024: transports, authorization, batching, structured output, and the session model have all been revised. Proposals in circulation include a stateless core request flow without a mandatory handshake, routing hints in headers, cacheable list results, and an extensions mechanism; treat them as a direction, not as facts about a specific revision. This chapter's code follows the handshake of the 2025 revisions. The concepts here (roles, capability kinds, discovery versus authorization, the security model) are stable across revisions; the exact message shapes are not. Before you build, read the current specification and changelog, and check which revisions your SDK and hosts implement.
 
 ### Discovery is not authorization
 
@@ -139,7 +149,27 @@ A gateway centralizes control, and the costs of centralization come with it: one
 
 Third-party remote servers deserve a separate tier. Treat them as you would a third-party API that receives your data: vendor review, data-processing terms, an allowlist of exactly which tools are enabled, no access to sessions that hold restricted data, and monitoring of description changes.
 
-### MCP versus function calling, plugins, and Agent Skills
+### What recent revisions added
+
+The revisions as of 2026 matter to an architect in four areas. This is a map, not a reference: read the specification for the shapes.
+
+**Long-running calls.** A `tools/call` is a request that waits for its response, which fits a lookup and does not fit a twenty-minute export. The 2025-11-25 revision added *tasks* (marked experimental): a requester can ask for a request to run as a task, get a task handle back at once, and poll for status and the eventual result, or cancel it. This is the protocol's version of the job record from the transports section. It does not make the work durable by itself: the server still needs a job store that survives restarts (Chapter 38 covers durable execution). Use tasks when a tool's p95 exceeds what you will hold a connection open for; keep plain calls for everything else, because a task adds polling, expiry, and a result you must fetch.
+
+**Elicitation in two modes.** Elicitation lets a server ask the user a question through the host. The original form asks for structured input against a small schema, and the host renders a form. The 2025-11-25 revision added a *URL mode*: the server asks the host to send the user to a URL, for example to complete a third-party sign-in or a payment. The point is that sensitive input goes from the user's browser straight to the server's own page and never passes through the host or the model's context. For a host, both modes are the server speaking to your user: show which server is asking, let the user decline, and never auto-open a URL on a server's say-so.
+
+**Authorization for remote servers.** Over HTTP, an MCP server acts as an OAuth 2.1 resource server and the host's client is an OAuth client. The flow, in outline:
+
+1. The client calls the server without a token and gets `401` with a pointer to the server's *protected resource metadata*, a document that names the authorization server(s) the server trusts.
+2. The client fetches the authorization server's metadata and identifies itself. The 2025-11-25 revision prefers *client ID metadata documents*: the client's ID is an HTTPS URL that serves a JSON description of the client, so an authorization server can trust a client it has never seen without a separate registration step. Pre-registration and dynamic registration remain options.
+3. The user signs in and consents through an authorization-code flow with PKCE (a per-request secret that stops an intercepted code from being redeemed by someone else).
+4. The token request carries a *resource indicator*: the server's canonical URL. The issued token names that server as its audience.
+5. The server accepts only tokens whose audience is itself, and never forwards them to another service.
+
+Step 4 and step 5 are the audience-bound tokens from "Discovery is not authorization", made concrete: a token stolen from the ticket server is useless against the mail server. Stdio servers do not use this flow; they take credentials from their environment, which is why the client must pass a minimal one. What goes wrong in practice: servers that validate the signature but not the audience, clients that omit the resource indicator and receive a token valid everywhere, and gateways that pass the user's token through instead of exchanging it.
+
+**The registry.** The MCP project also runs an official registry, launched in preview in 2025: a public catalog of server metadata (name, version, where to get the package or which remote endpoint to call) that hosts, marketplaces, and private subregistries can consume. Treat a registry entry as provenance, not approval. It tells you that a server exists and who published it; it does not review the server's descriptions or code. Large organizations typically mirror the entries they have vetted into a private registry, and the host's lockfile remains the approval record.
+
+### MCP and its neighbors: function calling, hosted connectors, plugins, Skills, agent protocols
 
 These are often presented as competitors. They solve different problems and compose.
 
@@ -147,17 +177,21 @@ These are often presented as competitors. They solve different problems and comp
 
 **MCP** is a standard for packaging and transporting tools, resources, and prompts across process and organizational boundaries. It is worth it when several hosts need the same integration, when the system's owners should own the integration, or when you want to adopt integrations built by others. In the host, MCP tools become ordinary function-calling tool specs; our adapter's whole job is that conversion plus the gatekeeping around it.
 
+**Provider-hosted MCP connectors** are the same protocol with a different host. As of 2026, several model APIs accept a remote MCP server's URL in the request; the provider's infrastructure connects to the server, lists its tools, and calls them in the middle of a generation (Chapter 16 covers provider-hosted tools in general). Nothing in this chapter's host runs on those calls: no lockfile check, no `authorize`, no result wrapping, and your audit log learns of the call only from the response. The arguments travel from the provider's network to the server, outside your egress controls. Your levers are coarse: which server URL you pass, an allowlist of its tools if the provider offers one, a per-user token you supply, and an approval mode that returns control to you before a call, where available. Use connectors for read-only servers whose data is no more sensitive than the prompt itself. Route anything that writes or touches tenant data through your own host.
+
 **Plugins** are host-specific extension systems: a chat product's plugin format, an IDE's extension API, an agent framework's tool package. They bundle code, configuration, and often UI for one host. They are simpler when you target one host, and they lock you to it. Many hosts now accept MCP servers as one kind of plugin content.
 
 **Agent Skills** package procedural knowledge: a folder centered on a `SKILL.md` file with a short name and description, longer instructions, and optional scripts and reference files. The host loads only the short description up front and pulls in the rest when the task calls for it (progressive disclosure), which keeps rarely used procedures out of permanent context. A skill teaches the agent how to do something ("how Northwind triages a P1 incident"); an MCP server gives it the ability to touch a system ("read tickets"). A good skill often tells the agent which MCP tools to use and in what order. Skills carry their own supply-chain risk because they can include executable scripts: version, review, and pin them like code, and keep dynamic facts out of them.
 
-| | Function calling | MCP | Host plugin | Agent Skill |
-|---|---|---|---|---|
-| Solves | model emits structured calls | cross-host capability integration | extending one host | reusable procedure and context |
-| Unit | tool schema in a request | server with tools, resources, prompts | host-specific package | folder with `SKILL.md`, scripts, references |
-| Runs where | your process | separate process or service | inside the host | inside the agent's context and sandbox |
-| Portability | per model API | across compliant hosts | one host | across hosts that support skills |
-| Main risk | over-broad tools | untrusted descriptions, credentials, egress | host lock-in | executable content, stale procedure |
+**Agent-to-agent protocols** connect an agent to another agent rather than to a tool. MCP assumes the other side is a capability: a function with a schema that returns a result. An agent-interop protocol, for example A2A (Agent2Agent, introduced by Google in 2025 and, as of 2026, an open project under the Linux Foundation), assumes the other side is an autonomous system with its own model, tools, and policy. The remote agent publishes a descriptor of its skills and endpoint, accepts a task in natural language or structured parts, streams status and artifacts back, may run for hours, and may come back asking for input. Use it when another team or organization owns a whole agent and will not expose its internals; use MCP when you want a function. The host rules carry over: the remote agent's descriptor is server-authored text, its output is untrusted data, and the user's identity must reach it as a scoped, audience-bound token. Chapter 22 covers how message envelopes, budgets, and traces map onto cross-process agents.
+
+| | Function calling | MCP | Provider-hosted MCP connector | Host plugin | Agent Skill |
+|---|---|---|---|---|---|
+| Solves | model emits structured calls | cross-host capability integration | MCP tools without running a host | extending one host | reusable procedure and context |
+| Unit | tool schema in a request | server with tools, resources, prompts | server URL in a model API request | host-specific package | folder with `SKILL.md`, scripts, references |
+| Runs where | your process | separate process or service | provider's infrastructure calls the server | inside the host | inside the agent's context and sandbox |
+| Portability | per model API | across compliant hosts | per model API | one host | across hosts that support skills |
+| Main risk | over-broad tools | untrusted descriptions, credentials, egress | your policy, audit, and egress controls never run | host lock-in | executable content, stale procedure |
 
 ## How it works
 
@@ -248,7 +282,7 @@ book/projects/examples/ch18/
   mcp_client.py         StdioMcpClient: subprocess, handshake, pagination, timeouts
   host_adapter.py       Principal, ToolLock, McpToolAdapter, McpHost
   demo.py               review, pin, then connect to clean and poisoned servers
-  test_ch18.py          16 tests; server tests spawn real subprocesses
+  test_ch18.py          tests; server tests spawn real subprocesses
   pyproject.toml, README.md, .env.example
 ```
 
@@ -432,64 +466,11 @@ The client spawns the server with an explicit environment, reads stdout on a bac
 
 ### The host adapter
 
-This file holds the chapter's core logic: the three checks named in its docstring. It is shown in full.
+This file holds the chapter's core logic. Its module docstring (on disk) names three questions, each with its own mechanism: is this tool what we reviewed (a fingerprint compared with the lockfile), may this principal use it (a `ToolGrant`'s required groups), and are these arguments acceptable (validation against the pinned schema). The excerpt shows the fingerprint, the grant, discovery, per-principal exposure, call-time authorization, and routing. `ToolLock`, `pin_reviewed_tools`, `execute`, and the small `run_turn` loop are on disk.
 
 ```python
-# path: book/projects/examples/ch18/host_adapter.py
-"""Host side: turn tools discovered over MCP into aie_core ToolSpecs, and route the
-model's tool calls back to the right server, with authorization that does not depend
-on what the server advertised.
-
-Three separate questions, three separate mechanisms:
-
-  1. Is this tool what we reviewed?      fingerprint of (name, description, inputSchema)
-                                          compared with a pinned lockfile -> else quarantine
-  2. May this principal use this tool?   ToolGrant in the lockfile: required groups
-  3. Are these arguments acceptable?     validation against the pinned schema, in code
-
-Discovery answers none of them. A server can advertise anything; only tools that pass
-(1) are offered, only tools that pass (2) for the current principal are offered to that
-principal, and every call is re-checked at execution time because the model can name
-tools it was never offered.
-"""
-from __future__ import annotations
-
-import hashlib
-import json
-import sys
-import time
-from collections.abc import Iterable
-from pathlib import Path
-from typing import Any, Literal
-
-from pydantic import BaseModel, Field
-
-from aie_core import CompletionRequest, Completion, Message, Role, ToolCall, ToolSpec
-from aie_core.llm.client import LLMClient
-from aie_core.observability import NoopTracer, Tracer
-
-HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(HERE))
-
-from mcp_client import McpClientError, StdioMcpClient  # noqa: E402
-from schema_check import validate_arguments  # noqa: E402
-
-SEP = "__"  # exposed name = "<server_id>__<tool>", so two servers can both have "search"
-
-
-# --------------------------------------------------------------------------- identity
-class Principal(BaseModel):
-    """The end user on whose behalf the model acts. Authorization is about this, not the agent."""
-
-    user_id: str
-    tenant: Literal["retail", "logistics"]
-    groups: frozenset[str] = frozenset({"all"})
-
-
-# --------------------------------------------------------------------------- lockfile
+# path: book/projects/examples/ch18/host_adapter.py (excerpt; full file on disk)
 def tool_fingerprint(tool: dict[str, Any]) -> str:
-    """Hash over everything the model will read or rely on. A one-character change to the
-    description, which is prompt text, changes the hash."""
     canonical = json.dumps(
         {"name": tool.get("name"), "description": tool.get("description"), "inputSchema": tool.get("inputSchema")},
         sort_keys=True,
@@ -497,7 +478,6 @@ def tool_fingerprint(tool: dict[str, Any]) -> str:
         separators=(",", ":"),
     )
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
-
 
 class ToolGrant(BaseModel):
     server_id: str
@@ -507,63 +487,10 @@ class ToolGrant(BaseModel):
     side_effect: Literal["read", "write"] = "read"
     max_result_chars: int = 4000
 
-
-class ToolLock(BaseModel):
-    """Reviewed, versioned configuration: the host's source of truth for tools.
-    Generated from a trusted run, reviewed like a dependency lockfile, then committed."""
-
-    grants: list[ToolGrant] = Field(default_factory=list)
-
-    def get(self, server_id: str, tool: str) -> ToolGrant | None:
-        return next((g for g in self.grants if g.server_id == server_id and g.tool == tool), None)
-
-    def save(self, path: Path) -> None:
-        path.write_text(self.model_dump_json(indent=2), encoding="utf-8")
-
-    @classmethod
-    def load(cls, path: Path) -> "ToolLock":
-        return cls.model_validate_json(path.read_text(encoding="utf-8"))
-
-
-def pin_reviewed_tools(
-    server_id: str, discovered: Iterable[dict[str, Any]], approvals: dict[str, frozenset[str]]
-) -> ToolLock:
-    """Create grants for the tools a reviewer approved (tool name -> required groups).
-    Anything discovered but not approved gets no grant and will never be offered."""
-    grants = [
-        ToolGrant(server_id=server_id, tool=t["name"], fingerprint=tool_fingerprint(t), required_groups=approvals[t["name"]])
-        for t in discovered
-        if t["name"] in approvals
-    ]
-    return ToolLock(grants=grants)
-
-
-# --------------------------------------------------------------------------- decisions
-class DiscoveryReport(BaseModel):
-    server_id: str
-    verified: list[str] = Field(default_factory=list)
-    quarantined: dict[str, str] = Field(default_factory=dict)  # tool -> reason
-    ignored: list[str] = Field(default_factory=list)  # discovered, no grant
-
-
-class Decision(BaseModel):
-    allowed: bool
-    reason: str
-    server_id: str | None = None
-    tool: str | None = None
-
-
-# --------------------------------------------------------------------------- adapter
+# ...
 class McpToolAdapter:
     """Binds one connected server to the host's lockfile."""
-
-    def __init__(self, server_id: str, client: StdioMcpClient, lock: ToolLock, tracer: Tracer | None = None) -> None:
-        self.server_id = server_id
-        self.client = client
-        self.lock = lock
-        self.tracer = tracer or NoopTracer()
-        self._verified: dict[str, dict[str, Any]] = {}  # tool name -> descriptor that matched its pin
-
+    # ...
     def discover(self) -> DiscoveryReport:
         """List tools and verify each against the lockfile. Call again on reconnect or on
         a list-changed notification; a tool that changes after review is quarantined."""
@@ -580,9 +507,7 @@ class McpToolAdapter:
                 else:
                     self._verified[name] = tool
                     report.verified.append(name)
-            span.set_attribute("verified", len(report.verified))
-            span.set_attribute("quarantined", sorted(report.quarantined))
-            span.set_attribute("ignored", sorted(report.ignored))
+            # ...
         return report
 
     def tool_specs(self, principal: Principal) -> list[ToolSpec]:
@@ -612,33 +537,9 @@ class McpToolAdapter:
             return Decision(allowed=False, reason="invalid arguments: " + "; ".join(problems), **base)
         return Decision(allowed=True, reason="ok", **base)
 
-    def execute(self, tool: str, arguments: dict[str, Any]) -> tuple[str, bool]:
-        """Call the server and flatten the result to text. Returns (text, is_error)."""
-        grant = self.lock.get(self.server_id, tool)
-        limit = grant.max_result_chars if grant else 4000
-        try:
-            result = self.client.call_tool(tool, arguments)
-        except McpClientError as exc:
-            return f"tool unavailable: {exc.message}", True
-        text = "\n".join(c.get("text", "") for c in result.get("content", []) if c.get("type") == "text")
-        if len(text) > limit:
-            text = text[:limit] + f"\n[truncated {len(text) - limit} chars]"
-        return text, bool(result.get("isError"))
-
-
-# --------------------------------------------------------------------------- host
+# ...
 class McpHost:
-    """Owns several adapters, builds the tool list per principal, routes calls, and runs a
-    small bounded tool loop. Chapter 19 replaces run_turn with the full AgentRuntime."""
-
-    def __init__(self, adapters: list[McpToolAdapter], tracer: Tracer | None = None) -> None:
-        self.adapters = {a.server_id: a for a in adapters}
-        self.tracer = tracer or NoopTracer()
-        self.decisions: list[Decision] = []  # audit trail for tests and logs
-
-    def tool_specs(self, principal: Principal) -> list[ToolSpec]:
-        return [spec for a in self.adapters.values() for spec in a.tool_specs(principal)]
-
+    # ...
     def route(self, principal: Principal, call: ToolCall) -> Message:
         server_id, _, tool = call.name.partition(SEP)
         adapter = self.adapters.get(server_id)
@@ -653,42 +554,13 @@ class McpHost:
                 # Denials are not retried and not sent anywhere; the model sees a plain refusal.
                 return Message.tool(call.id, f"DENIED: {decision.reason}")
             assert adapter is not None
-            started = time.perf_counter()
             text, is_error = adapter.execute(tool, call.arguments)
-            span.set_attribute("latency_ms", round((time.perf_counter() - started) * 1000, 2))
-            span.set_attribute("is_error", is_error)
         # Tool output is data from another system. Mark it so downstream guardrails
         # (Chapter 27) and the system prompt can treat it as untrusted.
         # Escape the server's text so it cannot close the wrapper and pose as host instructions.
         safe = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
         wrapped = f'<tool_result server="{server_id}" tool="{tool}" error="{str(is_error).lower()}">\n{safe}\n</tool_result>'
         return Message.tool(call.id, wrapped)
-
-    def run_turn(self, llm: LLMClient, principal: Principal, messages: list[Message], max_tool_rounds: int = 3) -> Completion:
-        msgs = list(messages)
-        tools = self.tool_specs(principal)
-        for _ in range(max_tool_rounds + 1):
-            completion = llm.complete(CompletionRequest(messages=msgs, tools=tools or None))
-            if not completion.tool_calls:
-                return completion
-            msgs.append(Message(role=Role.ASSISTANT, content=completion.text, tool_calls=completion.tool_calls))
-            for call in completion.tool_calls:
-                msgs.append(self.route(principal, call))
-        return completion  # tool budget exhausted; the caller decides how to surface it
-
-
-__all__ = [
-    "Principal",
-    "ToolGrant",
-    "ToolLock",
-    "tool_fingerprint",
-    "pin_reviewed_tools",
-    "DiscoveryReport",
-    "Decision",
-    "McpToolAdapter",
-    "McpHost",
-    "SEP",
-]
 ```
 
 ### The tests
@@ -792,17 +664,17 @@ The SDK derives schemas from type hints and descriptions from docstrings, which 
 
 **Server-side checks.** `_tools_call` validates arguments even though the host already did, because a server cannot assume every client is our host. `build_server` filters tickets to the process's tenant before registering any tool, so `test_per_tenant_instance_cannot_read_other_tenant` gets the same "not found" for a logistics ticket as for a nonexistent one.
 
-**Pinning and quarantine.** `tool_fingerprint` hashes the canonical JSON of name, description, and schema. `pin_reviewed_tools` produces grants only for tools a reviewer approved, with the groups that may use each. `discover` sorts every listed tool into verified, quarantined, or ignored and records the verified count and the quarantined and ignored names on a tracing span, so a sudden quarantine shows up on a dashboard rather than as a mysterious drop in tool use.
+**Pinning and quarantine.** `tool_fingerprint` hashes the canonical JSON of name, description, and schema, so a one-character change to a description, which is prompt text, changes the hash. `pin_reviewed_tools` (on disk) produces grants only for tools a reviewer approved, with the groups that may use each. `discover` sorts every listed tool into verified, quarantined, or ignored and records the verified count and the quarantined and ignored names on a tracing span, so a sudden quarantine shows up on a dashboard rather than as a mysterious drop in tool use.
 
-**Exposure versus authorization.** `tool_specs` is least-privilege exposure: verified tools whose grant intersects the principal's groups, namespaced as `server__tool`. `authorize` is the independent check at call time; it consults the lockfile, the principal, the verified set, and the pinned schema, and nothing the model or server said. `route` records every `Decision`, returns `DENIED: reason` to the model without contacting the server on denial, and wraps allowed results in a `tool_result` element that marks them as untrusted data for Chapter 27's context guardrails. The server's text is escaped first, so it cannot close the wrapper; even so, the wrapper is a labeling convention for the model, not a security boundary.
+**Exposure versus authorization.** `tool_specs` is least-privilege exposure: verified tools whose grant intersects the principal's groups, namespaced as `server__tool`. `authorize` is the independent check at call time; it consults the lockfile, the principal, the verified set, and the pinned schema, and nothing the model or server said. `route` records every `Decision` (the on-disk version also records latency and the error flag on its span), returns `DENIED: reason` to the model without contacting the server on denial, and wraps allowed results in a `tool_result` element that marks them as untrusted data for Chapter 27's context guardrails. The server's text is escaped first, so it cannot close the wrapper; even so, the wrapper is a labeling convention for the model, not a security boundary. Before wrapping, `execute` (on disk) keeps only text parts, cuts the result to the grant's `max_result_chars` with a visible truncation marker, and turns a client-side protocol failure into a tool error the model can see.
 
-**The loop.** `run_turn` is a deliberately small bounded loop over `aie_core`'s `LLMClient`: complete, route tool calls, repeat up to a round limit. Chapter 19 replaces it with `AgentRuntime`, and the adapter plugs in unchanged.
+**The loop.** `run_turn` (on disk) is a deliberately small bounded loop over `aie_core`'s `LLMClient`: complete, route tool calls, repeat up to a round limit. Chapter 19 replaces it with `AgentRuntime`, and the adapter plugs in unchanged.
 
 ## Production considerations
 
 **Latency.** Each MCP tool call adds a process or network hop on top of the backing system's latency. Stdio calls cost little beyond serialization; remote calls through a gateway add one or two network round trips. Discovery is the hidden cost: listing tools from ten servers at the start of every request is wasteful, so cache verified lists per server and invalidate on reconnect or list-changed notifications. Set per-call timeouts (our client defaults to 5 s) and a per-turn tool budget so one slow server cannot consume the p95 completion target of 8 s.
 
-**Cost.** Tool descriptions are prompt tokens on every model call that offers them. As an illustration, forty tools at about 150 tokens of description and schema each add roughly 6,000 input tokens per call before the user says anything, and they dilute the model's attention when it selects tools. Per-principal and per-task filtering is therefore a cost control as much as a security control. Prompt caching (Chapter 30) helps only if the tool list is stable across requests, which argues for deterministic ordering.
+**Cost.** Tool descriptions are prompt tokens on every model call that offers them. As an illustration, forty tools at about 150 tokens of description and schema each add roughly 6,000 input tokens per call before the user says anything, and they dilute the model's attention when it selects tools. Per-principal and per-task filtering is therefore a cost control as much as a security control. Prompt caching (Chapter 5; Chapter 30 has the cost math) helps only if the tool list is stable across requests, which argues for deterministic ordering.
 
 **Security operations.** Keep the lockfile in version control and require review for changes, exactly like a dependency lockfile. Alert on quarantines and on denials by reason. Log every call with server, tool, principal, decision, latency, and redacted arguments. Rotate server credentials and prefer short-lived tokens. Red-team with poisoned servers in CI, not only once.
 
@@ -820,7 +692,7 @@ It also creates a new class of supply-chain artifact. Servers, tool descriptions
 - **Launching stdio servers with the host's environment.** Third-party code now holds your cloud keys.
 - **Ignoring pagination and `listChanged`.** Tools silently missing, or silently changed.
 - **Retrying tool errors as if they were transport errors.** An `isError` result for "ticket not found" will not succeed on retry; feed it to the model or stop.
-- **One multi-tenant server trusting a tenant argument.** Derive tenant from identity or from the instance.
+- **One multi-tenant server trusting a tenant argument** (see Per-tenant server instances under Security).
 
 ## Failure modes
 
@@ -860,7 +732,24 @@ It also creates a new class of supply-chain artifact. Servers, tool descriptions
 
 **Production telemetry.** Per server: discovery results, tool-error and protocol-error rates, timeouts, latency percentiles, result size. Per principal: denials by reason. Rising "tool not verified" denials mean drift; rising "no grant" denials often mean injection attempts.
 
+## Before you ship
+
+- [ ] Every server and tool the host can reach is listed in a reviewed lockfile under version control, with a fingerprint over name, description, and schema, required groups, side-effect class, and `max_result_chars`.
+- [ ] A drifted tool is quarantined, not offered, and a quarantine pages the owning team; a test with a changed description proves it.
+- [ ] Tool lists are computed per principal and per task; no code path passes `tools/list` output to the model.
+- [ ] Every call is re-authorized at execution time, and a test shows that a tool the model names but was never offered is denied and never appears in the client's outgoing messages.
+- [ ] Exposed tool names are namespaced per server, and the server's `instructions` field and descriptions from unreviewed servers never enter a session that holds sensitive tools.
+- [ ] Stdio servers launch with an explicit minimal environment and run in a sandbox with an egress allowlist; a test confirms host secrets are not inherited.
+- [ ] Remote servers receive short-lived, per-user tokens whose audience is that server, obtained with a resource indicator; the server rejects tokens issued for another audience and never forwards a token; both are tested.
+- [ ] Tenant comes from the token or the instance, never from arguments; a cross-tenant read returns the same "not found" as a missing object.
+- [ ] The client follows `nextCursor`, re-discovers on reconnect and list-changed notifications, and sets a per-call timeout plus a per-turn tool budget that fits the p95 target.
+- [ ] Every call is logged with server, tool, principal, decision, latency, and redacted arguments; dashboards alert on quarantines and on denials by reason.
+- [ ] Provider-hosted MCP connectors, if used, are enabled per request from trusted context, restricted to allowlisted read-only tools, and never enabled in sessions holding tenant data.
+- [ ] Protocol contract tests and the poisoned-server tests run in CI against every server release, and a tool-selection eval gates description changes.
+
 ## Exercises
+
+**Start here:** K4, K7, E3, P2, D3 (about 3 hours). The rest go deeper.
 
 ### Knowledge questions
 
@@ -876,6 +765,8 @@ It also creates a new class of supply-chain artifact. Servers, tool descriptions
 
 **K6.** Distinguish an Agent Skill from an MCP server, and describe one way they are used together.
 
+**K7.** A host connects to a remote MCP server for the first time and receives HTTP 401. Describe, step by step, how it obtains a token for this user, and name the property of the token, and the check on the server, that stop the server from replaying it against another service.
+
 ### Engineering questions
 
 **E1.** Northwind will connect forty internal servers and three vendor servers to four hosts across two tenants. Design the topology: where the gateway sits, how identity reaches each server, how tenancy is enforced, and which checks remain in each host.
@@ -888,13 +779,13 @@ It also creates a new class of supply-chain artifact. Servers, tool descriptions
 
 ### Practical exercises
 
-**P1.** Add an HTTP transport: a FastAPI app with one `POST /mcp` endpoint that passes the body to `McpStyleServer.handle` in stateless mode and returns the response. Add a `HttpMcpClient` with the same interface as `StdioMcpClient` using `httpx`, and run the existing protocol tests against both transports.
+**P1.** (about 2 hours) Add an HTTP transport: a FastAPI app with one `POST /mcp` endpoint that passes the body to `McpStyleServer.handle` in stateless mode and returns the response. Add a `HttpMcpClient` with the same interface as `StdioMcpClient` using `httpx`, and run the existing protocol tests against both transports.
 
-**P2.** Make the server declare `tools.listChanged: true` and emit `notifications/tools/list_changed` when a `--mutate-after N` flag causes it to change a description after N calls. Make the host re-run `discover` on that notification and add a test that the changed tool is quarantined mid-session.
+**P2.** (about 90 min) Make the server declare `tools.listChanged: true` and emit `notifications/tools/list_changed` when a `--mutate-after N` flag causes it to change a description after N calls. Make the host re-run `discover` on that notification and add a test that the changed tool is quarantined mid-session.
 
-**P3.** Run two servers that both expose a tool named `search`. Show that namespacing keeps them distinct, then write a `GatewayAdapter` that aggregates both servers behind one client interface with one combined, namespaced catalog and a single audit log.
+**P3.** (about 2 hours) Run two servers that both expose a tool named `search`. Show that namespacing keeps them distinct, then write a `GatewayAdapter` that aggregates both servers behind one client interface with one combined, namespaced catalog and a single audit log.
 
-**P4.** Add a `create_ticket` write tool to the server and route it through Chapter 16's `toolkit` in the host (`PolicyEngine`, `ApprovalManager`, and an `IdempotencyStore`, all driven by `ToolExecutor`): the model's call produces a pending approval bound to the exact arguments, and a retry with the same idempotency key creates one ticket, not two.
+**P4.** (about 3 hours) Add a `create_ticket` write tool to the server and route it through Chapter 16's `toolkit` in the host (`PolicyEngine`, `ApprovalManager`, and an `IdempotencyStore`, all driven by `ToolExecutor`): the model's call produces a pending approval bound to the exact arguments, and a retry with the same idempotency key creates one ticket, not two.
 
 ### Debugging exercises
 
@@ -916,3 +807,12 @@ It also creates a new class of supply-chain artifact. Servers, tool descriptions
 - Gateways centralize identity, policy, egress, and audit for many remote servers, but the host still owns per-task selection and approval.
 - MCP, function calling, host plugins, and Agent Skills solve different problems and compose.
 - The protocol changes by dated revision. Learn the stable concepts here and check the current specification before you implement.
+
+## Further reading
+
+- *Model Context Protocol (MCP)* specification and changelog: the authoritative source for message shapes, the authorization flow, and what each dated revision changed; read the revision your SDK and hosts implement.
+- *JSON-RPC 2.0 Specification*: the short message format underneath MCP, including the request, notification, and error rules the server code follows.
+- *The Confused Deputy (or why capabilities might have been invented)* (Hardy, 1988): the original account of the failure that audience-bound tokens and per-user delegation prevent.
+- *The Protection of Information in Computer Systems* (Saltzer and Schroeder, 1975): least privilege and fail-safe defaults, the principles behind per-principal tool lists and deny-by-default grants.
+- *Not What You've Signed Up For: Compromising Real-World LLM-Integrated Applications with Indirect Prompt Injection* (Greshake et al., 2023): how text the model reads becomes instructions, the mechanism behind tool poisoning and shadowing.
+- *MCP Python SDK*: the official SDK whose API shape the SDK listing follows; check its documentation for the transports and authorization helpers it implements.

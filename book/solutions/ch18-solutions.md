@@ -33,6 +33,16 @@ Application state does not go away. Long-running jobs, workflow checkpoints, ide
 
 They are often used together. A "Northwind P1 triage" skill can tell the agent to call `search_tickets` for similar incidents, then `get_ticket` on the top hits, then follow a classification rubric. The skill holds the procedure, and the MCP tools hold the live data.
 
+**K7.** The flow, as of the 2025 revisions (check the current specification for exact shapes):
+
+1. The 401 response points to the server's protected resource metadata. The client fetches it and learns which authorization server(s) the server trusts.
+2. The client fetches the authorization server's metadata and identifies itself: by a client ID metadata document (its client ID is an HTTPS URL describing the client), by a pre-registered client ID, or by dynamic registration.
+3. The user signs in and consents through an authorization-code flow with PKCE, so an intercepted code cannot be redeemed by another party.
+4. The token request includes a resource indicator set to the server's canonical URL, so the issued token names that server as its audience. The token should be short-lived and scoped to the minimum the host needs.
+5. The client retries the original request with the token in the `Authorization` header.
+
+The property is the audience: the token is valid only for this server. The check is on the server side: it rejects any token whose audience is not itself, even when the signature is valid, and it never forwards the token to another service. If it needs to call a backend on the user's behalf, it obtains a separate token for that backend. A token stolen from this server is then useless elsewhere, and every hop has its own audit trail.
+
 ## Engineering questions
 
 **E1.** A strong design has these parts:

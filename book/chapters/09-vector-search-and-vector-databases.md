@@ -1,8 +1,15 @@
 # Chapter 9 — Vector Search and Vector Databases
 
-After this chapter you will be able to decide whether a workload needs a vector database at all, choose between exact search, HNSW, IVF, and quantized indexes from measured recall, latency, and memory, design metadata filtering that stays correct under selective filters, lay out namespaces and tenants so that one customer's vectors can never answer another customer's query, and operate an index through re-embedding, rebuilds, deletions, and replication.
+Chapter 8 covered what embeddings are; this chapter is about storing and searching them: fast enough at your scale, filtered by who is asking, and safe to rebuild when the model or the documents change. You build Project 2, a semantic search system with a `VectorStore` protocol, an exact NumPy adapter, a PostgreSQL + pgvector adapter, an incremental ingestion CLI, a FastAPI `/search` endpoint whose authorization filters come from identity, and an evaluator.
 
-You will build **Project 2, a semantic search system** (`book/projects/p2-semantic-search/`): a `VectorStore` protocol with an exact NumPy adapter and a PostgreSQL + pgvector adapter, an incremental ingestion CLI over the Northwind documents, a FastAPI `/search` endpoint whose authorization filters come from identity, and an evaluator that reports recall@k (the fraction of relevant documents found in the top k), MRR (mean reciprocal rank of the first relevant hit), and ACL leakage; Chapter 14 develops these metrics fully. Chapter 8 covered what embeddings are; this chapter is about storing and searching them.
+**You will be able to:**
+- Decide whether a workload needs a vector database at all, using corpus size, query rate, and latency budget.
+- Choose between exact search, HNSW, IVF, and quantized indexes from measured recall, latency, and memory, and tune them against overlap with exact search.
+- Design metadata filtering that stays correct under selective filters, and detect filtered-ANN starvation from telemetry.
+- Lay out namespaces and tenants so that one customer's vectors can never answer another customer's query.
+- Operate an index through re-embedding, blue-green rebuilds, deletions, and replication.
+
+**Prerequisites:** Chapters 3 (the `aie_core` embedding clients, `CachedEmbeddings`, settings, and tracing) and 8 (similarity metrics, normalization, and the embedding space fingerprint). | **Code:** `book/projects/p2-semantic-search/` (run: `cd book/projects/p2-semantic-search && pytest -q`) | **Builds:** Project 2, the `semsearch` package.
 
 ## Why this matters
 
@@ -45,7 +52,7 @@ The unit of storage is not a vector. It is a record with a vector in it. Project
 | `tags`, `metadata` | Narrowing filters, titles, sections, dates | Users cannot scope searches; answers cannot show sources |
 | `embedding_model` | Audit and migration | Nobody can tell which rows still need re-embedding |
 
-Two rules follow. First, **the embedding model version is part of the index schema.** Two embedding models produce vectors in unrelated coordinate systems, even when the dimensions match. A cosine similarity between a vector from model A and one from model B is a number with no meaning. Project 2 encodes the model in the namespace (`knowledge:fake-embedding:v1`), so mixing is structurally impossible: a query embedded with a new model is sent to a namespace that only holds vectors from that model.
+Two rules follow. First, **the embedding model version is part of the index schema.** Two embedding models produce vectors in unrelated coordinate systems, even when the dimensions match. A cosine similarity between a vector from model A and one from model B is a number with no meaning. Project 2 encodes the model in the namespace (`knowledge:fake-embedding:v1`), so mixing is structurally impossible: a query embedded with a new model is sent to a namespace that only holds vectors from that model. The model name is the minimum. Chapter 8 defines the full embedding space fingerprint (dimensions, prefixes, normalization, text preparation), and a production namespace should carry that fingerprint so that a prefix or dimension change also lands in a new namespace.
 
 Second, **a record without an ACL must not mean "public".** The `VectorRecord` validator rejects an empty `acl_groups`, and the document loader refuses a file without `acl_groups` in its front matter. Public documents say so explicitly with `["all"]`. Failing closed at ingestion is cheaper than discovering at query time that a missing field was interpreted as "no restriction".
 
@@ -135,7 +142,7 @@ Both HNSW and IVF still store full-precision vectors, and at large scale memory,
 
 The price is precision: PQ distances are approximate, so the ranking among close candidates gets noisy. The standard remedy is **rescoring**: use the compressed index to fetch a larger candidate set (say 100), then re-rank those candidates with full-precision vectors kept on disk or in a cheaper tier, and return the top 10. Simpler relatives are scalar quantization (float32 to int8 or float16, 2x to 4x smaller, small recall loss) and binary quantization (one bit per dimension, 32x smaller, usable only with rescoring and only for some embedding models). pgvector offers half-precision (`halfvec`) and binary (`bit`) types for the same purpose.
 
-Typical combinations are IVF with PQ codes (IVF-PQ) for very large, memory-constrained corpora, and HNSW over quantized vectors with full-precision rescoring. You do not need any of this for the Northwind corpus. You need to know it exists so that when a sizing exercise says "400 GB of vectors", the answer is "quantize and rescore", not "buy 400 GB of RAM".
+Typical combinations are IVF with PQ codes (IVF-PQ) for very large, memory-constrained corpora, and HNSW over quantized vectors with full-precision rescoring. A third family, disk-resident graph indexes (DiskANN is the best-known design), keeps only compressed vectors in RAM and stores the graph and full-precision vectors on SSD, trading a few disk reads per query for a much smaller memory footprint. You do not need any of this for the Northwind corpus. You need to know it exists so that when a sizing exercise says "400 GB of vectors", the answer is "quantize and rescore", not "buy 400 GB of RAM".
 
 ### Measuring ANN recall against exact search
 
@@ -190,6 +197,8 @@ Hybrids are common: a shared index for the long tail of small tenants, dedicated
 Project 2 uses namespaces for a different axis: **index identity**. The namespace `knowledge:<embedding model>:<index version>` separates indexes built with different embedding models or chunking configurations, which is what makes blue-green re-indexing possible: build the new index beside the live one, then switch traffic to it (see Indexing strategies and rebuilds). Tenancy is a filtered column (`tenant`), plus ACL groups, because Northwind has two tenants and a shared corpus, and the shared documents must be visible to both. The schema indexes `(namespace, tenant)` so that PostgreSQL can serve small-tenant queries with a filtered scan instead of the ANN index.
 
 Northwind's `shared` tenant illustrates a subtlety. A logistics user sees `tenant IN ('logistics', 'shared')`. Shared documents appear in every tenant's results, so their ACL groups do all the work of restricting them; the database failover runbook is `tenant: shared` but readable only by `it-oncall`. A tenant filter alone would leak it to every employee. Tenancy and authorization are two separate filters, and both are mandatory.
+
+This chapter covers the mechanics that make those filters correct inside a vector search. Chapter 15 owns authorization in retrieval as a whole: permission filters are applied before scoring, never after generation, and ACL changes, caches, and audit must keep up with them.
 
 ## How it works
 
@@ -285,6 +294,8 @@ The lifecycle diagram shows when a new namespace is built; this section covers w
 4. Switch the active namespace with one configuration change (in Project 2, `INDEX_VERSION` or the embedding model setting; in a larger system, an alias table the service reads).
 5. Keep the old namespace, and keep dual-writing to it, until the rollback window closes.
 
+Two details decide whether this goes smoothly. First, a new model often has different dimensions, and in pgvector the column type is `vector(d)`, so the new namespace needs its own table (in Project 2, a different `PG_TABLE`) rather than new rows in the old one; plan the disk and memory for both indexes side by side during the overlap. Second, estimate the backfill before starting: total tokens times the embedding price, and total tokens divided by your rate limit for wall-clock time (Chapter 8's `plan_reembed` does this arithmetic). Because a backfill can take hours while documents keep changing, dual-write is a required step, not an option.
+
 **The chunker or enrichment changes.** Chunk boundaries change, so chunk ids change, so this is also a full rebuild, but often cheaper if embeddings are cached by text hash (`CachedEmbeddings` in `aie_core` does exactly that): unchanged chunk texts reuse their vectors.
 
 **Index parameters change.** A new `M` or `ef_construction`, a switch from IVFFlat to HNSW, or quantization. The vectors stay; only the index structure is rebuilt. In PostgreSQL, `CREATE INDEX CONCURRENTLY` on the new definition followed by dropping the old index does this without blocking writes. `PgVectorStore.reindex()` wraps `REINDEX INDEX CONCURRENTLY` for the same-definition case.
@@ -311,7 +322,7 @@ p2-semantic-search/
     ingest/                      loader.py, pipeline.py
     api/app.py                   FastAPI
     eval/run_eval.py             evaluator + fixtures/retrieval_fixture.jsonl
-  tests/                         50 offline tests; pgvector contract tests marked integration
+  tests/                         offline tests; pgvector contract tests marked integration
 ```
 
 Configuration is environment-driven. The variables that matter for this chapter:
@@ -351,22 +362,7 @@ python -m pytest -q
 The domain model is small and has no I/O. Everything an adapter stores is a `VectorRecord`; everything a query constrains is a `SearchFilter`.
 
 ```python
-# path: book/projects/p2-semantic-search/semsearch/domain/models.py
-"""The records a vector store holds and the shapes of a query and its results.
-
-A vector is never stored alone: every row carries what authorization (tenant, acl_groups),
-citation (doc_id, doc_version, ordinal), filtering (tags, metadata), and reindexing
-(embedding_model) need. If a field is missing here, no later stage can recover it.
-"""
-from __future__ import annotations
-
-import re
-from typing import Any
-
-from pydantic import BaseModel, ConfigDict, Field, field_validator
-
-Vector = list[float]
-
+# path: book/projects/p2-semantic-search/semsearch/domain/models.py (excerpt; full file on disk)
 _NAMESPACE_RE = re.compile(r"^[a-z0-9][a-z0-9_.:-]{0,127}$")
 
 
@@ -431,38 +427,9 @@ class SearchFilter(BaseModel):
 
     def is_empty(self) -> bool:
         return all(v is None for v in (self.tenants, self.acl_groups, self.tags_any, self.doc_ids))
-
-
-class SearchHit(BaseModel):
-    id: str
-    doc_id: str
-    doc_version: str
-    ordinal: int
-    tenant: str
-    score: float  # cosine similarity in [-1, 1]; higher is closer
-    text: str
-    tags: tuple[str, ...] = ()
-    metadata: dict[str, Any] = Field(default_factory=dict)
-
-
-class DocVersion(BaseModel):
-    """What the store believes is indexed for one document; drives incremental ingestion."""
-
-    doc_id: str
-    doc_version: str
-    chunks: int
-
-
-__all__ = [
-    "Vector",
-    "VectorRecord",
-    "SearchFilter",
-    "SearchHit",
-    "DocVersion",
-    "make_namespace",
-    "chunk_id",
-]
 ```
+
+`SearchHit` (what a search returns: ids, tenant, cosine score, text, tags, metadata) and `DocVersion` (what the store believes is indexed for one document) complete the module on disk.
 
 Filter semantics are defined once, in pure Python, so that the NumPy adapter uses them directly and the pgvector adapter's SQL can be tested against them.
 
@@ -913,7 +880,7 @@ def get_principal(
 
 ### Evaluation
 
-The evaluator runs every gold question through the same `SearchService` the API uses, with a principal built from the row's tenant and groups, collapses chunk hits to documents, and scores them. Rows tagged `forbidden-doc` are scored as leak checks instead of recall, and rows whose required documents were never ingested are reported as ingestion gaps rather than retrieval misses.
+The evaluator reports recall@k, hit rate, and MRR (Chapter 10 defines these metrics). It runs every gold question through the same `SearchService` the API uses, with a principal built from the row's tenant and groups, collapses chunk hits to documents, and scores them. Rows tagged `forbidden-doc` are scored as leak checks instead of recall, and rows whose required documents were never ingested are reported as ingestion gaps rather than retrieval misses.
 
 ```python
 # path: book/projects/p2-semantic-search/semsearch/eval/run_eval.py (excerpt)
@@ -1032,7 +999,7 @@ In the pgvector store, `build_where` produces the clause, the transaction sets `
 
 **Memory and cost.** Size the index before choosing it. Raw vectors cost `n * d * 4` bytes in float32: 10 million 1,024-dimensional vectors are 41 GB before any index structure (illustrative). HNSW adds edge lists per vector. Half precision halves the raw size; product or binary quantization with rescoring cuts it by an order of magnitude or more. Embedding cost is paid at ingestion and again at every re-embedding, so an embedding cache keyed by model and text hash pays for itself the first time you change the chunker.
 
-**Security.** Treat the vector store as a copy of the documents, not as an anonymized derivative. Embeddings can leak information about their source text through inversion attacks, and the `text` column is the source text. Apply the same access controls, encryption at rest, and retention rules as the source system. Never accept tenant or group filters from the request body; derive them from verified identity in one function. Keep the store off the public network; the search API is the only client. Parameterize all SQL, including filter values, and validate identifiers such as table names against a strict pattern, as `render_schema` does.
+**Security.** Treat the vector store as a copy of the documents, not as an anonymized derivative. Embeddings can leak information about their source text through inversion attacks, and the `text` column is the source text. Apply the same access controls, encryption at rest, and retention rules as the source system. Never accept tenant or group filters from the request body; derive them from verified identity in one function (Chapter 15 covers permission changes and caches on top of this). Keep the store off the public network; the search API is the only client. Parameterize all SQL, including filter values, and validate identifiers such as table names against a strict pattern, as `render_schema` does.
 
 **Replication and availability.** For pgvector, standard PostgreSQL streaming replication covers vectors and indexes; replicas serve read traffic and lag the primary by the replication delay. HNSW indexes are large, so a new replica or a restore from backup takes longer than the row count suggests, and index rebuilds on the primary generate a lot of write-ahead log traffic that replicas must replay. Dedicated vector databases replicate shards across nodes, often with eventual consistency between replicas; read the consistency settings rather than assuming. In both cases the index is derived data, so the ultimate recovery path is rebuilding from the source documents. Know how long that takes, because that number is your worst-case recovery time.
 
@@ -1042,15 +1009,15 @@ In the pgvector store, `build_where` produces the clause, the transaction sets `
 
 ## Common mistakes
 
-- **Mixing embedding models in one index.** A model upgrade is deployed to the query path before the corpus is re-embedded, or a partial re-embed leaves two populations of vectors. Scores look plausible and results are garbage. Put the model in the namespace.
+These are the decisions that cause the failures in the next section. Mixing embedding models, post-filtering, and skipping pruning are covered there by symptom and telemetry, so they are not repeated here.
+
 - **Adopting a dedicated vector database for 50,000 chunks.** The team gains a new stateful system to secure, back up, monitor, and keep consistent with the source of truth, in exchange for latency it did not need.
-- **Post-filtering and calling it filtering.** The query returns top-N from the index, then drops unauthorized rows. It passes tests on small, unfiltered data and silently starves small tenants in production.
 - **Tuning ANN parameters before measuring exact-search recall.** Without the exact baseline, nobody knows whether a recall problem is the index or the embeddings.
 - **Treating similarity scores as probabilities.** A fixed threshold of 0.8 that worked for one model drops every result after the model changes.
 - **Chunk ids that are not deterministic.** Random UUIDs per ingestion run turn every re-ingest into duplicates, and the duplicates crowd out other documents in the top k.
-- **Deleting sources without pruning the index.** Revoked documents stay retrievable indefinitely.
-- **Building the HNSW index before the bulk load, or IVF centroids on an empty table** (see Indexing strategies and rebuilds).
-- **Leaving `ef_search` below k** without iterative scans (see HNSW).
+- **Building the HNSW index before the bulk load.** Every row then pays for a graph search on insert, so the load runs many times slower than loading first and building the index once afterwards.
+- **Training IVF centroids on an empty or unrepresentative table.** The centroids describe data that is not there, so real vectors pile into a few lists and both recall and latency degrade until the index is rebuilt.
+- **Leaving `ef_search` below k without iterative scans.** The HNSW scan produces only `ef_search` candidates, so a query for 50 results with `ef_search = 40` can never return 50, and filtering shrinks it further.
 
 ## Failure modes
 
@@ -1135,7 +1102,24 @@ Read these numbers skeptically. The corpus has 24 documents and each user sees a
 
 For ANN specifically, the test is the overlap check: run the gold questions against the index and against an exact scan with the same filters, and require overlap@10 above a threshold you choose from the cost curve (for example 0.95) before activating a new index version.
 
+## Before you ship
+
+- [ ] The namespace encodes the embedding model (ideally the full space fingerprint) and the index version, and the service refuses to start when the query embedder does not match the active namespace.
+- [ ] Every record has a non-empty `acl_groups` and a tenant; ingestion rejects documents without them, and the database enforces it with a `CHECK` constraint.
+- [ ] Tenant and group filters are built from verified identity in one function, and an API test proves a request body cannot widen them.
+- [ ] A contract test with a selective filter whose only match is far from the query passes against the production adapter, not only the NumPy one.
+- [ ] On pgvector, iterative index scans are enabled (0.8 or later) or `ef_search` is at least k divided by the smallest filter selectivity you expect; `ef_search`, iterative scan, and `statement_timeout` are set per transaction.
+- [ ] `ann-check` overlap@10 against exact search meets a written threshold (for example 0.95) on real queries, and runs nightly and on every index change.
+- [ ] The retrieval gold set, including forbidden-doc leak rows, runs in CI and blocks a deploy on any leak or on a recall drop beyond the agreed margin.
+- [ ] A second ingestion run on an unchanged corpus embeds zero texts and writes zero chunks.
+- [ ] Ingestion runs with pruning, and a test shows a deleted source document stops being retrievable; time-to-unretrievable for compliance deletions is measured and alerted on.
+- [ ] Dashboards show underfilled-result rate by tenant, store p95 latency, chunks per active namespace, and ingestion lag, with alerts.
+- [ ] `/healthz` fails when the active namespace is empty, and the full rebuild-from-source time is measured and recorded as the worst-case recovery time.
+- [ ] A rebuild or migration runbook exists: build the new namespace, dual-write, verify, switch the alias, keep the old namespace for the rollback window.
+
 ## Exercises
+
+**Start here:** K3, K4, E2, P3, D1 (about 4 hours). The rest go deeper.
 
 ### Knowledge questions
 
@@ -1163,13 +1147,13 @@ For ANN specifically, the test is the overlap check: run the gold questions agai
 
 ### Practical exercises
 
-**P1.** Add a `SearchFilter.updated_after: date | None` field that filters on the `updated_at` value from the front matter. Implement it in `matches`, in `build_where` (using the JSONB metadata or a new column, your choice, justified), and add contract tests, including one where the filter is highly selective.
+**P1.** (about 90 min) Add a `SearchFilter.updated_after: date | None` field that filters on the `updated_at` value from the front matter. Implement it in `matches`, in `build_where` (using the JSONB metadata or a new column, your choice, justified), and add contract tests, including one where the filter is highly selective.
 
-**P2.** Implement a minimal single-layer navigable graph index in `semsearch/domain/` (each vector linked to its M nearest neighbors, greedy best-first search with a candidate list of size `ef`). Extend `bench.py` with a sweep over `ef` that reports recall@10 against exact search and vectors scored per query, and compare the curve with the IVF sweep at similar work.
+**P2.** (about 3 hours) Implement a minimal single-layer navigable graph index in `semsearch/domain/` (each vector linked to its M nearest neighbors, greedy best-first search with a candidate list of size `ef`). Extend `bench.py` with a sweep over `ef` that reports recall@10 against exact search and vectors scored per query, and compare the curve with the IVF sweep at similar work.
 
-**P3.** Add a selectivity-aware search path to `NumpyVectorStore`: when an approximate index (your P2 graph or the IVF index) is attached, use it for unfiltered or weakly filtered queries, and fall back to exact pre-filtered search when the filter allows fewer than a configurable number of rows. Prove with tests that results never underfill when matches exist.
+**P3.** (about 2 hours) Add a selectivity-aware search path to `NumpyVectorStore`: when an approximate index (your P2 graph or the IVF index) is attached, use it for unfiltered or weakly filtered queries, and fall back to exact pre-filtered search when the filter allows fewer than a configurable number of rows. Prove with tests that results never underfill when matches exist.
 
-**P4.** Add a `semsearch reindex --to-version v2` command that builds a new namespace from the source documents, runs the evaluator and `ann-check` against it, refuses to proceed if any leak occurs or recall@5 drops by more than a configured margin against the active namespace, and otherwise writes the new active version to a small state file that `make_store` and the API read.
+**P4.** (about 3 hours) Add a `semsearch reindex --to-version v2` command that builds a new namespace from the source documents, runs the evaluator and `ann-check` against it, refuses to proceed if any leak occurs or recall@5 drops by more than a configured margin against the active namespace, and otherwise writes the new active version to a small state file that `make_store` and the API read.
 
 ### Debugging exercises
 
@@ -1190,3 +1174,11 @@ For ANN specifically, the test is the overlap check: run the gold questions agai
 - The embedding model is part of the index identity. Model or chunker changes are migrations: build a new namespace, dual-write, verify recall and leaks, switch, and keep a rollback window.
 - PostgreSQL with pgvector is the strong default when you already run PostgreSQL and need SQL filters, transactional consistency, and hybrid search; dedicated vector databases earn their operational cost at very large scale or with demanding filtered-ANN workloads.
 - Many retrieval problems need no vector index at all: small corpora, exact lookups, structured data, and navigable documents are better served by SQL, full-text search, or structure.
+
+## Further reading
+
+- *Efficient and Robust Approximate Nearest Neighbor Search Using Hierarchical Navigable Small World Graphs* (Malkov and Yashunin, 2018): the HNSW paper; read it for why the layered graph works and what `M` and `ef` actually control.
+- *Product Quantization for Nearest Neighbor Search* (Jégou, Douze, and Schmid, 2011): the original PQ paper, including the asymmetric distance tables behind compressed scoring.
+- *Billion-scale Similarity Search with GPUs* (Johnson, Douze, and Jégou, 2017): the FAISS paper; IVF and PQ at a scale where memory is the binding constraint.
+- pgvector documentation (github.com/pgvector/pgvector): index options, operator classes, `ef_search`, and iterative index scans; check it for the behavior of the version you run.
+- *Designing Data-Intensive Applications* (Kleppmann, 2017): replication lag, derived data, and read-your-writes, the database ideas behind treating an index as a rebuildable cache.

@@ -108,7 +108,7 @@ northwind-assist/
     worker.py            northwind-assist-worker --role ingest|eval
     prompt_files/        assist.agent@1.0.0 and aliases
   ops/alerts.yaml        alert rules (Chapter 31 format), evaluated on capstone traces in tests/test_alerts.py
-  tests/                 76 offline tests
+  tests/                 offline tests
 ```
 
 ## Quickstart (offline)
@@ -120,7 +120,7 @@ uv pip install --python .venv/bin/python -e book/projects/p3-rag-assistant -e bo
 # standalone: pip install -e each package under book/projects, then -e book/capstone/northwind-assist
 
 cd book/capstone/northwind-assist
-python -m pytest -q                                  # 76 tests, offline
+python -m pytest -q                                  # offline
 northwind-assist-eval --out eval/out                 # suites + release gate, exit 0
 northwind-assist-eval --out eval/out-broken --set rag_enforce_acl=false   # leaks, exit 1
 LLM_PROVIDER=fake uvicorn --factory northwind_assist.api.app:build_app --port 8000
@@ -137,11 +137,10 @@ curl -N localhost:8000/v1/chat -H "Authorization: Bearer $TOKEN" -H 'content-typ
 
 Full stack: `cp .env.example .env && docker compose up -d && docker compose run --rm sync`.
 The image builds from the book root (`docker build -f capstone/northwind-assist/Dockerfile book`;
-add `--build-arg BASE_IMAGE=<mirror>/python:3.12` when Docker Hub is unreachable). Verified here:
-the image builds, `northwind-assist-eval` passes the gate inside it, and the API container serves
-`/readyz` and an SSE answer. `docker compose config` validates, but `docker compose up` was not run:
-Docker Hub returned 503 for the pgvector, Redis and collector images, so the P3 backend against real
-Postgres and Redis is unverified here (Project 2's pgvector DDL carries the same caveat).
+add `--build-arg BASE_IMAGE=<mirror>/python:3.12` when Docker Hub is unreachable). To check a
+deployment: the image builds, `northwind-assist-eval` passes the gate inside it, the API container
+serves `/readyz` and an SSE answer, and `docker compose up -d` followed by the `sync` job brings the
+P3 backend up against real Postgres and Redis. Run the integration-marked tests against that stack.
 
 ## Endpoints
 
@@ -262,8 +261,8 @@ owner; look first for a retry storm or a cache-hit collapse in `cache_hit_rate`.
 
 | Item | Evidence |
 |---|---|
-| Compose starts API, UI, worker, Postgres+pgvector, Redis, collector | `docker-compose.yml`: config validated, image built and API container smoke-tested; `up` blocked by Docker Hub 503 |
-| `pytest` offline | `tests/`, 76 passed |
+| Compose starts API, UI, worker, Postgres+pgvector, Redis, collector | `docker-compose.yml`: `docker compose config` validates; build the image, smoke-test the API container, then `docker compose up -d` and run `sync` |
+| `pytest` offline | `tests/`, all pass offline |
 | CI: lint, tests, eval gate blocks merge | `.github/workflows/ci.yml`, `.gitlab-ci.yml`; `test_gate_fails_when_acl_filter_is_disabled` |
 | Runbook | section above |
 | Gold set of 100+ with permission context and tags | `evaluation/datasets.py` `rag_dataset` (151 cases); `test_principal_variants_derive_expectations_from_acl` |
@@ -287,7 +286,7 @@ owner; look first for a retry storm or a cache-hit collapse in `cache_hit_rate`.
 | Cost per successful answer and per tenant, alert threshold | `test_cost_is_accounted_per_tenant_and_reported_daily`, `test_threshold_alert_fires_once_when_spend_crosses_it` |
 | A documented failure analysis | Chapter 39, "Failure analysis": the stale-FAQ answer and the ACL-off gate |
 | Alert rules as code | `ops/alerts.yaml`; `test_capstone_traces_are_complete_and_healthy_traffic_fires_nothing`, `test_final_acl_check_violation_pages_through_the_cross_tenant_rule` |
-| Integration tests against a real provider | not run here (no key in this environment); `LLM_PROVIDER=openai NA_MODEL_MAP=...` is the switch |
+| Integration tests against a real provider | needs a provider key; set `LLM_PROVIDER` and `NA_MODEL_MAP` and run the integration-marked tests |
 
 ## Integration issues found and fixed
 

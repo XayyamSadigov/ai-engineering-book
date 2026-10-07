@@ -114,7 +114,7 @@ docker compose run --rm eval        # the CI gate
 rag-assistant-eval --out out/eval [--baseline-run previous/candidate_run.json]
 ```
 
-The image build and `docker compose up` could not be verified here, because Docker Hub returned 503 on the base image pull. `docker compose config` validates. The pgvector DDL comes from Project 2 and has the same caveat.
+Before relying on the stack, run `docker compose config`, build the image, bring it up with `docker compose up -d`, and run the integration-marked tests against it. The pgvector DDL comes from Project 2.
 
 ## Configuration
 

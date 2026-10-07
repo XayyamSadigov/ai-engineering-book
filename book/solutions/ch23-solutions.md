@@ -44,30 +44,51 @@ model-call spans with no attempt link; prompt text, revealed by the prompt hash 
 differing from the registry version's hash, or by prompt text in traces that does not appear in the
 registry.
 
+**K6.** It absorbs the Chapter 19 loop (runner, events), Chapter 21 and Chapter 5 sessions and
+conversation memory, Chapter 16's sandboxed execution for its code tool, and often Chapter 31's
+tracing into its own console; with stored long-running runs it also absorbs part of Chapter 38's
+durable state. It is most likely to score 0 on deployment model (it requires the vendor's runtime),
+and often 0 on lock-in and testability with fakes. Three responsibilities stay with you: the tool
+policy and approval for every action with side effects (route custom tools through `ToolExecutor` and
+decide which hosted tools to allow, Chapter 16), the budgets (steps, cost, deadline), and the
+evaluation of whether its answers are good (Chapter 24). Data handling (what leaves the network, how
+long sessions are retained) is the question to answer before any of these.
+
 ## Engineering questions
 
-**E1.** A defensible scoring, weights in parentheses (1 to 3):
+**E1.** First a gate, then a score. Zero cross-tenant and cross-group leakage is not a criterion to
+trade off: a candidate that cannot apply Northwind's ACLs before scoring (Chapter 15) is disqualified
+whatever its total. Verify with a test run as a user without access. All three candidates can pass
+the gate in principle (the framework through a pre-filter on its retriever, the hosted runtime
+through metadata filters on its file store), so the test decides, not the documentation.
 
-| Criterion (weight) | Plain primitives (Ch 16, 17, 19) | Framework with hosted checkpointer |
-|---|---|---|
-| State transparency (3) | 2: one pydantic state you define | 1: TypedDict with reducers; readable but merge semantics live in annotations |
-| Persistence (3) | 1: `Checkpointer` protocol exists, Postgres backend is yours to write and operate | 2: production backend exercised by many users |
-| Streaming (1) | 1: `StepRecord` (Chapter 17) and the `agentkit` event types such as `ModelDecision` and `ToolResult` (Chapter 19) exist; UI plumbing is yours | 2: multiplexed modes out of the box |
-| Tracing (2) | 2: your `Tracer` and Chapter 31 schema | 1: vendor attribute names unless mapped |
-| Retry semantics (2) | 2: one layer, budgeted, attempts in trace | 1: configurable but layered with the model wrapper |
-| Testability (2) | 2: fakes for every port | 1: fake model exists; checkpointer tests need the backend or an in-memory saver |
-| Deployment (2) | 2: plain library | 1 to 2 depending on whether the hosted saver is required |
-| Ecosystem (1) | 1 | 2 |
-| Upgrade churn (2) | 2 | 1 |
-| Lock-in (2) | 2 | 1 unless adapters are already in place |
+A defensible scoring, weights 1 to 3:
 
-Weighted totals land close, with the framework ahead only if persistence is weighted 3 and the team
-would not otherwise build the Postgres saver. The two highest weights are persistence (a pod restart
-mid-run is the stated requirement, and resuming without duplicating `create_ticket` is the hard part)
-and state transparency (approval requires a human to read the state at the pause, and an audit
-requires diffing state across checkpoints). A good answer notes that the approval pause itself is
-Chapter 17's `pause_before` either way, that idempotency for `create_ticket` is Chapter 16's
-`IdempotencyStore` either way, and that the framework should enter behind the `Workflow` port from E3.
+| Criterion (weight) | `ragkit` primitives | Retrieval framework | Hosted runtime with file search |
+|---|---|---|---|
+| State transparency (2) | 2: every stage's hits and scores in `RetrievalResult` | 1: inspectable through callbacks | 0: retrieval happens inside the provider |
+| Persistence (1) | 1: your index and store | 1 | 2: managed storage |
+| Streaming (2) | 2: Chapter 13's streaming with withheld-sentence handling | 2 | 1: answer streams, retrieval steps do not |
+| Tracing (3) | 2: evidence IDs and scores on your spans | 1: vendor names unless mapped | 0: retrieval invisible to your tracer |
+| Retry semantics (1) | 2 | 1 | 1 |
+| Testability (3) | 2: offline fakes and fixtures for every stage | 1: in-memory store exists, synthesizer prompt must be extracted | 0: needs the network |
+| Deployment (2) | 2 | 2 | 0: documents leave the network |
+| Ecosystem (1) | 1 | 2: many loaders | 2 |
+| Upgrade churn (1) | 2 | 1 | 1 |
+| Lock-in (2) | 2 | 1 | 0 |
+
+Weighted totals (max 36): primitives 34, framework 23, hosted runtime 8. The two highest weights are
+tracing and testability, because Chapter 14's stage-isolated evaluation needs retrieval results and
+scores separately from generation, offline and on every change; a candidate that hides the retrieval
+stage cannot be evaluated the way the project requires. Citation validity is the same for all three
+once Chapter 13's `CitationValidator` runs on the output, so it does not separate them.
+
+Findings that would change the conclusion: if the corpus grows to many document formats the team does
+not want to parse, ecosystem rises and the framework becomes the right choice for ingestion only,
+behind the `Chunker` and loader ports, with retrieval and generation staying on the primitives. If
+the hosted runtime exposes per-stage results with scores, runs inside an approved data boundary, and
+passes the ACL test, it moves up sharply; otherwise it stays out. A good answer names one such finding
+and says which ledger row it moves.
 
 **E2.** Diagnosis path: (1) Pull the exact prompt the synthesizer sent from the trace and diff it
 against the registry; the synthesizer's default template is almost certainly not in the registry and

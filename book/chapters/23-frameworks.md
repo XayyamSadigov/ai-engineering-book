@@ -1,16 +1,27 @@
 # Chapter 23 — Frameworks
 
-After this chapter you will be able to read any LLM framework's documentation and translate each
-concept into a primitive you already built: a prompt template is Chapter 4's registry entry, a
-runnable chain is function composition with a logging convention, a state graph is Chapter 17's
-`Graph`, a query engine is Chapter 10's retrieve-pack-generate pipeline, a DSPy optimizer is a
-search over prompt contents (few-shot demonstrations, sometimes instructions) driven by Chapter 24's
-metrics. You will be able to score a framework against ten selection criteria, keep your domain
-logic independent of whichever one you adopt, test a framework-backed component from recorded
-fixtures, and migrate off a framework without rewriting the domain. The code lives in
-`book/projects/examples/ch23/`: a composable pipeline that shows what LCEL-style composition does
-under the hood, a typed prompt specification with a metric-driven optimizer that shows DSPy's idea,
-and a ports-and-adapters layout with a record-and-replay LLM fixture.
+LLM frameworks package the primitives you built in Chapters 3 to 19 behind their own vocabulary, and
+they make choices on your behalf. This chapter teaches you to see each framework concept as a
+primitive you already own, so you can adopt a framework for what it adds without inheriting what it
+hides.
+
+**You will be able to:**
+- Translate any framework concept into a primitive from this book: a prompt template is Chapter 4's
+  registry entry, a runnable chain is function composition with a log, a state graph is Chapter
+  17's `Graph`, a query engine is Chapter 10's pipeline, a DSPy optimizer is a metric-driven search
+  over prompt contents.
+- Find the defaults, retries, and prompt text a framework hides, and make each one explicit.
+- Score a framework, a provider agent SDK, and plain primitives against ten selection criteria with
+  your own weights.
+- Keep domain logic framework-independent with ports and adapters.
+- Test a framework-backed component from recorded fixtures and migrate off a framework without
+  rewriting the domain.
+
+**Prerequisites:** Chapters 3 and 4 (gateway, prompt registry), 10 to 13 (the RAG pipeline), 16, 17,
+and 19 (tool executor, workflow engine, agent loop). | **Code:** `book/projects/examples/ch23/`
+(run: `cd book/projects/examples/ch23 && pytest -q`) | **Builds:** a composable pipeline, a typed
+prompt specification with a metric-driven optimizer, and a ports-and-adapters layout with
+record-and-replay LLM fixtures.
 
 ## Why this matters
 
@@ -24,8 +35,8 @@ add a human-approval step and finds the agent abstraction has no seam for it. No
 failures of the framework. They are failures of understanding what the framework was doing on the
 team's behalf.
 
-The principle is blunt: agent frameworks are useful only after you understand
-the underlying primitives, because framework APIs change and the primitives do not. This book took
+The principle is blunt: agent frameworks are useful only after you understand the underlying
+primitives, because framework APIs change and the primitives do not. This book took
 that literally. Between Chapter 3 and Chapter 19 you wrote, with tests, every component a framework
 offers: client and gateway, prompt registry, structured output, chunkers, retrieval, grounded
 generation, tool registry, workflow engine, MCP, and agent runtime. The purpose of this chapter is not
@@ -84,6 +95,38 @@ The framework sections below describe each library's API and defaults at the tim
 Names, defaults, and module layout change between releases, so treat each specific claim as
 something to confirm against current documentation and source code, which is the habit this chapter
 teaches.
+
+### The landscape as of 2026
+
+Product names churn faster than categories. Learn the categories: each one absorbs a predictable
+set of ledger rows, adds a predictable kind of value, and hides a predictable kind of choice. When a
+new library appears, place it in a row first, then read its documentation with that row's "hides"
+column as your checklist.
+
+| Category | Examples (as of 2026) | Ledger rows it absorbs | What it adds | What it hides |
+|---|---|---|---|---|
+| Provider agent SDKs | for example OpenAI Agents SDK, Claude Agent SDK, Google Agent Development Kit | Ch 19 loop, Ch 22 handoffs, Ch 5 and 21 sessions, Ch 31 tracing | a short path to a working tool loop, provider-hosted tools, tracing into the provider's console | policy and approval layer, budgets, compaction policy, coupling to one provider's features |
+| Graph orchestration libraries | for example LangGraph | Ch 17 graph, checkpoints, pause; parts of Ch 19 | persistence backends, interrupts, multiplexed streaming | reducer semantics, checkpoint granularity, node re-execution on resume |
+| Composition and integration frameworks | for example LangChain, LlamaIndex | Ch 3 to 13: clients, templates, parsers, chunkers, retrievers, synthesizers | integrations with many stores, loaders, and providers | defaults (`k`, chunk size, retries) and shipped prompt text |
+| Typed agent frameworks | for example Pydantic AI | Ch 6 structured output, Ch 16 tool schemas, Ch 19 loop | output and tool schemas derived from type hints, test models | how many times invalid output is re-asked, and the text of the re-ask |
+| Multi-agent and role frameworks | for example CrewAI, Microsoft Agent Framework | Ch 22 topologies, Ch 17 workflows | role, task, and conversation abstractions | delegation prompts, per-agent budgets, trace boundaries between agents |
+| Prompt programming and optimization | for example DSPy | Ch 4 prompt contracts, Ch 24 metrics | metric-driven search over prompt contents | the compiled prompt text |
+| Hosted agent runtimes | provider-managed agent services and cloud agent platforms | Ch 19 loop, Ch 16 sandboxed execution, Ch 21 memory, Ch 38 durable state | hosting, scaling, sandboxes, stored sessions, no servers to run | where state and data live, the execution log, network egress |
+| Durable execution engines | for example Temporal-style workflow engines | Ch 38 log, lease, timer, signal | crash-proof long-running runs | determinism rules your code must follow (see Chapter 38) |
+
+Three patterns in the table matter more than any row. First, the further down the stack a product
+reaches (from a library you import to a runtime you call), the more it adds and the more it hides:
+a hosted runtime removes operations work and also removes your event log from your database.
+Second, provider-hosted tools (web search, code execution, remote MCP connectors run by the
+provider) execute outside your `ToolExecutor`; Chapter 16 covers what that means for policy, audit,
+and data egress. Third, every category leaves the same three rows to you: the tool policy, the
+budget, and the evaluation. No framework in any row decides what your agent is allowed to do or
+whether its answers are good.
+
+**Freshness note.** As of 2026 this market consolidates and renames often: libraries merge, SDKs
+gain and drop features between minor releases, and hosted runtimes appear under new names. The
+examples column will age; the "absorbs" and "hides" columns will not. Before adopting anything, read
+the current documentation and source with the three questions from the mental model.
 
 ### LangChain
 
@@ -553,42 +596,18 @@ flowchart TB
 ## Implementation
 
 Three plain-Python modules under `book/projects/examples/ch23/`, each with offline tests. None
-imports a framework; they show the primitive side of the mapping. Each file is short enough to
-show in full.
+imports a framework; they show the primitive side of the mapping. The excerpts below carry the idea
+of each module; the full files, including the pieces marked "on disk", are in the repository.
 
 ### A runnable pipeline (`runnable.py`)
 
+The base class gives every step the same calling convention; `Sequence` and `Retrying` are the two
+operators worth reading. `RunLog` (on disk) is a list of dicts, one per step execution, with input,
+output, latency, and attempt number. `Lambda` (on disk) wraps a plain function and records itself in
+the log; `Parallel` (on disk) runs every branch of a dict on the same input.
+
 ```python
-# path: book/projects/examples/ch23/runnable.py
-"""What LCEL-style composition does under the hood, in plain Python.
-
-A `Runnable` is a function with a uniform calling convention (`invoke`,
-`batch`, `stream`) and composition operators. `a | b` builds a sequence;
-a dict of runnables builds a fan-out. Retries are a wrapper, not magic.
-Nothing here is specific to LLMs: the "framework" is about a hundred lines of glue.
-"""
-from __future__ import annotations
-
-import time
-from dataclasses import dataclass, field
-from typing import Any, Callable, Generic, Iterator, Mapping, TypeVar
-
-In = TypeVar("In")
-Out = TypeVar("Out")
-
-
-@dataclass
-class RunLog:
-    """Every step records what it saw. This is the 'tracing' a framework
-    gives you for free; here it is explicit so you can see what is logged."""
-
-    events: list[dict[str, Any]] = field(default_factory=list)
-
-    def record(self, name: str, inp: Any, out: Any, ms: float, attempt: int) -> None:
-        self.events.append({"step": name, "input": inp, "output": out,
-                            "latency_ms": round(ms, 3), "attempt": attempt})
-
-
+# path: book/projects/examples/ch23/runnable.py (excerpt; full file on disk)
 class Runnable(Generic[In, Out]):
     name: str = "runnable"
 
@@ -608,18 +627,7 @@ class Runnable(Generic[In, Out]):
                    base_delay_s: float = 0.0) -> "Retrying":
         return Retrying(self, max_attempts, retry_on, base_delay_s)
 
-
-class Lambda(Runnable[In, Out]):
-    def __init__(self, fn: Callable[[In], Out], name: str | None = None) -> None:
-        self.fn, self.name = fn, name or getattr(fn, "__name__", "lambda")
-
-    def invoke(self, x: In, log: RunLog | None = None) -> Out:
-        t0 = time.perf_counter()
-        out = self.fn(x)
-        if log is not None:
-            log.record(self.name, x, out, (time.perf_counter() - t0) * 1000, attempt=1)
-        return out
-
+# ...
 
 class Sequence(Runnable[Any, Any]):
     name = "sequence"
@@ -635,24 +643,10 @@ class Sequence(Runnable[Any, Any]):
     def __or__(self, other: Runnable | Callable) -> "Sequence":
         return Sequence([*self.steps, coerce(other)])   # flatten instead of nesting
 
-
-class Parallel(Runnable[Any, dict[str, Any]]):
-    """Fan-out: run every branch on the same input, collect a dict."""
-    name = "parallel"
-
-    def __init__(self, branches: Mapping[str, Runnable | Callable]) -> None:
-        self.branches = {k: coerce(v) for k, v in branches.items()}
-
-    def invoke(self, x: Any, log: RunLog | None = None) -> dict[str, Any]:
-        return {k: r.invoke(x, log) for k, r in self.branches.items()}
-
+# ...
 
 class Retrying(Runnable[In, Out]):
-    def __init__(self, inner: Runnable[In, Out], max_attempts: int,
-                 retry_on: tuple[type[BaseException], ...], base_delay_s: float) -> None:
-        self.inner, self.max_attempts, self.retry_on, self.base_delay_s = inner, max_attempts, retry_on, base_delay_s
-        self.name = f"retry({inner.name})"
-
+    # ...
     def invoke(self, x: In, log: RunLog | None = None) -> Out:
         attempt = 0
         while True:
@@ -683,30 +677,13 @@ def coerce(obj: Runnable | Callable | Mapping) -> Runnable:
 
 ### A typed prompt specification with an optimizer (`signature.py`)
 
+A `Signature` is the stable spec: an instruction and typed input and output fields (`Field` is a
+frozen dataclass with `name`, `desc`, and `kind`). `render` turns it into prompt text; `parse` reads
+the completion back by field label. `_coerce` (on disk) converts each value to its declared type and
+reads booleans strictly, so an unrecognized value is an error rather than a silent `False`.
+
 ```python
-# path: book/projects/examples/ch23/signature.py
-"""DSPy's core idea in plain Python: a typed prompt *specification*
-(a Signature) that a Module renders into prompt text and parses back, plus
-an Optimizer that picks few-shot demonstrations by a metric.
-
-The model client is any `Callable[[str], str]`. No framework imports.
-"""
-from __future__ import annotations
-
-import re
-from dataclasses import dataclass, field
-from typing import Any, Callable, Sequence
-
-LLMFn = Callable[[str], str]
-
-
-@dataclass(frozen=True)
-class Field:
-    name: str
-    desc: str
-    kind: type = str          # str, int, float, bool; parse happens in `parse`
-
-
+# path: book/projects/examples/ch23/signature.py (excerpt; full file on disk)
 @dataclass(frozen=True)
 class Signature:
     """What goes in, what comes out, and one sentence of instruction.
@@ -728,40 +705,14 @@ class Signature:
         lines += [f"{f.name}: {values[f.name]}" for f in self.inputs]
         lines.append(f"{self.outputs[0].name}:")
         return "\n".join(lines)
+    # ... parse(text) -> dict: one typed value per output field, by label
+```
 
-    def parse(self, text: str) -> dict[str, Any]:
-        """Read `name: value` sections for every output field, typed."""
-        out: dict[str, Any] = {}
-        names = [f.name for f in self.outputs]
-        # The prompt ends with "<first output>:", so the completion usually starts with its value.
-        # Restore the label so the first match of every label is the model's real answer, not a
-        # later demo-style block the model went on to write.
-        labels = "|".join(map(re.escape, names))
-        if not re.match(rf"\s*(?:{labels}):", text):
-            text = f"{names[0]}: {text}"
-        for f in self.outputs:
-            pattern = rf"(?:^|\n){f.name}:\s*(.*?)(?=\n(?:{labels}):|\Z)"
-            m = re.search(pattern, text.lstrip(), flags=re.S)
-            if m is None:
-                raise ValueError(f"field {f.name!r}: missing from the completion")
-            out[f.name] = _coerce(m.group(1).strip(), f.kind, f.name)
-        return out
+The module and the optimizer are where DSPy's idea lives. Demonstrations are state of the module;
+the optimizer searches over them with a metric and never touches the signature.
 
-
-def _coerce(raw: str, kind: type, name: str) -> Any:
-    try:
-        if kind is bool:   # strict: an unrecognized value is an error, never a silent False
-            token = raw.split()[0].strip(".,;:!*").lower() if raw.split() else ""
-            if token in {"true", "yes", "1"}:
-                return True
-            if token in {"false", "no", "0"}:
-                return False
-            raise ValueError(raw)
-        return kind(raw)
-    except ValueError as exc:
-        raise ValueError(f"field {name!r}: cannot parse {raw!r} as {kind.__name__}") from exc
-
-
+```python
+# path: book/projects/examples/ch23/signature.py (excerpt; full file on disk)
 @dataclass
 class Predict:
     """The simplest Module: render, call, parse. Demos are *state* of the
@@ -778,20 +729,7 @@ class Predict:
         result = self.signature.parse(completion)
         return result
 
-
-Metric = Callable[[dict[str, Any], dict[str, Any]], float]   # (example, prediction) -> score
-
-
-@dataclass
-class BootstrapFewShot:
-    """Optimizer: run the module over a train set, keep the demonstrations the
-    metric accepts, then choose the demo subset that scores best on a dev set.
-    'Compiling' a prompt means exactly this: a search over prompt *contents*
-    driven by a metric and data, nothing more mysterious."""
-
-    metric: Metric
-    max_demos: int = 3
-    threshold: float = 1.0
+# ...
 
     def compile(self, module: Predict, train: Sequence[dict[str, Any]],
                 dev: Sequence[dict[str, Any]]) -> Predict:
@@ -808,53 +746,19 @@ class BootstrapFewShot:
             if score > best_score:
                 best_demos, best_score = candidates[:n], score
         return Predict(module.signature, module.llm, demos=best_demos)
-
-    def evaluate(self, module: Predict, dataset: Sequence[dict[str, Any]]) -> float:
-        input_names = [f.name for f in module.signature.inputs]
-        if not dataset:
-            return 0.0
-        scores = [self.metric(ex, module(**{k: ex[k] for k in input_names})) for ex in dataset]
-        return sum(scores) / len(scores)
 ```
+
+`compile` is a method of `BootstrapFewShot`, which holds the `metric`, `max_demos`, and `threshold`;
+its `evaluate` (on disk) is the mean metric over a dataset.
 
 ### Ports, adapters, and recorded fixtures (`ports.py`)
 
+The domain owns three Protocols and one service. `Passage` and `Answer` (on disk) are small pydantic
+models. `AnswerService.answer` (on disk) retrieves, builds a cite-or-abstain prompt, and abstains
+when the model's reply cites no retrieved passage.
+
 ```python
-# path: book/projects/examples/ch23/ports.py
-"""Ports and adapters for a framework-independent domain.
-
-The domain (`AnswerService`) depends only on three Protocols it owns:
-`Retriever`, `LLMClient`, `Tool`. Framework objects are wrapped in adapters
-that live outside the domain. A `RecordingLLM` / `ReplayLLM` pair shows how a
-framework-backed component is tested from recorded fixtures without the
-framework or the network present.
-"""
-from __future__ import annotations
-
-import hashlib
-import json
-import re
-from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Any, Protocol, runtime_checkable
-
-from pydantic import BaseModel
-
-
-# --- domain types ---------------------------------------------------------
-class Passage(BaseModel):
-    id: str
-    text: str
-    source: str
-    score: float = 0.0
-
-
-class Answer(BaseModel):
-    text: str
-    citations: list[str]
-    abstained: bool = False
-
-
+# path: book/projects/examples/ch23/ports.py (excerpt; full file on disk)
 # --- ports (owned by the domain) -----------------------------------------
 @runtime_checkable
 class Retriever(Protocol):
@@ -871,44 +775,7 @@ class Tool(Protocol):
     name: str
     def run(self, arguments: dict[str, Any]) -> str: ...
 
-
-# --- domain service -------------------------------------------------------
-@dataclass
-class AnswerService:
-    retriever: Retriever
-    llm: LLMClient
-    k: int = 4
-
-    def answer(self, question: str) -> Answer:
-        passages = self.retriever.retrieve(question, self.k)
-        if not passages:
-            return Answer(text="I could not find this in the knowledge base.", citations=[], abstained=True)
-        evidence = "\n".join(f"[{p.id}] {p.text}" for p in passages)
-        prompt = ("Answer only from the evidence. Cite passage ids in square brackets. "
-                  "If the evidence is insufficient, reply exactly: INSUFFICIENT\n\n"
-                  f"Evidence:\n{evidence}\n\nQuestion: {question}\nAnswer:")
-        text = self.llm.complete(prompt).strip()
-        bracketed = {i.strip() for group in re.findall(r"\[([^\]]+)\]", text) for i in group.split(",")}
-        cited = [p.id for p in passages if p.id in bracketed]   # [hr-01] and [hr-01, hr-02] both count
-        if text.rstrip(".! ").upper() == "INSUFFICIENT" or not cited:   # an uncited answer is not an answer
-            return Answer(text="The knowledge base does not cover this.", citations=[], abstained=True)
-        return Answer(text=text, citations=cited)
-
-
-# --- a stand-in for a framework object ------------------------------------
-class FrameworkRetrieverLike:
-    """Pretend third-party class with its own vocabulary: `get_relevant_documents`
-    returns objects with `page_content` and `metadata`, modeled on an older retriever API;
-    check current docs. We never let this type cross into the domain."""
-
-    def __init__(self, docs: list[dict[str, Any]]) -> None:
-        self._docs = docs
-
-    def get_relevant_documents(self, query: str) -> list[Any]:
-        words = set(query.lower().split())
-        hits = [d for d in self._docs if words & set(d["page_content"].lower().split())]
-        return [type("Doc", (), d)() for d in hits]
-
+# ...
 
 # --- adapter: framework -> port ------------------------------------------
 class FrameworkRetrieverAdapter:
@@ -921,31 +788,7 @@ class FrameworkRetrieverAdapter:
                         source=d.metadata.get("source", "unknown"),
                         score=float(d.metadata.get("score", 0.0))) for d in docs]
 
-
-# --- recorded fixtures ----------------------------------------------------
-def _key(prompt: str) -> str:
-    return hashlib.sha256(prompt.encode()).hexdigest()[:16]
-
-
-@dataclass
-class RecordingLLM:
-    """Wrap a live client once, record prompt -> completion to a JSON file."""
-    inner: LLMClient
-    path: Path
-    _cache: dict[str, str] = field(default_factory=dict)
-
-    def __post_init__(self) -> None:
-        if self.path.exists():   # add to earlier recordings instead of replacing them
-            self._cache.update(json.loads(self.path.read_text()))
-
-    def complete(self, prompt: str) -> str:
-        out = self.inner.complete(prompt)
-        self._cache[_key(prompt)] = out
-        tmp = self.path.with_suffix(self.path.suffix + ".tmp")
-        tmp.write_text(json.dumps(self._cache, indent=2, sort_keys=True))
-        tmp.replace(self.path)   # a crash mid-write never leaves a half-written fixture file
-        return out
-
+# ...
 
 @dataclass
 class ReplayLLM:
@@ -962,8 +805,25 @@ class ReplayLLM:
                               "the prompt text changed, re-record or update the fixture") from exc
 ```
 
+`FrameworkRetrieverLike` (on disk) is a stand-in for a third-party retriever with its own vocabulary
+(`get_relevant_documents`, `page_content`, `metadata`). `RecordingLLM` (on disk) is the other half
+of the fixture pair: it wraps a live client, stores the SHA-256 prefix of each prompt with its
+completion, and writes the JSON file atomically through a temporary file. The test that matters
+most records one prompt and then sends a different one:
+
+```python
+# path: book/projects/examples/ch23/test_ports.py (excerpt; full file on disk)
+def test_replay_fails_loudly_when_prompt_text_drifts(tmp_path: Path) -> None:
+    fixture = tmp_path / "answers.json"
+    retriever = FrameworkRetrieverAdapter(FrameworkRetrieverLike(DOCS))
+    RecordingLLM(ScriptedLLM("ok [it-07]"), fixture).complete("old prompt")
+    svc = AnswerService(retriever, ReplayLLM(fixture))
+    with pytest.raises(LookupError, match="prompt text changed"):
+        svc.answer("who handles vpn outages")
+```
+
 ```bash
-.venv/bin/python -m pytest book/projects/examples/ch23 -q
+cd book/projects/examples/ch23 && pytest -q
 ```
 
 ## Code walkthrough
@@ -996,8 +856,8 @@ it checks only that the method names exist, not their signatures or return types
 tests do the rest.
 
 **Recorded fixtures key on prompt text.** `RecordingLLM` wraps a live client once and writes prompt
-hash to completion; `ReplayLLM` raises `LookupError` on a missing prompt. The last test matters most:
-changing the prompt after recording makes replay fail with a message that says why. A silent fallback
+hash to completion; `ReplayLLM` raises `LookupError` on a missing prompt. The test shown above
+matters most: changing the prompt after recording makes replay fail with a message that says why. A silent fallback
 would hide exactly the drift you are testing for. In Northwind Assist, fixtures are re-recorded by an
 `@pytest.mark.integration` test that runs only when a provider key is present.
 
@@ -1023,8 +883,58 @@ rather than guess.
 The weights are yours: a regulated workflow weights transparency and persistence heavily; an internal
 prototype weights ecosystem fit and little else. And "plain Python with your own primitives" is a
 legitimate row to score alongside the frameworks. For a small deterministic workflow it usually wins,
-and frameworks pay off when you need durable state, branching,
-checkpointing, tool ecosystems, or standardized instrumentation.
+and frameworks pay off when you need durable state, branching, checkpointing, tool ecosystems, or
+standardized instrumentation.
+
+### Worked example: scoring Project 5
+
+Project 5, Northwind's incident-research agent (Chapter 20), plans an investigation, runs each step
+as a small bounded agent, revises a cited report until a deterministic Definition of Done passes,
+and posts it only after an on-call engineer approves. The approval can wait hours, through deploys
+and pod restarts. Its tests replay whole trajectories offline from recorded cassettes. Three
+candidates, each scored as the team would actually use it:
+
+- **Primitives:** `agentkit`, `toolkit`, and `evalkit` as built in Chapters 16 to 24.
+- **Graph library:** a graph orchestration library with its PostgreSQL checkpointer, tools still
+  executed through `ToolExecutor`.
+- **Provider SDK:** a provider agent SDK, with its tool hook routed through `ToolExecutor`.
+
+Weights run from 1 to 3. Three criteria get 3: state transparency (the approver reads the state at
+the pause, and the audit diffs state across steps), persistence (the approval outlives a process),
+and testability (trajectory and replay tests are how Project 5 is evaluated). Ecosystem gets 1,
+because every tool is internal: the runbook corpus, telemetry, and the channel.
+
+| Criterion | Weight | Primitives | Graph library | Provider SDK |
+|---|---|---|---|---|
+| State transparency | 3 | 2 | 1 | 1 |
+| Persistence and checkpointing | 3 | 1 | 2 | 1 |
+| Streaming | 1 | 1 | 2 | 2 |
+| Tracing | 2 | 2 | 1 | 1 |
+| Retry semantics | 2 | 2 | 1 | 1 |
+| Testability with fakes | 3 | 2 | 1 | 1 |
+| Deployment model | 1 | 2 | 2 | 2 |
+| Ecosystem fit | 1 | 0 | 2 | 1 |
+| Upgrade churn | 2 | 2 | 1 | 1 |
+| Lock-in | 2 | 2 | 1 | 0 |
+| **Weighted total (max 40)** | | **34** | **26** | **20** |
+
+The reasons behind the less obvious cells. Primitives score 1 on persistence because the event log
+and resume exist but the durable backend for Project 5's store is JSON files, and a PostgreSQL
+version is yours to write and operate. The graph library scores 1 on transparency because its state
+is a dict whose merge rules live in reducer annotations, and 1 on testability because a fake model
+exists but cassette replay of a whole trajectory is yours to add. The provider SDK scores 0 on
+lock-in because its run items, hosted tools, and tracing assume one provider's model features, and
+1 on persistence because a session stores history, but a pending approval must still be serialized
+and resumed by your code.
+
+Conclusion: keep the primitives for Project 5. Two cautions keep the score honest. First, the
+primitives are already built and tested, so their row carries no build cost; for a team starting
+from nothing, the persistence and ecosystem rows would weigh more and the gap would shrink. Second,
+the result is sensitive to one cell: if approvals must survive days and redeploys and nobody wants
+to own a PostgreSQL event store, persistence becomes the deciding criterion. The right move then is
+not to switch wholesale but to adopt the graph library's checkpointer behind a `Workflow` port
+(engineering question E3), keeping tools, policy, budgets, and evaluation in your code. The provider
+SDK would win a different brief: a prototype weighted on ecosystem and time to first demo.
 
 ## Keeping domain logic framework-independent
 
@@ -1122,12 +1032,9 @@ data flow. If you cannot name the primitive under each object, stop and learn it
 **Hidden prompt text in production.** Behavior depends on a template inside a dependency nobody has
 read. Detect by diffing the prompt that reached the model (from your trace) against your registry.
 
-**Silent retries.** Several layers retry; the bill shows calls the code does not. The detection test
-is under Failure modes (stacked-retry cost spike).
-
-**Version drift.** A dependency upgrade changes tool-result formatting, a default `k`, or a template,
-and quality shifts with no change in your repository. Failure modes (prompt drift after upgrade) gives
-the signature and test; Chapter 25's eval gate is the second net.
+**Upgrading without a net.** Bumping a framework version with no replay suite and no eval gate.
+Stacked retries and prompt drift after an upgrade (both under Failure modes) are the two ways this
+shows up; Chapter 25's eval gate is the second net.
 
 **Letting the framework own the state type.** Domain state as the framework's dict, with reducers
 encoding business rules; when the framework changes, the rules go with it. Define state as your
@@ -1201,7 +1108,38 @@ on model change.
 Finally, test the hidden choices explicitly: one test per default you discovered, so that when the
 framework changes one, a test says which.
 
+## Before you ship
+
+- [ ] Every framework dependency is pinned to an exact version, and the lockfile is reviewed on
+  upgrade.
+- [ ] A dump of every framework default you rely on (chunk size, `k`, timeout, retry count,
+  `max_tokens`, temperature, history length) exists, and each value is set explicitly in your
+  settings.
+- [ ] Retries are enabled at exactly one layer; a test with a fake client that always raises
+  `ProviderUnavailableError` asserts total model calls equal that layer's `max_attempts`.
+- [ ] Every prompt the framework sends (synthesizer templates, agent system messages,
+  structured-output instructions) is extracted, versioned in the registry, and passed back in
+  explicitly; the prompt hash on model-call spans matches the registry version.
+- [ ] Every tool call, including those proposed through an SDK or prebuilt agent, executes through
+  `ToolExecutor`; provider-hosted tools are either disabled or explicitly allow-listed (Chapter 16).
+- [ ] A grep for the framework's package outside `adapters/` and the composition root returns
+  nothing, enforced as a lint rule in CI.
+- [ ] Each adapter has a contract test: types, `k` respected, empty results, and real scores
+  returned (not defaulted).
+- [ ] A recorded-fixture replay suite runs offline on every dependency update and fails with
+  `LookupError` on prompt drift.
+- [ ] Side effects before any pause or interrupt are idempotent or moved after it; a counting fake
+  tool proves one execution across pause and resume.
+- [ ] Framework retrievers apply ACL filters before scoring, verified by a test run as a user
+  without access (Chapter 15).
+- [ ] Tracing exports go through your `Tracer` with redaction and sampling configured; no vendor SDK
+  exports raw prompts by default.
+- [ ] A session or history policy keeps input tokens within Chapter 5's budget over a twenty-turn
+  test conversation.
+
 ## Exercises
+
+**Start here:** K1, K5, E1, P4, D2 (about 4 hours). The rest go deeper.
 
 ### Knowledge questions
 
@@ -1221,12 +1159,19 @@ the four evaluation requirements the chapter attaches to it.
 **K5.** State the four things a framework typically adds and the three it typically hides. For each
 hidden item, name the telemetry that would reveal it.
 
+**K6.** A vendor offers a hosted agent runtime: you upload tools and instructions, and it runs the
+loop, stores sessions, and executes code in its sandbox. Which rows of the primitive ledger does it
+absorb, which selection criterion is it most likely to score 0 on, and which three responsibilities
+stay with you regardless?
+
 ### Engineering questions
 
-**E1.** Northwind's incident-research agent (Project 5) must pause for approval before any
-`create_ticket` call and survive a pod restart mid-run. Using the scoring table, score plain primitives
-(Chapters 16, 17, 19) against an orchestration framework with a hosted checkpointer. State your weights
-and justify the two criteria you weighted highest.
+**E1.** Northwind's HR knowledge assistant (Project 3) must never show a passage to a user outside
+its ACL, must cite every claim, and must support Chapter 14's stage-isolated evaluation. Using the
+scoring table, score three candidates: plain `ragkit` primitives (Chapters 10 to 15), a retrieval
+framework with a query engine, and a hosted agent runtime with built-in file search. State your
+weights, justify the two criteria you weighted highest, and name the one finding that would change
+your conclusion.
 
 **E2.** A team uses a framework's query engine for the HR knowledge base. Retrieval quality is good
 but answers sometimes include facts not in the evidence. Propose a diagnosis path using this chapter's
@@ -1243,20 +1188,20 @@ and say which attributes must never be dropped.
 
 ### Practical exercises
 
-**P1.** Extend `runnable.py` with a stream-aware `Sequence.stream` that propagates chunks through
+**P1.** (about 90 min) Extend `runnable.py` with a stream-aware `Sequence.stream` that propagates chunks through
 steps that declare themselves stream-safe and joins before steps that do not. Add tests showing a
 model-like step streaming three chunks through an upper-casing step and being joined before a JSON
 parsing step.
 
-**P2.** Extend `signature.py` with a `ChainOfThought` module that adds a `reasoning` output field
+**P2.** (about 60 min) Extend `signature.py` with a `ChainOfThought` module that adds a `reasoning` output field
 before the first declared output, and show with a fake model and the existing optimizer whether it
 improves the dev score on the triage signature. Keep the signature object unchanged.
 
-**P3.** Write an adapter that makes Chapter 17's `Graph` implement the `Workflow` port from E3, and a
+**P3.** (about 2 hours) Write an adapter that makes Chapter 17's `Graph` implement the `Workflow` port from E3, and a
 second adapter over a hand-written stand-in for a compiled state graph (do not install the framework).
 Write one contract test suite that both adapters pass, including pause and resume.
 
-**P4.** Build a `RecordingRetriever` / `ReplayRetriever` pair in the style of `ports.py`, record a
+**P4.** (about 60 min) Build a `RecordingRetriever` / `ReplayRetriever` pair in the style of `ports.py`, record a
 fixture over the `FrameworkRetrieverLike` stand-in, then change the stand-in's default `k` and show
 the replay test detecting the change.
 
@@ -1293,9 +1238,26 @@ checkpoint and one follows the resume. Name the mechanism, the fix, and the test
   faithful metric, enough examples, a frozen holdout, and a re-run on model change.
 - Agent SDKs run the tool loop without your policy layer; route execution through your
   `ToolExecutor`. MCP SDKs handle protocol correctness, not trust.
-- Score frameworks on the ten criteria as you would use them, with your weights. Plain primitives
-  are a row in the table.
+- Learn categories, not product names: each category absorbs predictable ledger rows and hides
+  predictable choices. Score candidates on the ten criteria as you would use them, with your
+  weights; plain primitives are a row in the table.
 - Your domain owns the `Retriever`, `LLMClient`, and `Tool` Protocols; framework objects live in
   adapters. A grep for the framework outside `adapters/` should return nothing.
 - Recorded fixtures that fail loudly on prompt drift are the migration safety net and the
   version-drift detector. Re-record deliberately, under review.
+
+## Further reading
+
+- *DSPy: Compiling Declarative Language Model Calls into Self-Improving Pipelines* (Khattab et al.,
+  2023): the original argument for separating signatures from prompt text and optimizing against a
+  metric.
+- LangGraph documentation: read the persistence, interrupt, and streaming pages with Chapter 17's
+  engine beside you; they map one to one.
+- LlamaIndex documentation: the response synthesizer and node parser pages show the defaults and
+  prompt templates this chapter tells you to extract.
+- LangChain documentation: the runnable interface and retry/fallback pages, read for what the
+  wrappers retry and when.
+- MCP Python SDK: a compact reference implementation to compare with Chapter 18's minimal client and
+  server.
+- *OpenTelemetry Semantic Conventions for Generative AI*: the attribute names to map framework
+  tracing onto, so dashboards survive a framework change.

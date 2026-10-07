@@ -1,6 +1,16 @@
 # Chapter 7 — Model Selection and Routing
 
-After this chapter you will be able to choose a model for a workload from evidence rather than reputation, and build the component that makes that choice again for every request. You will record model capabilities in a catalog, run one evaluation set across candidates and read the results as a Pareto front, and build a `Router` that combines policy rules, an optional classifier, and a confidence cascade, and that refuses fallbacks which would quietly break a request. Finally you will evaluate a cascade end to end, pricing in what a misrouted request costs. The code in `book/projects/examples/ch07/` runs offline against `FakeLLM` instances acting as a small, a general, and a reasoning model on the Northwind ticket set.
+This chapter is about choosing a model for a workload from evidence rather than reputation, and about building the component that makes that choice again for every request. Getting it wrong rarely breaks anything visibly: the bill grows, or the hardest requests get worse while the average looks fine.
+
+**You will be able to:**
+- Record each model's capabilities, prices, and data zone in a catalog that application code reaches only through pinned aliases.
+- Run one evaluation set across candidates and choose from the Pareto front, using interval lower bounds and paired counts.
+- Decide between a hosted API, a managed open-weight endpoint, and self-hosting from cost at volume, data control, and operating burden.
+- Build a router that combines policy rules, an optional classifier, and a confidence cascade, and that refuses fallbacks which would quietly break a request.
+- Choose a cascade threshold by end-to-end utility, pricing in what a misrouted request costs.
+- Diagnose routing incidents (escalation storms, hidden fallbacks, retired pins) from router telemetry.
+
+**Prerequisites:** Chapters 3 and 6 (the `aie_core` client, gateway, and pricing table; confidence signals and calibration). | **Code:** `book/projects/examples/ch07/` (run: `cd book/projects/examples/ch07 && pytest -q`) | **Builds:** the chapter's model catalog, selection harness, `Router`, and cascade evaluator, running offline against `FakeLLM` instances that act as a small, a general, and a reasoning model on the Northwind ticket set.
 
 ## Why this matters
 
@@ -71,6 +81,26 @@ First, preprocess before you pay. Resize, crop to the region of interest, sample
 
 Multimodal inputs also widen the attack surface: text hidden in images, adversarial perturbations, manipulated metadata, and instructions embedded in a screenshot or a QR code (Chapter 26). For the router, an image part in the request is a hard requirement: the request goes only to models whose profile has `supports_vision`, and a text-only fallback is never acceptable, because it would answer without seeing the input.
 
+### Hosted API, managed open-weight, or self-hosted
+
+Every candidate also comes with a deployment choice, and that choice moves several axes at once. There are three common options. A **hosted API** serves a proprietary model behind a provider's endpoint, billed per token. A **managed open-weight endpoint** serves a model whose weights are published, run by a cloud or inference provider and billed per token or per GPU-hour; you could take the same weights elsewhere, and you do not run GPUs. **Self-hosting** runs open weights on hardware you control, behind an inference server such as the ones Chapter 34 covers.
+
+| Factor | Hosted API | Managed open-weight | Self-hosted |
+|---|---|---|---|
+| Licensing | provider terms of service | the model's license plus provider terms | the model's license; some restrict use, scale, or derivatives |
+| Cost at volume | per token, scales linearly with traffic | per token or per hour | mostly fixed: GPUs cost the same idle or busy |
+| Data control | provider's retention terms and regions | provider's regions, often configurable | data never leaves your network |
+| Fine-tunability | only what the provider offers | often adapters, sometimes full | full control (Chapter 33) |
+| Operations burden | none beyond the client | low | high: capacity, upgrades, on-call, quantization checks |
+| Versions | provider retires pins on its schedule | provider may retire hosted versions | you keep weights as long as you like |
+| Strongest available quality | usually here | often behind | often behind |
+
+The cost row is where teams go wrong, in both directions. A hosted price scales with tokens. A self-hosted node costs the same per hour whether it is busy or idle, so its cost per token depends on utilization. Illustrative numbers: a GPU node at $8 per hour that sustains 2,000 output tokens per second at full load produces 7.2 million tokens an hour, about $1.10 per million at full utilization. At 25% average utilization the same node costs about $4.40 per million, roughly the general model's illustrative output price, before counting the engineers who keep it running. Compare at your measured utilization, including nights and weekends, never at peak throughput (Chapter 34 does the serving math in detail).
+
+Self-hosting is justified when data must not leave your network (Northwind's `nw-small` runs on-premises for exactly this reason), when a narrow, high-volume task runs steadily enough to keep GPUs busy and a small model passes the evaluation, or when you need control over weights for fine-tuning or for keeping a version indefinitely. It is a poor choice for spiky or low-volume traffic, for tasks that need the strongest available model, and for teams with no one to own GPU capacity. A managed open-weight endpoint is the middle path: open weights and portability without the operations, and a common first step before self-hosting.
+
+Two failure patterns recur. A model evaluated at full precision is deployed quantized to fit the hardware, and quality drops on the hard slice; evaluate the exact deployment, quantization and server version included. And an inference server upgrade changes outputs (a new default sampling setting, a different chat template) without anyone touching the model; pin the server version alongside the weights. In the catalog, deployment is part of the profile: the same weights served by a provider and by you are two aliases, two candidates in the harness, and two rows on the Pareto front, because reliability, latency, data zone, and price all belong to the deployment.
+
 ### Evaluation-driven selection
 
 The selection procedure is the same whether you are choosing a first model or deciding whether to switch.
@@ -115,6 +145,8 @@ Routing chooses the model, provider, or pipeline for each request. The strategie
 
 **Confidence cascades.** Instead of predicting difficulty up front, run the cheap model first and escalate when its answer looks unreliable: low confidence, a failed validator, or an output outside the allowed set. A cascade learns difficulty from the attempt itself, which is often more accurate than predicting it from the input, at the cost of paying for the cheap call on every escalated request and adding its latency to the escalated path.
 
+Each strategy can choose along more than one dimension. A route names a model, but it can also name an effort level, so "the reasoning model at medium effort" and "the reasoning model at high effort" are different routes, and the cheapest escalation is sometimes more effort on the same model rather than a different model.
+
 Real routers combine these. The Northwind router evaluates rules first, then an optional classifier, then a default route, and any route can carry an escalation target that turns it into a cascade.
 
 ### Confidence signals and calibration
@@ -127,7 +159,7 @@ A cascade is only as good as the signal that decides escalation. The candidates,
 - **Agreement.** Sample the cheap model twice, or ask two cheap models, and escalate on disagreement. It doubles the cheap cost and misses consistently wrong answers.
 - **A learned verifier.** A small model trained to predict whether an answer is correct. The most accurate and the most work to maintain.
 
-Whatever the signal, measure its calibration on your distribution: bin the cases by confidence and compare each bin's mean confidence to its accuracy. The expected calibration error (ECE) is the weighted average gap. On the Northwind set, the small model's self-reported confidence has these bins (illustrative):
+Chapter 6 explains these signals in depth and owns calibration: a reliability table bins cases by confidence and compares each bin's mean confidence with its accuracy, and the expected calibration error (ECE) is the count-weighted average gap. What matters for routing is to run that table on your own distribution, for the exact signal the cascade uses. On the Northwind set, the small model's self-reported confidence has these bins (illustrative):
 
 | confidence bin | cases | mean confidence | accuracy |
 |---|---|---|---|
@@ -307,40 +339,10 @@ cd book/projects/examples/ch07 && ../../../../.venv/bin/python demo.py
 
 ### The catalog
 
-The catalog holds one `ModelProfile` per alias and derives a request's `Requirements`. Read `capability_gaps` first: it is the single definition of compatible.
+The catalog holds one `ModelProfile` per alias and derives a request's `Requirements`. Read `capability_gaps` first: it is the single definition of compatible. The excerpt below shows the profile, requirement derivation, the gap check, and the compatibility query; the `Tier` enum, JSON loading, and the illustrative `northwind_catalog()` (four aliases: `nw-small` on-premises, `nw-general` and `nw-reasoning` in the EU, `nw-longctx` with a large window but no tools) are on disk.
 
 ```python
-# path: book/projects/examples/ch07/catalog.py
-"""Model catalog: what each candidate model can do, what it costs, and where it may run.
-
-Every number in a catalog is illustrative. The catalog is the one place where a model's
-capabilities are written down, so the router can check them before it sends a request
-and the selection harness can label its results. Profiles are pinned: application code
-refers to an alias such as ``nw-small`` and the catalog resolves it to an exact,
-versioned model identifier. Changing what an alias points to is a reviewed catalog
-change, never a side effect of a provider silently updating a floating name.
-"""
-from __future__ import annotations
-
-import json
-from enum import IntEnum
-from pathlib import Path
-from typing import Any, Iterable
-
-from pydantic import BaseModel, Field, model_validator
-
-from aie_core import CompletionRequest, count_message_tokens
-
-
-class Tier(IntEnum):
-    """Relative tiers. Lower is cheaper or faster. Only the ordering is meaningful."""
-
-    LOW = 1
-    MEDIUM = 2
-    HIGH = 3
-    VERY_HIGH = 4
-
-
+# path: book/projects/examples/ch07/catalog.py (excerpt; full file on disk)
 class ModelProfile(BaseModel):
     alias: str                                   # what application code and routes use
     model_id: str                                # pinned, versioned identifier sent to the provider
@@ -356,29 +358,10 @@ class ModelProfile(BaseModel):
     latency_tier: Tier = Tier.MEDIUM
     input_per_1m: float = 0.0                    # illustrative USD per million input tokens
     output_per_1m: float = 0.0                   # illustrative USD per million output tokens
-    notes: str = ""
-
-    @model_validator(mode="after")
-    def _check(self) -> "ModelProfile":
-        if self.max_output_tokens > self.context_tokens:
-            raise ValueError(f"{self.alias}: max_output_tokens exceeds context_tokens")
-        return self
-
-    def pricing_entry(self) -> dict[str, float]:
-        return {"input_per_1m": self.input_per_1m, "output_per_1m": self.output_per_1m}
-
+    # ...
 
 class Requirements(BaseModel):
-    """What a request needs from whichever model serves it."""
-
-    min_context_tokens: int = 0
-    min_output_tokens: int = 0
-    needs_tools: bool = False
-    needs_json_schema: bool = False
-    needs_vision: bool = False
-    data_zone: str | None = None
-    reasoning_effort: str | None = None
-
+    # ...
     @classmethod
     def from_request(cls, req: CompletionRequest) -> "Requirements":
         """Derive requirements from the request itself, so callers cannot forget them."""
@@ -397,27 +380,12 @@ class Requirements(BaseModel):
             reasoning_effort=req.metadata.get("reasoning_effort"),
         )
 
-
-class Gap(BaseModel):
-    """One way a profile fails a requirement. Hard gaps disqualify; soft gaps degrade."""
-
-    capability: str
-    detail: str
-    hard: bool = True
-
-
 def capability_gaps(profile: ModelProfile, need: Requirements) -> list[Gap]:
     gaps: list[Gap] = []
     if need.min_context_tokens > profile.context_tokens:
         gaps.append(Gap(capability="context",
                         detail=f"needs {need.min_context_tokens} tokens, window is {profile.context_tokens}"))
-    if need.min_output_tokens > profile.max_output_tokens:
-        gaps.append(Gap(capability="output",
-                        detail=f"needs {need.min_output_tokens} output tokens, max is {profile.max_output_tokens}"))
-    if need.needs_tools and not profile.supports_tools:
-        gaps.append(Gap(capability="tools", detail="request carries tools; model has no tool calling"))
-    if need.needs_vision and not profile.supports_vision:
-        gaps.append(Gap(capability="vision", detail="request carries images; model is text-only"))
+    # ... output length, tools, and vision follow the same pattern
     if need.data_zone and need.data_zone not in profile.data_zones:  # "any" never satisfies an explicit zone
         gaps.append(Gap(capability="data_zone",
                         detail=f"request must stay in {need.data_zone}; model runs in {list(profile.data_zones)}"))
@@ -431,155 +399,24 @@ def capability_gaps(profile: ModelProfile, need: Requirements) -> list[Gap]:
                         detail=f"effort {need.reasoning_effort!r} unsupported; model offers {list(profile.reasoning_efforts)}"))
     return gaps
 
-
 def is_compatible(profile: ModelProfile, need: Requirements) -> bool:
     return not any(g.hard for g in capability_gaps(profile, need))
 
-
 class ModelCatalog(BaseModel):
-    profiles: dict[str, ModelProfile] = Field(default_factory=dict)
-
-    @classmethod
-    def from_profiles(cls, profiles: Iterable[ModelProfile]) -> "ModelCatalog":
-        catalog = cls()
-        for p in profiles:
-            catalog.add(p)
-        return catalog
-
-    @classmethod
-    def from_json(cls, path: str | Path) -> "ModelCatalog":
-        data: dict[str, Any] = json.loads(Path(path).read_text(encoding="utf-8"))
-        return cls.from_profiles(ModelProfile.model_validate(p) for p in data["models"])
-
-    def add(self, profile: ModelProfile) -> None:
-        if profile.alias in self.profiles:
-            raise ValueError(f"duplicate alias {profile.alias!r}")
-        self.profiles[profile.alias] = profile
-
-    def get(self, alias: str) -> ModelProfile:
-        try:
-            return self.profiles[alias]
-        except KeyError:
-            raise KeyError(f"unknown model alias {alias!r}; known: {sorted(self.profiles)}") from None
-
+    # ...
     def compatible(self, need: Requirements, among: Iterable[str] | None = None) -> list[ModelProfile]:
         """Compatible profiles, cheapest first, then fastest. Stable for equal tiers."""
         names = list(among) if among is not None else list(self.profiles)
         found = [self.get(n) for n in names if is_compatible(self.get(n), need)]
         return sorted(found, key=lambda p: (p.cost_tier, p.latency_tier))
-
-    def pricing(self) -> dict[str, dict[str, float]]:
-        """Prices keyed by pinned model id, in the shape aie_core.PricingTable expects."""
-        return {p.model_id: p.pricing_entry() for p in self.profiles.values()}
-
-
-def northwind_catalog() -> ModelCatalog:
-    """The illustrative catalog used throughout Chapter 7. Names are invented; tiers and
-    prices are made up to have realistic ratios, not to describe any vendor."""
-    return ModelCatalog.from_profiles([
-        ModelProfile(alias="nw-small", model_id="small-instruct-2026-03", provider="local",
-                     context_tokens=32_000, max_output_tokens=4_000, supports_json_schema=True,
-                     data_zones=("onprem",), cost_tier=Tier.LOW, latency_tier=Tier.LOW,
-                     input_per_1m=0.10, output_per_1m=0.40,
-                     notes="self-hosted; stays inside Northwind's network"),
-        ModelProfile(alias="nw-general", model_id="general-2026-02", provider="cloud-a",
-                     context_tokens=128_000, max_output_tokens=8_000, supports_tools=True,
-                     supports_json_schema=True, supports_vision=True, data_zones=("eu",),
-                     cost_tier=Tier.MEDIUM, latency_tier=Tier.MEDIUM,
-                     input_per_1m=1.00, output_per_1m=4.00),
-        ModelProfile(alias="nw-reasoning", model_id="reasoner-2026-01", provider="cloud-a",
-                     context_tokens=200_000, max_output_tokens=32_000, supports_tools=True,
-                     supports_json_schema=True, reasoning_efforts=("low", "medium", "high"),
-                     data_zones=("eu",), cost_tier=Tier.HIGH, latency_tier=Tier.VERY_HIGH,
-                     input_per_1m=5.00, output_per_1m=20.00),
-        ModelProfile(alias="nw-longctx", model_id="longctx-2025-12", provider="cloud-b",
-                     context_tokens=1_000_000, max_output_tokens=8_000, supports_tools=False,
-                     supports_json_schema=False, data_zones=("any",),
-                     cost_tier=Tier.HIGH, latency_tier=Tier.HIGH,
-                     input_per_1m=2.50, output_per_1m=10.00,
-                     notes="large window, no tools, no native schema mode"),
-    ])
-
-
-__all__ = [
-    "Tier", "ModelProfile", "Requirements", "Gap", "capability_gaps", "is_compatible",
-    "ModelCatalog", "northwind_catalog",
-]
 ```
 
 ### The selection harness
 
-The harness runs every candidate on the same cases, scores each answer, and summarizes quality with a Wilson interval, latency percentiles, and cost. Look for how failures become scored zeros instead of crashes, and for the Pareto and paired-count helpers.
+The harness runs every candidate on the same cases, scores each answer, and summarizes quality with a Wilson interval, latency percentiles, and cost. The excerpt shows the three functions that carry the method: `run_case`, where a failure becomes a scored zero instead of a crash; `dominates`, which defines the Pareto front; and `choose`, which applies the quality floor to the interval's lower bound. The result models, `summarize`, `percentile`, `run_selection`, and `paired_disagreements` (the paired counts) are on disk.
 
 ```python
-# path: book/projects/examples/ch07/selection.py
-"""Evaluation-driven model selection.
-
-Run one evaluation set across several candidate clients, record quality, latency, cost and
-failures per candidate, and compute the Pareto front over (quality up, cost down, p95
-latency down). The harness calls candidates through the LLMClient protocol, so the same code
-runs against FakeLLM in tests and against ModelGateway-wrapped providers in a real bake-off.
-"""
-from __future__ import annotations
-
-import math
-import time
-from collections.abc import Callable, Mapping, Sequence
-
-from pydantic import BaseModel, Field
-
-from aie_core import Completion, LLMClient, LLMError, PricingTable
-
-from tasks import EvalCase
-
-Scorer = Callable[[EvalCase, Completion], float]
-
-
-class CaseResult(BaseModel):
-    case_id: str
-    candidate: str
-    score: float                       # 0..1; 0 for errors
-    latency_ms: float
-    cost_usd: float
-    input_tokens: int = 0
-    output_tokens: int = 0
-    error: str | None = None
-    output: str = ""
-
-
-class CandidateSummary(BaseModel):
-    candidate: str
-    n: int
-    quality: float
-    quality_low: float                 # Wilson 95% interval on the pass rate
-    quality_high: float
-    p50_latency_ms: float
-    p95_latency_ms: float
-    cost_per_request_usd: float
-    cost_per_correct_usd: float
-    error_rate: float
-    pareto: bool = False
-
-
-class SelectionReport(BaseModel):
-    summaries: list[CandidateSummary]
-    results: list[CaseResult] = Field(default_factory=list)
-
-    def by_name(self, name: str) -> CandidateSummary:
-        return next(s for s in self.summaries if s.candidate == name)
-
-    def to_markdown(self) -> str:
-        head = ("| candidate | quality (95% CI) | p50 ms | p95 ms | $/request | $/correct | errors | Pareto |\n"
-                "|---|---|---|---|---|---|---|---|")
-        rows = [
-            f"| {s.candidate} | {s.quality:.3f} ({s.quality_low:.2f}-{s.quality_high:.2f}) | "
-            f"{s.p50_latency_ms:.0f} | {s.p95_latency_ms:.0f} | {s.cost_per_request_usd:.6f} | "
-            f"{s.cost_per_correct_usd:.6f} | {s.error_rate:.1%} | {'yes' if s.pareto else ''} |"
-            for s in self.summaries
-        ]
-        return "\n".join([head, *rows])
-
-
+# path: book/projects/examples/ch07/selection.py (excerpt; full file on disk)
 def wilson_interval(successes: float, n: int, z: float = 1.96) -> tuple[float, float]:
     """Wilson score interval: honest at small n and near 0 or 1, unlike the normal approximation."""
     if n == 0:
@@ -589,16 +426,6 @@ def wilson_interval(successes: float, n: int, z: float = 1.96) -> tuple[float, f
     centre = (p + z * z / (2 * n)) / denom
     half = z * math.sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / denom
     return max(0.0, centre - half), min(1.0, centre + half)
-
-
-def percentile(values: Sequence[float], q: float) -> float:
-    """Nearest-rank percentile; q in [0, 100]."""
-    if not values:
-        return 0.0
-    ordered = sorted(values)
-    rank = max(1, math.ceil(q / 100 * len(ordered)))
-    return ordered[rank - 1]
-
 
 def run_case(name: str, client: LLMClient, case: EvalCase, scorer: Scorer,
              pricing: PricingTable, model: str | None = None) -> CaseResult:
@@ -621,22 +448,6 @@ def run_case(name: str, client: LLMClient, case: EvalCase, scorer: Scorer,
         output=completion.text[:500],
     )
 
-
-def summarize(name: str, results: Sequence[CaseResult]) -> CandidateSummary:
-    n = len(results)
-    correct = sum(r.score for r in results)
-    lo, hi = wilson_interval(correct, n)
-    latencies = [r.latency_ms for r in results]
-    total_cost = sum(r.cost_usd for r in results)
-    return CandidateSummary(
-        candidate=name, n=n, quality=correct / n if n else 0.0, quality_low=lo, quality_high=hi,
-        p50_latency_ms=percentile(latencies, 50), p95_latency_ms=percentile(latencies, 95),
-        cost_per_request_usd=total_cost / n if n else 0.0,
-        cost_per_correct_usd=total_cost / correct if correct else math.inf,
-        error_rate=sum(1 for r in results if r.error) / n if n else 0.0,
-    )
-
-
 def dominates(a: CandidateSummary, b: CandidateSummary) -> bool:
     """a dominates b if it is no worse on every axis and strictly better on at least one."""
     no_worse = (a.quality >= b.quality and a.cost_per_request_usd <= b.cost_per_request_usd
@@ -644,28 +455,6 @@ def dominates(a: CandidateSummary, b: CandidateSummary) -> bool:
     better = (a.quality > b.quality or a.cost_per_request_usd < b.cost_per_request_usd
               or a.p95_latency_ms < b.p95_latency_ms)
     return no_worse and better
-
-
-def pareto_front(summaries: Sequence[CandidateSummary]) -> list[CandidateSummary]:
-    return [s for s in summaries if not any(dominates(o, s) for o in summaries if o is not s)]
-
-
-def run_selection(candidates: Mapping[str, LLMClient], cases: Sequence[EvalCase], scorer: Scorer,
-                  pricing: PricingTable, models: Mapping[str, str] | None = None) -> SelectionReport:
-    """Evaluate every candidate on every case. `models` optionally maps candidate name to the
-    pinned model id to request, for clients that serve several models."""
-    results: list[CaseResult] = []
-    summaries: list[CandidateSummary] = []
-    for name, client in candidates.items():
-        rs = [run_case(name, client, c, scorer, pricing, (models or {}).get(name)) for c in cases]
-        results.extend(rs)
-        summaries.append(summarize(name, rs))
-    front = {s.candidate for s in pareto_front(summaries)}
-    for s in summaries:
-        s.pareto = s.candidate in front
-    summaries.sort(key=lambda s: (-s.quality, s.cost_per_request_usd))
-    return SelectionReport(summaries=summaries, results=results)
-
 
 def choose(report: SelectionReport, *, min_quality: float, max_p95_ms: float,
            use_lower_bound: bool = True) -> CandidateSummary | None:
@@ -675,68 +464,14 @@ def choose(report: SelectionReport, *, min_quality: float, max_p95_ms: float,
     ok = [s for s in report.summaries
           if (s.quality_low if use_lower_bound else s.quality) >= min_quality and s.p95_latency_ms <= max_p95_ms]
     return min(ok, key=lambda s: (s.cost_per_request_usd, s.p95_latency_ms), default=None)
-
-
-def paired_disagreements(report: SelectionReport, a: str, b: str) -> tuple[int, int]:
-    """(cases a got right and b got wrong, cases b got right and a got wrong). Paired counts
-    are what a McNemar-style comparison of two candidates on the same set is built on."""
-    sa = {r.case_id: r.score for r in report.results if r.candidate == a}
-    sb = {r.case_id: r.score for r in report.results if r.candidate == b}
-    a_only = sum(1 for k in sa if sa[k] >= 0.5 > sb.get(k, 0.0))
-    b_only = sum(1 for k in sb if sb[k] >= 0.5 > sa.get(k, 0.0))
-    return a_only, b_only
-
-
-__all__ = [
-    "Scorer", "CaseResult", "CandidateSummary", "SelectionReport", "wilson_interval", "percentile",
-    "run_case", "summarize", "dominates", "pareto_front", "run_selection", "choose",
-    "paired_disagreements",
-]
 ```
 
 ### The router
 
-`route` does selection then capability filtering; `complete` executes the candidates; `_needs_escalation` is the cascade.
+The router has two halves. `route` decides: it picks a route, then filters the route's models by hard capability gaps. `complete` executes: it calls the surviving candidates in order and runs the cascade. A `Route` is plain data, and the Northwind rules show the ordering principle, policy before cost.
 
 ```python
-# path: book/projects/examples/ch07/router.py
-"""A capability-aware model router with rules, an optional classifier, and a confidence cascade.
-
-Decision order for every request:
-  1. Derive Requirements from the request (context size, tools, schema, images, data zone).
-  2. Pick a route: the first matching rule, else a classifier prediction above its confidence
-     floor, else the default route.
-  3. Turn the route into an ordered candidate list (primary, then fallbacks) keeping only models
-     with no hard capability gap. If none remain, substitute the cheapest compatible model in
-     the catalog and say so; if the catalog has none, fail loudly.
-  4. Execute: call candidates in order, moving on only for retryable errors. If the route has an
-     escalation target and the answer is low-confidence or invalid, call the stronger model.
-
-Retries against one model belong to aie_core's ModelGateway (Chapter 3); wrap each client in a
-gateway. The router owns the decisions a gateway cannot make: which model, and which fallbacks
-are safe given what this particular request needs.
-"""
-from __future__ import annotations
-
-from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
-from typing import Literal, Protocol
-
-import numpy as np
-from pydantic import BaseModel, ConfigDict, Field
-
-from aie_core import (Completion, CompletionRequest, InvalidRequestError, LLMClient, LLMError,
-                      PricingTable, ProviderUnavailableError)
-from aie_core.embeddings import EmbeddingClient, cosine_similarity, normalize
-from aie_core.observability import NoopTracer, Tracer
-
-from catalog import ModelCatalog, Requirements, capability_gaps, is_compatible
-
-
-class NoCompatibleModelError(InvalidRequestError):
-    """No model in the catalog can serve this request as specified. Not retryable."""
-
-
+# path: book/projects/examples/ch07/router.py (excerpt; full file on disk)
 class Route(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -747,150 +482,20 @@ class Route(BaseModel):
     escalate_to: str | None = None              # confidence cascade target
     min_confidence: float = 0.0                 # escalate when confidence is below this
 
+def northwind_rules(long_context_threshold: int = 100_000) -> list[Rule]:
+    """Rules run in order; put the ones that encode policy before the ones that save money."""
+    return [
+        Rule("restricted_data", "private", lambda req, need: need.data_zone == "onprem"),
+        Rule("high_risk", "high_assurance", lambda req, need: req.metadata.get("risk") == "high"),
+        Rule("long_context", "long_context", lambda req, need: need.min_context_tokens > long_context_threshold),
+        Rule("narrow_task", "small_first", lambda req, need: req.metadata.get("task") in NARROW_TASKS),
+    ]
+```
 
-@dataclass(frozen=True)
-class Rule:
-    name: str
-    route: str
-    when: Callable[[CompletionRequest, Requirements], bool]
+The decision half. `_pick_route` (on disk) returns the first matching rule's route, else a classifier prediction above its confidence floor, else the default route. Everything after that is capability filtering:
 
-
-class RouteClassifier(Protocol):
-    def predict(self, req: CompletionRequest) -> tuple[str, float]:
-        """Return (route name, confidence in [0, 1])."""
-        ...
-
-
-class EmbeddingRouteClassifier:
-    """Nearest-centroid routing over labeled example requests.
-
-    Each route gets a centroid: the normalized mean embedding of its examples. A request goes
-    to the closest centroid; confidence is the relative margin over the runner-up, so a request
-    halfway between two routes reports low confidence and falls through to the default route.
-    """
-
-    def __init__(self, embeddings: EmbeddingClient, examples: Mapping[str, Sequence[str]]) -> None:
-        if len(examples) < 2:
-            raise ValueError("need examples for at least two routes")
-        self.embeddings = embeddings
-        self.centroids: dict[str, list[float]] = {}
-        for route, texts in examples.items():
-            vectors = np.array(embeddings.embed(list(texts)), dtype=float)
-            self.centroids[route] = normalize(vectors.mean(axis=0))
-
-    def predict(self, req: CompletionRequest) -> tuple[str, float]:
-        text = "\n".join(m.text for m in req.messages if m.role.value == "user")
-        q = self.embeddings.embed_query(text)
-        sims = sorted(((cosine_similarity(q, c), r) for r, c in self.centroids.items()), reverse=True)
-        (best, route), (second, _) = sims[0], sims[1]
-        if best <= 0:
-            return route, 0.0
-        return route, max(0.0, min(1.0, (best - second) / best))
-
-
-class RouteDecision(BaseModel):
-    route: str
-    stage: Literal["rule", "classifier", "default"]
-    rule: str | None = None
-    classifier_confidence: float | None = None
-    candidates: list[str]                       # aliases, in execution order, all compatible
-    escalate_to: str | None = None
-    escalation_disabled: bool = False           # the route has a cascade, but its target cannot serve this
-    min_confidence: float = 0.0
-    reasoning_effort: str | None = None
-    substitutions: list[str] = Field(default_factory=list)   # why the plan differs from the route
-    warnings: list[str] = Field(default_factory=list)        # soft gaps: works, but differently
-
-    @property
-    def model(self) -> str:
-        return self.candidates[0]
-
-
-class Attempt(BaseModel):
-    model: str
-    outcome: Literal["ok", "error", "low_confidence", "invalid"]
-    detail: str = ""
-    latency_ms: float = 0.0
-    cost_usd: float = 0.0
-    confidence: float | None = None
-
-
-class RoutedCompletion(BaseModel):
-    completion: Completion
-    decision: RouteDecision
-    attempts: list[Attempt]
-    served_by: str
-    escalated: bool = False
-    degraded: bool = False                      # escalation was wanted but failed or was impossible
-    model_mismatch: bool = False                # the completion reports a model other than the alias's pin
-
-    @property
-    def cost_usd(self) -> float:
-        return sum(a.cost_usd for a in self.attempts)
-
-    @property
-    def latency_ms(self) -> float:
-        return sum(a.latency_ms for a in self.attempts)   # sequential calls add up
-
-
-Confidence = Callable[[Completion], float]
-Validator = Callable[[Completion], bool]
-
-
-class Router:
-    def __init__(
-        self,
-        catalog: ModelCatalog,
-        clients: Mapping[str, LLMClient],
-        routes: Sequence[Route],
-        *,
-        default_route: str,
-        rules: Sequence[Rule] = (),
-        classifier: RouteClassifier | None = None,
-        classifier_min_confidence: float = 0.5,
-        confidence: Confidence | None = None,
-        validator: Validator | None = None,
-        pricing: PricingTable | None = None,
-        tracer: Tracer | None = None,
-    ) -> None:
-        self.catalog = catalog
-        self.clients = dict(clients)
-        self.routes = {r.name: r for r in routes}
-        self.rules = list(rules)
-        self.default_route = default_route
-        self.classifier = classifier
-        self.classifier_min_confidence = classifier_min_confidence
-        self.confidence = confidence
-        self.validator = validator
-        self.pricing = pricing or PricingTable(catalog.pricing())
-        self.tracer = tracer or NoopTracer()
-        self._check_config()
-
-    def _check_config(self) -> None:
-        """Fail at startup, not at 3 a.m., if a route names something that does not exist."""
-        if self.default_route not in self.routes:
-            raise ValueError(f"default route {self.default_route!r} is not defined")
-        for rule in self.rules:
-            if rule.route not in self.routes:
-                raise ValueError(f"rule {rule.name!r} targets unknown route {rule.route!r}")
-        for r in self.routes.values():
-            for alias in (r.model, *r.fallbacks, *([r.escalate_to] if r.escalate_to else [])):
-                self.catalog.get(alias)
-                if alias not in self.clients:
-                    raise ValueError(f"route {r.name!r} uses {alias!r} but no client is registered for it")
-
-    # ------------------------------------------------------------------ decide
-    def _pick_route(self, req: CompletionRequest, need: Requirements) -> tuple[Route, str, str | None, float | None]:
-        for rule in self.rules:
-            if rule.when(req, need):
-                return self.routes[rule.route], "rule", rule.name, None
-        if self.classifier is not None:
-            name, conf = self.classifier.predict(req)
-            if conf >= self.classifier_min_confidence and name in self.routes:
-                return self.routes[name], "classifier", None, conf
-            return self.routes[self.default_route], "default", None, conf
-        return self.routes[self.default_route], "default", None, None
-
+```python
+# path: book/projects/examples/ch07/router.py (excerpt; full file on disk)
     def route(self, req: CompletionRequest) -> RouteDecision:
         need = Requirements.from_request(req)
         route, stage, rule, conf = self._pick_route(req, need)
@@ -922,33 +527,13 @@ class Router:
         if escalate_to is not None and not is_compatible(self.catalog.get(escalate_to), need):
             substitutions.append(f"escalation to {escalate_to} disabled: capability gap")
             escalate_to, escalation_disabled = None, True
+        # ... soft gaps on surviving candidates become warnings; the RouteDecision is returned
+```
 
-        # Soft gaps on any candidate: a fallback that works but changes an assumption.
-        warnings = [f"{alias}: {g.detail}" for alias in candidates
-                    for g in capability_gaps(self.catalog.get(alias), need) if not g.hard]
-        return RouteDecision(
-            route=route.name, stage=stage, rule=rule, classifier_confidence=conf,
-            candidates=candidates, escalate_to=escalate_to, escalation_disabled=escalation_disabled,
-            min_confidence=route.min_confidence,
-            reasoning_effort=effort, substitutions=substitutions, warnings=warnings,
-        )
+The execution half, with the span attributes elided. `_call` (on disk) sends the request through the alias's client with `req.model` set to the pin and the effort level in metadata where the profile supports it, and prices the completion.
 
-    # ----------------------------------------------------------------- execute
-    def _request_for(self, alias: str, req: CompletionRequest, decision: RouteDecision) -> CompletionRequest:
-        profile = self.catalog.get(alias)
-        metadata = {**req.metadata, "route": decision.route, "model_alias": alias}
-        if decision.reasoning_effort and decision.reasoning_effort in profile.reasoning_efforts:
-            # aie_core has no effort field; adapters that support the knob read it from metadata.
-            metadata["reasoning_effort"] = decision.reasoning_effort
-        else:
-            metadata.pop("reasoning_effort", None)
-        return req.model_copy(update={"model": profile.model_id, "metadata": metadata})
-
-    def _call(self, alias: str, req: CompletionRequest, decision: RouteDecision) -> tuple[Completion, Attempt]:
-        completion = self.clients[alias].complete(self._request_for(alias, req, decision))
-        cost = self.pricing.cost_usd(completion.model, completion.usage)
-        return completion, Attempt(model=alias, outcome="ok", latency_ms=completion.latency_ms, cost_usd=cost)
-
+```python
+# path: book/projects/examples/ch07/router.py (excerpt; full file on disk)
     def _needs_escalation(self, completion: Completion, decision: RouteDecision, attempt: Attempt) -> bool:
         if self.validator is not None and not self.validator(completion):
             attempt.outcome, attempt.detail = "invalid", "validator rejected output"
@@ -964,12 +549,7 @@ class Router:
     def complete(self, req: CompletionRequest) -> RoutedCompletion:
         with self.tracer.span("router.complete") as span:
             decision = self.route(req)
-            span.set_attribute("router.route", decision.route)
-            span.set_attribute("router.stage", decision.stage)
-            span.set_attribute("router.substitutions", len(decision.substitutions))
-            attempts: list[Attempt] = []
-            completion: Completion | None = None
-            served_by = ""
+            # ...
             for alias in decision.candidates:
                 try:
                     completion, attempt = self._call(alias, req, decision)
@@ -982,10 +562,7 @@ class Router:
                 attempts.append(attempt)
                 served_by = alias
                 break
-            if completion is None:
-                raise ProviderUnavailableError(
-                    f"all candidates failed for route {decision.route!r}: {[a.model for a in attempts]}")
-
+            # ... no completion: raise ProviderUnavailableError
             escalated = degraded = False
             target = decision.escalate_to
             if target and target != served_by and self._needs_escalation(completion, decision, attempts[-1]):
@@ -1000,117 +577,16 @@ class Router:
             elif decision.escalation_disabled and self._needs_escalation(completion, decision, attempts[-1]):
                 # The cascade could not run for this request, and the answer is below its bar.
                 degraded = True
-            # A client below the router (for example a gateway with its own fallback list) may have
-            # served the request from a different model. The router planned for the alias's pin; a
-            # mismatch means its capability check did not cover the model that actually answered.
             mismatch = completion.model != self.catalog.get(served_by).model_id
-            result = RoutedCompletion(completion=completion, decision=decision, attempts=attempts,
-                                      served_by=served_by, escalated=escalated, degraded=degraded,
-                                      model_mismatch=mismatch)
-            span.set_attribute("router.model", served_by)
-            span.set_attribute("router.model_id", completion.model)
-            span.set_attribute("router.model_mismatch", mismatch)
-            span.set_attribute("router.attempts", len(attempts))
-            span.set_attribute("router.warnings", len(decision.warnings))
-            span.set_attribute("router.escalated", escalated)
-            span.set_attribute("router.degraded", degraded)
-            span.set_attribute("router.cost_usd", result.cost_usd)
-            return result
-
-
-# ---------------------------------------------------------------------- Northwind
-NARROW_TASKS = frozenset({"classify_ticket", "extract_invoice", "route_intent"})
-
-
-def northwind_routes(min_confidence: float = 0.8) -> list[Route]:
-    return [
-        Route(name="private", model="nw-small"),
-        Route(name="high_assurance", model="nw-reasoning", reasoning_effort="high"),
-        Route(name="long_context", model="nw-longctx", fallbacks=("nw-reasoning",)),
-        Route(name="small_first", model="nw-small", fallbacks=("nw-general",),
-              escalate_to="nw-general", min_confidence=min_confidence),
-        Route(name="reasoning", model="nw-reasoning", reasoning_effort="medium", fallbacks=("nw-general",)),
-        Route(name="general", model="nw-general", fallbacks=("nw-reasoning",)),
-    ]
-
-
-def northwind_rules(long_context_threshold: int = 100_000) -> list[Rule]:
-    """Rules run in order; put the ones that encode policy before the ones that save money."""
-    return [
-        Rule("restricted_data", "private", lambda req, need: need.data_zone == "onprem"),
-        Rule("high_risk", "high_assurance", lambda req, need: req.metadata.get("risk") == "high"),
-        Rule("long_context", "long_context", lambda req, need: need.min_context_tokens > long_context_threshold),
-        Rule("narrow_task", "small_first", lambda req, need: req.metadata.get("task") in NARROW_TASKS),
-    ]
-
-
-def northwind_router(catalog: ModelCatalog, clients: Mapping[str, LLMClient], *,
-                     classifier: RouteClassifier | None = None, min_confidence: float = 0.8,
-                     long_context_threshold: int = 100_000, classifier_min_confidence: float = 0.5,
-                     confidence: Confidence | None = None, validator: Validator | None = None,
-                     tracer: Tracer | None = None) -> Router:
-    return Router(catalog, clients, northwind_routes(min_confidence), default_route="general",
-                  rules=northwind_rules(long_context_threshold), classifier=classifier,
-                  classifier_min_confidence=classifier_min_confidence, confidence=confidence,
-                  validator=validator, tracer=tracer)
-
-
-__all__ = [
-    "NoCompatibleModelError", "Route", "Rule", "RouteClassifier", "EmbeddingRouteClassifier",
-    "RouteDecision", "Attempt", "RoutedCompletion", "Router", "northwind_routes", "northwind_rules",
-    "northwind_router", "NARROW_TASKS",
-]
+            # ... build the RoutedCompletion, set span attributes, return it
 ```
 
 ### Cascade evaluation
 
-The evaluator runs each model once per case, then replays every threshold offline. `_per_case` is where the utility formula above becomes code.
+The evaluator runs each model once per case, then replays every threshold offline. `collect_outcomes` (on disk) records, per case, whether each model was right, the small model's confidence, and both stages' cost and latency. `_per_case` is where the utility formula above becomes code; `simulate` applies one threshold to the collected table without calling a model.
 
 ```python
-# path: book/projects/examples/ch07/cascade_eval.py
-"""Offline evaluation of a two-stage confidence cascade.
-
-Run the small and the large model once on every case and record correctness, confidence,
-cost and latency. Every cascade threshold can then be simulated from that table without
-calling a model again, so a full threshold sweep costs one pass over the set per model.
-
-Utility is computed end to end, per request, in one currency (illustrative USD):
-
-    utility = value_correct * correct
-              - cost_silent_error * undetected wrong answers
-              - rework_cost * detected wrong answers
-              - model spend (both stages, plus downstream re-runs)
-              - latency_cost_per_s * latency
-
-A wrong answer from the small model that is accepted is a *false accept* (silent quality
-loss, or a retry if something downstream catches it). A correct small answer that is escalated
-anyway is a *false escalation* (wasted spend and latency). Router accuracy counts both errors
-equally; utility weighs each by what it actually costs, which is why the two pick different
-thresholds.
-"""
-from __future__ import annotations
-
-from collections.abc import Callable, Sequence
-
-from pydantic import BaseModel
-
-from aie_core import LLMClient, PricingTable
-
-from selection import Scorer, percentile, run_case
-from tasks import EvalCase
-
-
-class CaseOutcome(BaseModel):
-    case_id: str
-    small_correct: bool
-    small_confidence: float
-    small_cost_usd: float
-    small_latency_ms: float
-    large_correct: bool
-    large_cost_usd: float
-    large_latency_ms: float
-
-
+# path: book/projects/examples/ch07/cascade_eval.py (excerpt; full file on disk)
 class UtilityModel(BaseModel):
     """All values illustrative. Set them with the product owner, not by the engineer alone."""
 
@@ -1119,53 +595,6 @@ class UtilityModel(BaseModel):
     detect_rate: float = 0.0            # share of accepted wrong answers caught downstream
     rework_cost: float = 0.01           # cost of a caught error, on top of re-running large
     latency_cost_per_s: float = 0.0     # what a second of waiting is worth, if anything
-
-
-class PolicyMetrics(BaseModel):
-    policy: str
-    threshold: float | None
-    accuracy: float
-    cost_per_request_usd: float
-    mean_latency_ms: float
-    p95_latency_ms: float
-    escalation_rate: float
-    false_accept_rate: float
-    false_escalation_rate: float
-    router_accuracy: float
-    utility_per_request: float
-
-
-ConfidenceFn = Callable[..., float]
-
-
-def collect_outcomes(cases: Sequence[EvalCase], small: LLMClient, large: LLMClient, scorer: Scorer,
-                     confidence: ConfidenceFn, pricing: PricingTable) -> list[CaseOutcome]:
-    outcomes: list[CaseOutcome] = []
-    for case in cases:
-        # Call small directly to read its confidence; run_case scores and prices it.
-        s_completion = small.complete(case.request)
-        s = run_case("small", _Replay(s_completion), case, scorer, pricing)
-        lg = run_case("large", large, case, scorer, pricing)
-        outcomes.append(CaseOutcome(
-            case_id=case.id, small_correct=s.score >= 0.5, small_confidence=confidence(s_completion),
-            small_cost_usd=s.cost_usd, small_latency_ms=s.latency_ms,
-            large_correct=lg.score >= 0.5 and lg.error is None, large_cost_usd=lg.cost_usd,
-            large_latency_ms=lg.latency_ms,
-        ))
-    return outcomes
-
-
-class _Replay:
-    """An LLMClient that returns one prepared completion; lets run_case score it."""
-
-    provider = "replay"
-
-    def __init__(self, completion) -> None:
-        self._c = completion
-
-    def complete(self, req):
-        return self._c
-
 
 def _per_case(o: CaseOutcome, escalate: bool, u: UtilityModel) -> tuple[float, float, float, float]:
     """(expected correctness, cost, latency_ms, penalty) for one case under one decision."""
@@ -1184,123 +613,32 @@ def _per_case(o: CaseOutcome, escalate: bool, u: UtilityModel) -> tuple[float, f
             o.small_latency_ms + d * o.large_latency_ms,
             d * redo_penalty + (1 - d) * u.cost_silent_error)
 
-
 def simulate(outcomes: Sequence[CaseOutcome], threshold: float, u: UtilityModel) -> PolicyMetrics:
     """Accept the small answer when its confidence >= threshold, otherwise escalate."""
-    n = len(outcomes)
-    correct = 0.0
-    cost = penalty = 0.0
-    latencies: list[float] = []
-    escalations = false_accepts = false_escalations = 0
+    # ...
     for o in outcomes:
         escalate = o.small_confidence < threshold
         ok, c, lat, pen = _per_case(o, escalate, u)
-        correct += ok
-        cost += c
-        penalty += pen
-        latencies.append(lat)
-        escalations += escalate
+        # ... accumulate correctness, cost, penalty, latency
         false_accepts += (not escalate) and (not o.small_correct)
         false_escalations += escalate and o.small_correct
-    return _metrics(f"cascade@{threshold:.2f}", threshold, n, correct, cost, penalty, latencies,
-                    escalations, false_accepts, false_escalations, u)
-
-
-def baseline(outcomes: Sequence[CaseOutcome], which: str, u: UtilityModel) -> PolicyMetrics:
-    """Single-model policies: 'small' (never escalate) or 'large' (call large only)."""
-    n = len(outcomes)
-    if which == "small":
-        m = simulate(outcomes, threshold=0.0, u=u)
-        return m.model_copy(update={"policy": "always-small", "threshold": None})
-    if which != "large":
-        raise ValueError(which)
-    correct = sum(o.large_correct for o in outcomes)
-    cost = sum(o.large_cost_usd for o in outcomes)
-    penalty = sum(0.0 if o.large_correct else u.cost_silent_error for o in outcomes)
-    latencies = [o.large_latency_ms for o in outcomes]
-    return _metrics("always-large", None, n, correct, cost, penalty, latencies, n, 0,
-                    sum(o.small_correct for o in outcomes), u)
-
-
-def _metrics(policy: str, threshold: float | None, n: int, correct: float, cost: float, penalty: float,
-             latencies: list[float], escalations: int, false_accepts: int, false_escalations: int,
-             u: UtilityModel) -> PolicyMetrics:
-    mean_latency = sum(latencies) / n
-    utility = (u.value_correct * correct - penalty - cost - u.latency_cost_per_s * sum(latencies) / 1000) / n
-    return PolicyMetrics(
-        policy=policy, threshold=threshold, accuracy=correct / n, cost_per_request_usd=cost / n,
-        mean_latency_ms=mean_latency, p95_latency_ms=percentile(latencies, 95),
-        escalation_rate=escalations / n, false_accept_rate=false_accepts / n,
-        false_escalation_rate=false_escalations / n,
-        router_accuracy=1 - (false_accepts + false_escalations) / n, utility_per_request=utility,
-    )
-
+    # ... returns PolicyMetrics with accuracy, cost, p95, rates, router accuracy, and utility
 
 def sweep(outcomes: Sequence[CaseOutcome], u: UtilityModel,
           thresholds: Sequence[float] | None = None) -> list[PolicyMetrics]:
     ts = thresholds if thresholds is not None else sorted({0.0, 1.01, *(o.small_confidence for o in outcomes)})
     return [simulate(outcomes, t, u) for t in ts]
-
-
-def best_by_utility(results: Sequence[PolicyMetrics]) -> PolicyMetrics:
-    # Ties go to the lower threshold: same utility, fewer escalations.
-    return max(results, key=lambda m: (round(m.utility_per_request, 12), -(m.threshold or 0.0)))
-
-
-def best_by_router_accuracy(results: Sequence[PolicyMetrics]) -> PolicyMetrics:
-    return max(results, key=lambda m: (m.router_accuracy, -(m.threshold or 0.0)))
-
-
-class CalibrationBin(BaseModel):
-    low: float
-    high: float
-    n: int
-    mean_confidence: float
-    accuracy: float
-
-
-def calibration_table(outcomes: Sequence[CaseOutcome], bins: int = 5) -> list[CalibrationBin]:
-    out: list[CalibrationBin] = []
-    for i in range(bins):
-        lo, hi = i / bins, (i + 1) / bins
-        members = [o for o in outcomes if lo <= o.small_confidence < hi or (i == bins - 1 and o.small_confidence == 1.0)]
-        if members:
-            out.append(CalibrationBin(
-                low=lo, high=hi, n=len(members),
-                mean_confidence=sum(o.small_confidence for o in members) / len(members),
-                accuracy=sum(o.small_correct for o in members) / len(members)))
-    return out
-
-
-def expected_calibration_error(outcomes: Sequence[CaseOutcome], bins: int = 5) -> float:
-    n = len(outcomes)
-    return sum(b.n / n * abs(b.mean_confidence - b.accuracy) for b in calibration_table(outcomes, bins))
-
-
-def to_markdown(rows: Sequence[PolicyMetrics]) -> str:
-    head = ("| policy | accuracy | $/req | mean ms | p95 ms | escalated | false accept | false escalate | router acc | utility/req |\n"
-            "|---|---|---|---|---|---|---|---|---|---|")
-    body = [
-        f"| {m.policy} | {m.accuracy:.3f} | {m.cost_per_request_usd:.6f} | {m.mean_latency_ms:.0f} | "
-        f"{m.p95_latency_ms:.0f} | {m.escalation_rate:.0%} | {m.false_accept_rate:.0%} | "
-        f"{m.false_escalation_rate:.0%} | {m.router_accuracy:.3f} | {m.utility_per_request:+.5f} |"
-        for m in rows
-    ]
-    return "\n".join([head, *body])
-
-
-__all__ = [
-    "CaseOutcome", "UtilityModel", "PolicyMetrics", "collect_outcomes", "simulate", "baseline",
-    "sweep", "best_by_utility", "best_by_router_accuracy", "CalibrationBin", "calibration_table",
-    "expected_calibration_error", "to_markdown",
-]
 ```
+
+`baseline` (on disk) computes the always-small and always-large policies for comparison, and `calibration_table` and `expected_calibration_error` produce the reliability table shown earlier.
 
 ### Task, fakes, and tests
 
 `tasks.py` turns each ticket in `shared-data/tickets.jsonl` into an `EvalCase` holding the exact `CompletionRequest` a candidate receives (system prompt with the twelve allowed categories, a JSON schema for `{"category", "confidence"}`, `max_tokens=64`, and `metadata={"task": "classify_ticket"}`), plus the expected label. `score_label` returns 1.0 for an exact category match and 0.0 for anything else, including malformed output. `label_confidence` reads the confidence field and returns 0.0 for malformed output, so unparseable answers always escalate.
 
-`fakes.py` builds the models as `FakeLLM(handler=...)` instances. The small model is a keyword scorer whose confidence comes from the margin between its top two categories: right on tickets that use the obvious words, unsure or wrong on tickets that mix topics. The large model returns the gold label except on a deterministic hash-selected subset of roughly one in twenty (four of sixty here); the reasoning candidate is the same fake with a different subset and a longer latency. All three report fixed illustrative latencies. `tasks.py` and `fakes.py` are on disk in full. The tests below are the ones that demonstrate the chapter's claims; the full file has 36.
+`fakes.py` builds the models as `FakeLLM(handler=...)` instances. The small model is a keyword scorer whose confidence comes from the margin between its top two categories: right on tickets that use the obvious words, unsure or wrong on tickets that mix topics. The large model returns the gold label except on a deterministic hash-selected subset of roughly one in twenty (four of sixty here); the reasoning candidate is the same fake with a different subset and a longer latency. All three report fixed illustrative latencies. `tasks.py` and `fakes.py` are on disk in full.
+
+The tests below demonstrate the chapter's central claims: a cascade pays for both calls, capability gaps beat fallback order, residency is never traded for availability, and the offline sweep predicts the live router. The full test file on disk also covers every rule, soft warning, misconfiguration, the hidden-fallback mismatch, and the utility-versus-router-accuracy disagreement.
 
 ```python
 # path: book/projects/examples/ch07/test_ch07.py (excerpt; imports and fixtures omitted, full file on disk)
@@ -1326,15 +664,6 @@ def test_low_confidence_escalates_and_costs_both_calls(catalog, gold):
     assert r.cost_usd == pytest.approx(sum(a.cost_usd for a in r.attempts)) and r.attempts[0].cost_usd > 0
     assert parse_label(r.completion).category == "vpn_network"
 
-def test_retryable_error_falls_back_without_double_escalation(catalog, gold):
-    small = FakeLLM(responses=[ProviderUnavailableError("gpu node lost")], model="small-instruct-2026-03")
-    general = FakeLLM(responses=[{"category": "vpn_network", "confidence": 0.5}], model="general-2026-02")
-    r = make_router(catalog, gold, small=small, general=general).complete(ticket_request("VPN", "vpn down"))
-    # general answered as the fallback; it is also the escalation target, so no second call
-    assert r.served_by == "nw-general" and not r.escalated
-    assert [a.outcome for a in r.attempts] == ["error", "ok"]
-    assert general.remaining() == 0
-
 def test_long_context_with_tools_never_falls_back_to_a_toolless_model(catalog, gold):
     tools = [ToolSpec(name="search_tickets", description="search")]
     req = CompletionRequest(messages=[Message.user(big_text(150_000))], max_tokens=2_000, tools=tools)
@@ -1353,37 +682,6 @@ def test_restricted_data_never_leaves_the_zone(catalog, gold):
     ok = req.model_copy(update={"tools": None})
     assert make_router(catalog, gold).route(ok).candidates == ["nw-small"]
 
-def _o(i, small_ok, conf, large_ok=True):
-    return CaseOutcome(case_id=str(i), small_correct=small_ok, small_confidence=conf, small_cost_usd=0.001,
-                       small_latency_ms=200, large_correct=large_ok, large_cost_usd=0.01, large_latency_ms=2000)
-
-def test_router_accuracy_and_utility_disagree():
-    # One confident-ish miss (0.70) hides above three correct but hesitant answers (0.65).
-    outs = [_o(0, False, 0.70)] + [_o(i, True, 0.65) for i in range(1, 4)] + [_o(i, True, 0.9) for i in range(4, 10)]
-    thresholds = [0.0, 0.75]
-    expensive = sweep(outs, UtilityModel(cost_silent_error=1.0), thresholds)
-    # Router accuracy prefers accepting everything: one wrong decision versus three.
-    assert best_by_router_accuracy(expensive).threshold == 0.0
-    # Utility prefers paying for four large calls to avoid one very expensive miss.
-    assert best_by_utility(expensive).threshold == 0.75
-    cheap = sweep(outs, UtilityModel(cost_silent_error=0.0001), thresholds)
-    assert best_by_utility(cheap).threshold == 0.0
-
-def test_optimal_threshold_rises_with_error_cost(cases, gold, pricing):
-    outs = collect_outcomes(cases, make_small_model(), make_large_model(gold), score_label,
-                            label_confidence, pricing)
-    assert len(outs) == 60
-    assert sum(o.small_correct for o in outs) == 48
-    best = []
-    for cost in (0.0001, 0.001, 0.01, 0.1):
-        u = UtilityModel(cost_silent_error=cost)
-        best.append(best_by_utility(sweep(outs, u)).threshold)
-    assert best == sorted(best) and best[0] < best[-1]
-    # When errors are expensive the small model's confident mistakes make the cascade lose
-    # to calling the large model directly.
-    u = UtilityModel(cost_silent_error=0.05)
-    assert baseline(outs, "large", u).utility_per_request > best_by_utility(sweep(outs, u)).utility_per_request
-
 def test_online_router_matches_offline_simulation(catalog, gold, cases, pricing):
     """The offline sweep is only trustworthy if it predicts what the live router does."""
     outs = collect_outcomes(cases, make_small_model(), make_large_model(gold), score_label,
@@ -1401,23 +699,23 @@ def test_online_router_matches_offline_simulation(catalog, gold, cases, pricing)
 
 ## Code walkthrough
 
-**The catalog is data with a validator.** A catalog loaded from JSON is checked at startup: an output limit larger than the window is rejected before any request runs. Only the ordering of tiers matters; the illustrative prices exist so `pricing()` can feed `aie_core`'s `PricingTable`, keyed by the pinned `model_id` that completions report. `capability_gaps` is the single definition of "compatible", and it returns structured gaps rather than a boolean so the router can explain every skip. Data zone and effort come from metadata set by application code, never from the user's text.
+**The catalog is data with a validator.** A catalog loaded from JSON is checked at startup: a validator on `ModelProfile` (on disk) rejects an output limit larger than the window before any request runs. Only the ordering of tiers matters; the illustrative prices exist so `pricing()` (on disk) can feed `aie_core`'s `PricingTable`, keyed by the pinned `model_id` that completions report. `capability_gaps` is the single definition of "compatible", and it returns structured gaps rather than a boolean so the router can explain every skip. Data zone and effort come from metadata set by application code, never from the user's text.
 
 **The harness scores failures instead of crashing on them.** `run_case` records an `LLMError` as a zero score with the error class, so a candidate rate-limited half the time shows a 50% error rate instead of aborting the run. Latency prefers the provider-reported figure so fakes are deterministic; a real bake-off should also log wall time, because client-side queueing is part of what users experience.
 
-**The router validates its configuration at construction.** `_check_config` confirms that every route, rule target, and alias exists and has a client. A typo in a fallback list is a startup error, not a `KeyError` during the first outage that exercises it.
+**The router validates its configuration at construction.** `_check_config` (on disk) confirms that every route, rule target, and alias exists and has a client. A typo in a fallback list is a startup error, not a `KeyError` during the first outage that exercises it.
 
 **Route selection and capability filtering are separate steps.** `_pick_route` answers "which policy applies"; `route` answers "which models can execute it." Keeping them apart is what makes the long-context test readable: the request matches the long-context rule, the long-context model is skipped for lacking tools, and the reasoning model, which has both the window and tool calling, serves it. Make the prompt 400k tokens and nothing fits; the router raises instead of truncating.
 
-**Escalation reads the attempt it is judging.** `_needs_escalation` runs the validator before the confidence function, because a parse failure makes the confidence meaningless, and it writes the outcome (`invalid` or `low_confidence`) and the confidence onto the attempt record. The escalation is skipped when the escalation target already served the request as a fallback, which `test_retryable_error_falls_back_without_double_escalation` pins down: paying the strong model twice for one answer is a classic cascade bug.
+**Escalation reads the attempt it is judging.** `_needs_escalation` runs the validator before the confidence function, because a parse failure makes the confidence meaningless, and it writes the outcome (`invalid` or `low_confidence`) and the confidence onto the attempt record. The escalation is skipped when the escalation target already served the request as a fallback, which `test_retryable_error_falls_back_without_double_escalation` (on disk) pins down: paying the strong model twice for one answer is a classic cascade bug.
 
 **Degraded is a first-class outcome.** When escalation fails, the router returns the cheap answer with `degraded=True` and the caller decides: caveat, review queue, or retry. Raising would turn a quality problem into an availability problem.
 
-**The router checks what actually served the request.** `model_mismatch` compares `completion.model` with the pinned `model_id` of the alias that answered. It costs one string comparison and catches a layering bug the capability check cannot see: a capability-changing fallback configured inside a `ModelGateway`, below the router, where no capability check runs. `test_model_mismatch_below_the_router_is_detected` simulates exactly that. Alert on the attribute rather than raising, because the answer may be fine and the fix is configuration, not a failed request.
+**The router checks what actually served the request.** The `mismatch` line compares `completion.model` with the pinned `model_id` of the alias that answered and stores it as `model_mismatch` on the result. It costs one string comparison and catches a layering bug the capability check cannot see: a capability-changing fallback configured inside a `ModelGateway`, below the router, where no capability check runs. `test_model_mismatch_below_the_router_is_detected` (on disk) simulates exactly that. Alert on the attribute rather than raising, because the answer may be fine and the fix is configuration, not a failed request.
 
-**A disabled cascade is still a cascade.** When a route's escalation target has a hard gap for this request (an image request on a route whose strong model is text-only), the router disables escalation and records why. It still runs the validator and confidence check on the answer, and marks a failing answer `degraded`, which `test_disabled_escalation_marks_low_confidence_answer_degraded` pins down. Otherwise the route's quality bar would silently not apply to exactly the requests that can least afford it.
+**A disabled cascade is still a cascade.** When a route's escalation target has a hard gap for this request (an image request on a route whose strong model is text-only), the router disables escalation and records why. It still runs the validator and confidence check on the answer, and marks a failing answer `degraded`, which `test_disabled_escalation_marks_low_confidence_answer_degraded` (on disk) pins down. Otherwise the route's quality bar would silently not apply to exactly the requests that can least afford it.
 
-**The cascade evaluator separates collection from simulation.** `collect_outcomes` runs each model once per case. `simulate` applies a threshold to that table with no model calls, so `sweep` can evaluate every distinct confidence value as a threshold for the cost of two passes. `_per_case` is the only place utility is defined; the false-accept branch charges the share caught downstream for both model calls plus rework, which is how the warning about misroutes becomes a number. The final test, `test_online_router_matches_offline_simulation`, runs the real router over all sixty tickets and checks that its accuracy, escalation rate, and cost equal the offline prediction.
+**The cascade evaluator separates collection from simulation.** `collect_outcomes` runs each model once per case. `simulate` applies a threshold to that table with no model calls, so `sweep` can evaluate every distinct confidence value as a threshold for the cost of two passes. `_per_case` is the only place utility is defined; the false-accept branch charges the share caught downstream for both model calls plus rework, which is how the warning about misroutes becomes a number. The last test in the excerpt, `test_online_router_matches_offline_simulation`, runs the real router over all sixty tickets and checks that its accuracy, escalation rate, and cost equal the offline prediction.
 
 ## Production considerations
 
@@ -1456,8 +754,7 @@ Two of these deserve a dashboard of their own: escalation rate next to cost per 
 - **Choosing from a leaderboard.** Public benchmarks measure someone else's distribution. Run your evaluation set.
 - **One model for everything.** The strongest model as a universal default overpays on easy traffic by an order of magnitude and often has worse latency than the task needs.
 - **Tuning the router on router accuracy.** It weighs a wasted escalation the same as a shipped wrong answer. Optimize utility with real error prices.
-- **Trusting self-reported confidence without measuring calibration.** Bin it, compute the gap, and count the confident errors that no threshold can catch.
-- **Calling floating model names.** Behavior changes without a deploy, and traces cannot tie a regression to a version.
+- **Pricing self-hosting at peak throughput.** A GPU node costs the same idle or busy. Compare cost per token at your measured average utilization, plus the people who run it.
 - **Comparing candidates on point estimates from small sets.** Sixty cases give intervals around fifteen points wide. Use lower bounds and paired counts.
 - **Testing the cascade only offline.** If the live router does not reproduce the simulated numbers, the sweep's numbers are untested. Check them against each other.
 - **Escalating twice.** When the fallback is the escalation target, a naive cascade pays the strong model again for the same answer.
@@ -1468,7 +765,7 @@ Two of these deserve a dashboard of their own: escalation rate next to cost per 
 
 **Escalation storm.** The cheap model's confidence distribution shifts (a prompt change, a new ticket type, a model update) and most traffic escalates. Telemetry: escalation rate on a cascade route jumps; cost per request and p95 latency rise together while quality is unchanged. Test: alert on escalation rate against its baseline; re-run the calibration table on every change to the cheap model or its prompt.
 
-**Overconfident cheap model.** Confident errors pass every threshold. Telemetry: errors concentrated in the top confidence bin of the calibration table; raising the threshold buys little quality for large cost. Remedy: a validator or a better confidence signal, not a higher threshold. The sweep shows this as a flat quality curve against escalation rate.
+**Overconfident cheap model.** Self-reported confidence was trusted without a calibration table, and confident errors pass every threshold. Telemetry: errors concentrated in the top confidence bin of the calibration table; raising the threshold buys little quality for large cost. Remedy: a validator or a better confidence signal, not a higher threshold. The sweep shows this as a flat quality curve against escalation rate.
 
 **Fallback truncation.** During a primary outage, requests go to a fallback with a smaller window and some layer truncates the prompt to fit. Telemetry: answers lose citations or contradict evidence only while the primary is down; prompt token counts on the fallback cluster at its window size. Test: a capability-aware router makes this impossible by construction; `test_oversized_prompt_skips_the_small_model` checks it.
 
@@ -1480,7 +777,7 @@ Two of these deserve a dashboard of their own: escalation rate next to cost per 
 
 **Router drift.** The classifier was fit on last quarter's traffic. Telemetry: the route distribution shifts without a deploy; classifier confidence drifts down and more traffic falls to the default route. Test: track the share of default-route decisions and the classifier's confidence histogram; re-label a monthly sample.
 
-**Alias drift.** An alias was repointed to a new version without re-evaluation, or a provider changed a floating name. Telemetry: quality or format-error rate changes at a point in time that matches no deploy; the pinned version attribute changed. Test: a release gate that re-runs the selection harness when any pin changes.
+**Alias drift.** An alias was repointed to a new version without re-evaluation, or it points at a floating provider name that changed underneath it, so behavior changes without a deploy. Telemetry: quality or format-error rate changes at a point in time that matches no deploy; the pinned version attribute changed. Test: a release gate that re-runs the selection harness when any pin changes.
 
 **Cascade latency tail.** The mean improves, the p95 gets worse. Telemetry: latency histogram becomes bimodal; p95 equals cheap plus strong latency. Test: include p95 in the sweep, as `cascade_eval` does, and set a ceiling on it in the policy choice.
 
@@ -1508,9 +805,26 @@ Test the router at four levels.
 
 **Cascade evaluation.** Collect outcomes once, sweep thresholds, choose by utility with the product's error prices, and keep the calibration table. Re-run when either model, the prompt, or the confidence signal changes. Report the false-accept and false-escalation rates next to utility so a reviewer can see why a threshold was chosen.
 
-**Online consistency and monitoring.** Check that the live router reproduces the offline prediction on the same set, as the last test does. In production, sample routed requests for labeling per route, compare each route's live quality with its offline number, and evaluate each route separately: a global quality metric averages a healthy general route with a failing cascade. Shadow evaluation (see the migration procedure) is the safest way to measure a new threshold or a new pin on real traffic before switching.
+**Online consistency and monitoring.** Check that the live router reproduces the offline prediction on the same set, as `test_online_router_matches_offline_simulation` does. In production, sample routed requests for labeling per route, compare each route's live quality with its offline number, and evaluate each route separately: a global quality metric averages a healthy general route with a failing cascade. Shadow evaluation (see the migration procedure) is the safest way to measure a new threshold or a new pin on real traffic before switching.
+
+## Before you ship
+
+- [ ] Every model reference in application code is a catalog alias, and every alias resolves to a pinned, versioned identifier (no floating names).
+- [ ] Each routed alias has a recorded selection run (evaluation set version, prompt version, pin, results) that meets the quality floor on its interval lower bound and the latency ceiling at p95.
+- [ ] Per-slice results exist for the hard and high-stakes slices, with a floor on each, not only an overall score.
+- [ ] The data-zone rule is first in the rule list, and a test proves a restricted request raises rather than reaching a model outside its zone.
+- [ ] Tests prove that tool-carrying, image-carrying, and oversized requests never reach a model without the tools, vision, or window they need.
+- [ ] Each cascade threshold was chosen by utility with error prices agreed with the product owner, and the calibration table for its confidence signal is stored with the decision.
+- [ ] A test checks that the live router reproduces the offline simulation's accuracy, escalation rate, and cost on the evaluation set.
+- [ ] Every reasoning-effort route has a token ceiling.
+- [ ] Gateways below the router contain only same-capability retries; every capability-changing fallback lives in a route.
+- [ ] Deprecation dates are tracked for every pin, with a warning weeks before retirement, and "model not found" stays non-retryable through every proxy layer.
+- [ ] Alerts are live for route mix, escalation rate, degraded rate, model mismatch, per-alias error attempts, and cost per request by route.
+- [ ] For self-hosted aliases, the evaluated configuration matches the deployed one (quantization, inference server version), and cost was computed at measured utilization.
 
 ## Exercises
+
+**Start here:** K2, K4, E1, P2, D1 (about 4 hours). The rest go deeper.
 
 ### Knowledge questions
 
@@ -1536,15 +850,17 @@ Test the router at four levels.
 
 **E4.** Your cascade's mean latency is 520 ms and its p95 is 2,050 ms. The SLO is p95 under 1,500 ms. List three design changes that could meet the SLO and the cost or quality price of each.
 
+**E5.** Northwind classifies about 3 million tickets a month, each about 600 input and 40 output tokens, mostly during business hours. A team proposes moving `nw-general`'s share of that traffic to a self-hosted open-weight model. List the numbers you need to compare the two options, explain how traffic shape changes the answer, and name the evaluation you would run before any cost comparison matters.
+
 ### Practical exercises
 
-**P1.** Add a third cascade signal to the router: agreement. Call the small model twice (the second time with a different temperature, or a second small model) and escalate when the labels differ. Extend `cascade_eval` to simulate it from collected outcomes and compare its utility with the self-reported confidence signal at two error prices.
+**P1.** (about 2 hours) Add a third cascade signal to the router: agreement. Call the small model twice (the second time with a different temperature, or a second small model) and escalate when the labels differ. Extend `cascade_eval` to simulate it from collected outcomes and compare its utility with the self-reported confidence signal at two error prices.
 
-**P2.** Make the cascade evaluation slice-aware: compute utility per priority (P1 to P4) with a different silent-error cost per priority, choose a threshold per slice, and extend the router so a route's `min_confidence` can depend on request metadata. Show that per-slice thresholds beat a single threshold on the ticket set.
+**P2.** (about 2 hours) Make the cascade evaluation slice-aware: compute utility per priority (P1 to P4) with a different silent-error cost per priority, choose a threshold per slice, and extend the router so a route's `min_confidence` can depend on request metadata. Show that per-slice thresholds beat a single threshold on the ticket set.
 
-**P3.** Add a `deprecation_date` field to `ModelProfile` and a startup check that warns when any routed alias's pin expires within a configurable window and fails when it has passed. Add tests for both.
+**P3.** (about 60 min) Add a `deprecation_date` field to `ModelProfile` and a startup check that warns when any routed alias's pin expires within a configurable window and fails when it has passed. Add tests for both.
 
-**P4.** Extend the selection harness to evaluate effort levels as separate candidates: given a client and a list of effort levels, produce one row per level with its own quality, latency, and cost, and include them in the Pareto front.
+**P4.** (about 90 min) Extend the selection harness to evaluate effort levels as separate candidates: given a client and a list of effort levels, produce one row per level with its own quality, latency, and cost, and include them in the Pareto front.
 
 ### Debugging exercises
 
@@ -1558,7 +874,7 @@ Test the router at four levels.
 
 ## Key takeaways
 
-- Choose models from a task-level evaluation on your own workload, in the configuration you will ship; benchmarks and vendor claims are hypotheses to test.
+- Choose models from a task-level evaluation on your own workload, in the configuration and deployment you will ship; benchmarks and vendor claims are hypotheses to test, and self-hosting pays only at sustained utilization or when data must stay inside.
 - Separate hard constraints (context, tools, vision, data zone, output length) from trade-off axes (quality, latency, cost, reliability); filter by the first, optimize over the second.
 - Read candidates as a Pareto front, choose the cheapest that meets the quality floor on its lower bound, and use paired counts to see whether two models fail on different cases.
 - Treat reasoning effort as a per-route parameter with a budget cap, evaluated by outcome, never by the length of the reasoning.
@@ -1568,3 +884,11 @@ Test the router at four levels.
 - Fallbacks must be capability-aware: never fall back to a model that lacks the window, tools, modality, or data zone the request needs, and fail loudly when nothing fits.
 - Reference models by catalog aliases that resolve to pinned versions, record the pinned version on every trace, alert when the model that answered is not the pin the router planned for, and start every migration well before a pin's retirement date.
 - Verify that the live router reproduces the offline simulation, then monitor route mix, escalation rate, and per-route quality in production.
+
+## Further reading
+
+- *On Calibration of Modern Neural Networks* (Guo et al., 2017): the reliability diagram and expected calibration error behind every cascade threshold in this chapter.
+- *Self-Consistency Improves Chain of Thought Reasoning in Language Models* (Wang et al., 2023): the origin of agreement across samples as a signal, the basis of exercise P1.
+- *Holistic Evaluation of Language Models (HELM)* (Liang et al., 2022): why a single benchmark number is a poor basis for choosing a model, and what multi-metric, scenario-based comparison looks like.
+- *Trustworthy Online Controlled Experiments* (Kohavi, Tang, and Xu, 2020): the discipline behind shadowing, canaries, and reading online results when you repoint an alias or change a threshold.
+- *Efficiently Scaling Transformer Inference* (Pope et al., 2023): the serving cost model behind the self-hosting arithmetic, developed further in Chapter 34.

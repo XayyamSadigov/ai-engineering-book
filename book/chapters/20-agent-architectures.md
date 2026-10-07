@@ -12,27 +12,29 @@ Once one agent loop works, every request for more (parallel checks, specialist a
 
 **Prerequisites:** Chapters 17 (workflows, fan-out, the ladder from chain to agent) and 19 (`AgentRuntime`, budgets, Definition of Done, approval, replay). | **Code:** `book/projects/examples/ch20/` and `book/projects/p5-incident-agent/` (run: `cd book/projects/examples/ch20 && pytest -q`, then `cd ../../p5-incident-agent && pytest -q`) | **Builds:** Project 5, a planner-executor that searches runbooks and past incidents, reads metrics and deploy history, writes a cited report in an evaluator-optimizer loop, and posts it only after a human approves.
 
+**First reading:** Why this matters, Mental model, The patterns at a glance, Choosing and composing, The shared pieces, ReAct, Planner-executor and replanning, Reflection, Evaluator-optimizer, How it works, The deterministic Definition of Done and the deviation rules, Code walkthrough, Before you ship. **Deep dives** (skip on a first pass): the Router, Supervisor and workers, Hierarchical agents, Parallel agents, and Sequential workflows sections; Architecture; the other Implementation subsections; Production considerations.
+
 ## Why this matters
 
-Chapter 19 gave you a single, well-behaved loop. Production rarely stops there. The on-call team wants the incident agent to check three systems at once, a product manager wants a "triage agent" that hands work to specialists, someone reads about self-critique and wants the agent to review its own drafts. Each request is a change of architecture, and each architecture changes four numbers at once: how often the task succeeds, how many model calls it takes, how long the user waits, and how hard the next incident review will be.
+Chapter 19 gave you one well-behaved loop. Then the on-call team wants the incident agent to check three systems at once, a product manager wants a "triage agent" that hands work to specialists, and someone wants the agent to review its own drafts. Each request changes four numbers at once: how often the task succeeds, how many model calls it takes, how long the user waits, and how hard the next incident review will be.
 
-Teams tend to get this wrong in one of two ways. The first is to treat architecture as a capability upgrade: a supervisor with five specialists must be smarter than one agent, reflection must improve quality, a plan must beat improvisation. None of these is true in general. A supervisor adds a routing decision that can be wrong and a hand-off that loses context; reflection without new evidence reinforces the original mistake; a plan written before the first observation can go stale by step two. The second mistake is never measuring the chosen design against the simpler alternative, so a design that costs four times as much as a plain ReAct loop survives unexamined.
+Teams get this wrong in two ways. The first treats architecture as a capability upgrade, but a supervisor adds a routing decision that can be wrong and a hand-off that loses context; reflection without new evidence reinforces the original mistake; a plan written before the first observation can go stale by step two. The second is never measuring against the simpler alternative, so a design costing four times a plain ReAct loop survives unexamined.
 
-The principle this chapter follows: choose a pattern by the task's dependencies and by how its output can be verified, and add structure only when failure analysis justifies it. This chapter turns that principle into a working method. You will see what each pattern buys, what it costs, what breaks, and how to tell from a trace which of those is happening.
+The principle: choose a pattern by the task's dependencies and by how its output can be verified, and add structure only when failure analysis justifies it.
 
 ## Mental model
 
 > **Mental model:** An architecture decides who owns each decision, the model or the code, and how many model calls sit on the critical path. Every pattern is a different answer to those two questions.
 
-Draw any agent system as a set of decisions: which tool next, which specialist, what the plan is, whether the answer is good enough, whether to try again, whether to stop. For each decision, ask who makes it. In a ReAct loop the model makes almost all of them inside one context. A router moves one decision (which specialist) to the front and makes it once. A planner-executor moves "what are the steps" out of the loop into a reviewable artifact and gives "when to change the plan" to deterministic rules. A supervisor turns delegation into a tool call the harness can count and limit. An evaluator-optimizer gives the "is it good enough" decision to an independent evaluator and the "try again or stop" decision to a controller in code.
+Draw any agent system as a set of decisions (which tool next, which specialist, what the plan is, whether the answer is good enough, whether to stop) and ask who makes each. In a ReAct loop the model makes almost all of them inside one context. A router moves "which specialist" to the front and makes it once. A planner-executor moves "what are the steps" into a reviewable artifact and gives "when to change the plan" to deterministic rules. A supervisor turns delegation into a tool call the harness can count. An evaluator-optimizer gives "is it good enough" to an independent evaluator and "try again or stop" to code.
 
-The second question is arithmetic. Every model call on the critical path adds latency and an independent chance of error, and every call adds cost whether or not it is on the critical path. Chapter 17 showed that chains multiply success probabilities; agent architectures do the same, with the extra twist that the number of calls is itself a random variable. When you look at a proposed architecture, count the calls in the best case, the typical case, and the worst case allowed by its budgets. If you cannot state the worst case, the architecture has an unbounded loop somewhere, and production traffic will eventually reach it.
+The second question is arithmetic. Every call on the critical path adds latency and a chance of error, and every call adds cost. As in Chapter 17's chains, success probabilities multiply, except that here the number of calls is itself random. Count the calls in the best, typical, and worst case the budgets allow. If you cannot state the worst case, there is an unbounded loop somewhere, and production traffic will reach it.
 
-One more framing keeps the patterns from blurring together: none of them requires a new loop. Each is a composition of bounded `AgentRuntime` runs, single model calls, and ordinary code. If your implementation of a pattern contains its own "call the model, run the tools, append the result" loop, it has reimplemented the harness without the budgets, policy, events, and replay that make the harness safe. Every pattern in this chapter builds its agents on `AgentRuntime`, through the shared `make_agent` factory, and none of them loops over tool calls itself.
+No pattern needs a new loop. Each composes bounded `AgentRuntime` runs, single calls, and code; a pattern with its own "call the model, run the tools" loop has rebuilt the harness without its budgets, policy, events, and replay.
 
 ## Core concepts
 
-This section starts with the decision: the nine patterns in one line each, a table of what each costs and how it fails, and a procedure for choosing. The pattern sections after it are reference material, one per pattern, each with its structure, when to use it, failure modes, cost profile, and evaluation.
+This section starts with the decision: the nine patterns in one line each, a table of costs, and a procedure for choosing. The pattern sections after it are reference, each with structure, when to use it, failure modes, cost, and evaluation.
 
 ### The patterns at a glance
 
@@ -41,32 +43,32 @@ This section starts with the decision: the nine patterns in one line each, a tab
 - **Planner-executor:** a typed plan is written first; each step runs as a small agent; rules decide when to replan.
 - **Supervisor and workers:** an agent whose only tools delegate self-contained sub-tasks to worker agents.
 - **Hierarchical agents:** supervisors whose workers are other supervisors.
-- **Reflection:** a critic inside the Definition of Done rejects drafts, and the same agent revises in context.
+- **Reflection:** a critic inside the Definition of Done (DoD) rejects drafts, and the same agent revises in context.
 - **Evaluator-optimizer:** controller code loops a generator against an independent evaluator and keeps the best candidate.
 - **Parallel agents:** independent branch agents run concurrently and a fan-in policy merges them.
 - **Sequential workflow with agents inside:** a fixed chain of steps where only the open-ended step is an agent.
 
-The scripted comparison in `compare.py` runs all nine patterns on one Northwind task ("Trackline lookups are slow; find the likely cause and the documented fix") with the same fixture tools and a scripted model, and counts calls, runs, tool calls, and tokens. The counts show each structure's shape, not real costs or quality; on a real provider the ratios move, but the ordering rarely does.
+`compare.py` runs all nine patterns on one Northwind task ("Trackline lookups are slow; find the likely cause and the documented fix") with the same fixture tools and a scripted model. The counts show each structure's shape, not real costs; on a real provider the ratios move, but the ordering rarely does.
 
-| Pattern | Who decides the next step | Model calls (scripted, illustrative) | Agent runs | Tool calls | Critical-path latency | Main failure mode | Primary evaluation |
-|---|---|---|---|---|---|---|---|
-| ReAct | model, every step | 5 | 1 | 4 | sum of steps | wandering, context growth | trajectory metrics, termination reasons |
-| Router | rules, then model once; specialist after | 6 | 1 | 4 | one short call plus specialist | misroute, mixed requests | route confusion matrix, per-route success |
-| Planner-executor | planner up front; rules decide replans | 8 | 3 | 3 | plan + steps + synthesis | stale plan, replan thrash | plan validity, replan benefit, per-step success |
-| Supervisor/worker | supervisor model via delegate tools | 9 | 3 | 6 | supervisor steps plus workers | redundant delegation, hand-off loss | delegation accuracy, single-agent baseline |
-| Hierarchical | supervisors at every level | 13 | 5 | 8 | grows with depth | telephone effect, spawn explosion | per-level metrics, flat-supervisor baseline |
-| Reflection | model, critic in the DoD | 8 | 1 | 4 | plus one critic and one revision per round | self-agreement, token burn | first draft vs accepted, critic calibration |
-| Evaluator-optimizer | controller in code, independent evaluator | 12 | 2 | 8 | rounds times generator | Goodhart, plateau | pass rate by round, evaluator false-pass rate |
-| Parallel | code fans out; aggregator merges | 7 | 3 | 3 | slowest branch plus merge | contradictions, silent partials | partial-answer rate, p95 vs sequential |
-| Sequential | code, fixed order; agent inside one step | 7 | 1 | 4 | sum of steps | error propagation, rigidity | per-step metrics, path distribution |
+| Pattern | Who decides the next step | Model calls (scripted, illustrative) | Agent runs | Tool calls | Critical-path latency |
+|---|---|---|---|---|---|
+| ReAct | model, every step | 5 | 1 | 4 | sum of steps |
+| Router | rules, then model once; specialist after | 6 | 1 | 4 | one short call plus specialist |
+| Planner-executor | planner up front; rules decide replans | 8 | 3 | 3 | plan + steps + synthesis |
+| Supervisor/worker | supervisor model via delegate tools | 9 | 3 | 6 | supervisor steps plus workers |
+| Hierarchical | supervisors at every level | 13 | 5 | 8 | grows with depth |
+| Reflection | model, critic in the DoD | 8 | 1 | 4 | plus one critic and one revision per round |
+| Evaluator-optimizer | controller in code, independent evaluator | 12 | 2 | 8 | rounds times generator |
+| Parallel | code fans out; aggregator merges | 7 | 3 | 3 | slowest branch plus merge |
+| Sequential | code, fixed order; agent inside one step | 7 | 1 | 4 | sum of steps |
 
-Each row is a trade: each extra call must buy something specific, such as least privilege (router), a reviewable plan and linear token growth (planner-executor), context isolation (supervisor), or quality, which the two loops deliver only when their feedback carries information the generator lacked.
+Each extra call must buy something specific: least privilege (router), a reviewable plan and linear token growth (planner-executor), context isolation (supervisor), or quality, which the two loops deliver only when their feedback carries information the generator lacked.
 
 ### Choosing and composing
 
-A decision procedure that works in practice starts from the simplest design and adds structure only in response to a named failure, which mirrors Chapter 17's ladder:
+Start from the simplest design and add structure only in response to a named failure, as in Chapter 17's ladder:
 
-1. If one call with retrieval and validation solves it, stop (Chapters 6 and 13; Chapter 1 covers when not to build an agent at all).
+1. If one call with retrieval and validation solves it, stop (Chapter 1 covers when not to build an agent).
 2. If the stages are known, build a sequential workflow. Make one stage an agent only if its path cannot be enumerated.
 3. For that agent, start with ReAct, good tool descriptions, and a real Definition of Done.
 4. If requests split into categories needing different tools or permissions, put a router in front.
@@ -75,11 +77,11 @@ A decision procedure that works in practice starts from the simplest design and 
 7. If independent sub-tasks dominate latency, fan them out.
 8. Only if sub-tasks need isolated contexts or separate permission domains, and a single-agent baseline loses, use a supervisor. Use a hierarchy only when a flat supervisor demonstrably cannot choose well.
 
-Real systems compose patterns, which is fine when each layer is bounded and measured separately. Project 5 is a sequential workflow of a planner-executor, an evaluator-optimizer, and an approval-gated action, in which every agent is a bounded `AgentRuntime` with one tool.
+Real systems compose patterns, each layer bounded and measured separately. Project 5 is a sequential workflow of a planner-executor, an evaluator-optimizer, and an approval-gated action.
 
 ### The shared pieces
 
-All nine patterns live in one small package. A few helpers keep them uniform: every agent is built by one factory, every system prompt carries a role tag so traces and test models can tell agents apart, and a metering wrapper counts calls and tokens per role without touching pattern code. Every pattern returns a `PatternResult` holding the answer, every agent run it made, and pattern-specific data such as a plan history or a delegation ledger.
+All nine patterns live in one small package. Every agent is built by one factory, every system prompt carries a role tag so traces and test models can tell agents apart, and a metering wrapper counts calls and tokens per role. Every pattern returns a `PatternResult`.
 
 ```python
 # path: book/projects/examples/ch20/patterns/common.py  (excerpt; full file on disk)
@@ -106,7 +108,7 @@ def make_agent(
                         config=config, principal=principal)
 ```
 
-The tools in the pattern examples are a tiny in-memory Northwind world (`fixtures.py`): `search_runbooks`, `search_policies`, `search_incidents`, `get_service_status`, and `query_metrics`. Each returns text that starts every fact with a citation key such as `[it-vpn-access-runbook]` or `[metric:pg-logi-prod.seq_scans_per_s]`, which is what `citations_grounded` from Chapter 19 checks against. Project 5 replaces the fixtures with real retrieval; the patterns do not change. Tests use a `Script` helper that turns a dictionary of per-role functions into a `FakeLLM` handler, so a test of a supervisor with two workers reads like three small functions rather than one tangled script.
+The tools are a tiny in-memory Northwind world (`fixtures.py`) whose results start every fact with a citation key such as `[metric:pg-logi-prod.seq_scans_per_s]`, which Chapter 19's `citations_grounded` checks. Tests use a `Script` helper that maps each role to a small function.
 
 ### ReAct
 
@@ -121,7 +123,7 @@ flowchart LR
     V -->|accepted| A[answer]
 ```
 
-**Structure.** ReAct, short for reasoning and acting, interleaves a decision, an action, and an observation until the objective is met. One model sees the whole transcript at every step and picks the next tool call or the final answer. `AgentRuntime` is a ReAct loop by construction, with the safety parts built in, so the pattern-level code is a configuration: which tools, which instructions, which budget, which Definition of Done.
+**Structure.** ReAct, short for reasoning and acting, interleaves a decision, an action, and an observation until the objective is met. One model sees the whole transcript and picks the next tool call or the final answer. `AgentRuntime` is a ReAct loop by construction, so the pattern is just configuration.
 
 ```python
 # path: book/projects/examples/ch20/patterns/react.py  (excerpt; full file on disk)
@@ -140,17 +142,17 @@ REACT_INSTRUCTIONS = (
                          detail=run.stop_reason.value if run.stop_reason else "")
 ```
 
-**When to use it.** ReAct is the default agent: the next action depends on the last observation, the horizon is a handful of tool calls, the tool set fits one prompt, and one context window holds the whole investigation. Most features that justify an agent at all are best served by a ReAct loop with good tools and a real Definition of Done.
+**When to use it.** ReAct is the default agent: the next action depends on the last observation, the horizon is a handful of tool calls, the tool set fits one prompt, and one context window holds the whole investigation. It has the fewest moving parts, loses nothing in hand-offs, and its trace reads top to bottom.
 
-**Advantages.** The fewest moving parts and model calls for adaptive work; nothing is lost in hand-offs; the trace reads top to bottom.
+**Failure modes.** *Wandering*: without a clear completion criterion the model keeps gathering evidence until `REPEATED_ACTION`, `NO_PROGRESS`, or a budget stops it. *Local myopia*: on long tasks the model optimizes the next step and answers a narrower question than the one asked. *Context growth*: late steps are slow, expensive, and prone to ignoring early evidence. *Premature completion*: answering after one search, which the Definition of Done exists to reject.
 
-**Failure modes.** *Wandering*: without a clear completion criterion the model keeps gathering evidence; the harness catches it as `REPEATED_ACTION`, `NO_PROGRESS`, or a budget stop, and the termination-reason distribution shows it. *Local myopia*: on long tasks the model optimizes the next step and loses the global objective, visible as a long run that ends with an answer to a narrower question than the one asked. *Context growth*: the transcript grows with every observation, so late steps are slow, expensive, and prone to ignoring early evidence. *Premature completion*: answering after one search, which the Definition of Done exists to reject.
+**Cost profile.** Calls equal steps, typically tool calls plus one. Input tokens grow roughly quadratically with steps because each call resends the transcript. This chapter reuses Chapter 19's worked table ("Observations and truncation"): with its illustrative P = 1,500-token prefix and d = 600 tokens added per step, ReAct uses about 13,500 input tokens at 5 steps, 42,000 at 10, and 144,000 at 20. Latency is the sum of step latencies.
 
-**Cost profile.** Calls equal steps, typically the number of tool calls plus one. Input tokens grow roughly quadratically with steps because each call resends the transcript; Chapter 19 works that arithmetic in full. The reference numbers this chapter compares against (illustrative: a 1,500-token prompt, 600-token observations) are about 18,000 input tokens over six steps and about 57,600 over twelve. Latency is the sum of step latencies, all on the critical path.
-
-**Evaluation.** Final-answer quality with the task's own metric, plus trajectory metrics from the event log: tool-selection accuracy against a labeled set, redundant calls per run, steps to completion, and the distribution of termination reasons. A rising share of `NO_PROGRESS` stops after a prompt change is a regression even when answer quality on completed runs looks flat.
+**Evaluation.** Answer quality plus trajectory metrics: tool-selection accuracy, redundant calls, steps to completion, and termination reasons. A rise in `NO_PROGRESS` stops after a prompt change is a regression even if completed answers look fine.
 
 ### Router
+
+> **Deep dive.** Routing requests to specialist agents with a closed label set; skip on a first reading.
 
 ```mermaid
 flowchart LR
@@ -162,7 +164,7 @@ flowchart LR
     C -->|low confidence or invalid| F[fallback: human queue]
 ```
 
-**Structure.** A router classifies the request once and hands it to exactly one specialist agent with its own tools, prompt, and budget. This is the agent-level cousin of Chapter 7's model router, which picks a model; here the route picks a whole configured agent. The implementation runs deterministic rules first, asks the model only when no rule matches, constrains the model's answer to a closed set of labels through the response schema, and sends low-confidence or malformed decisions to a fallback instead of to the nearest-sounding specialist.
+**Structure.** A router classifies the request once and hands it to exactly one specialist agent with its own tools, prompt, and budget, the agent-level cousin of Chapter 7's model router. Rules run first; the model is asked only when none matches, the response schema closes its label set, and low-confidence or malformed decisions go to a fallback.
 
 ```python
 # path: book/projects/examples/ch20/patterns/router.py  (excerpt; full file on disk)
@@ -194,17 +196,13 @@ class AgentRouter:
     # ... run(): classify, then one make_agent(...) run of the chosen specialist, or a fallback result
 ```
 
-The self-reported confidence is a weak signal; models are often confidently wrong. Treat the threshold as a tunable that you calibrate on a labeled set, and prefer rules where the category is obvious. The same rule applies to supervisors later in the chapter: route obvious cases with deterministic rules, and use the model only where the decision needs semantic judgment.
+Self-reported confidence is a weak signal, so calibrate the threshold on a labeled set and prefer rules where the category is obvious.
 
-**When to use it.** Requests fall into a few categories that need genuinely different tools, permissions, or instructions: HR questions, IT access problems, and incident investigations at Northwind. The specialists can then be smaller, cheaper, and more tightly permissioned than one generalist with every tool.
+**When to use it.** Requests fall into a few categories that need genuinely different tools, permissions, or instructions: HR questions, IT access problems, and incident investigations at Northwind. Each specialist gets least privilege by construction (the HR specialist cannot see incident tools), for one extra call at most and none for rule-matched requests.
 
-**Advantages.** Least privilege by construction, since the HR specialist cannot see incident tools. Shorter prompts per specialist. Independent evaluation and ownership per route. One extra call at most, and zero for rule-matched requests.
+**Failure modes.** *Misroute*: a specialist run ending in `NO_PROGRESS` or `VERIFICATION_FAILED` after a marginal-confidence route. *Mixed requests*: "my VPN is broken and I need my PTO balance" belongs to two routes; a single-label router answers half. *Label drift*: a new category is forced into the closest old label. *Fallback flood*: a threshold set too high sends most traffic to humans.
 
-**Failure modes.** *Misroute*: the request lands with a specialist who lacks the tools, which shows as a specialist run ending in `NO_PROGRESS` or `VERIFICATION_FAILED` with a route whose confidence was marginal. *Mixed requests*: "my VPN is broken and I need to know my PTO balance" belongs to two routes; a single-label router answers half. *Label drift*: a new category appears in traffic and the router forces it into the closest old label. *Fallback flood*: a threshold set too high sends most traffic to humans.
-
-**Cost profile.** One classification call (often a small model), plus the specialist's run. Latency adds one short call before the first token of real work.
-
-**Evaluation.** Treat the router as a classifier (Chapter 24): a confusion matrix over routes on a labeled set, per-route precision and recall, the fallback rate, and accuracy as a function of the confidence threshold. Then measure end-to-end success per route, because a correct route to a weak specialist still fails.
+**Cost and evaluation.** One classification call (often a small model) plus the specialist's run. Treat the router as a classifier (Chapter 24): a confusion matrix over routes, the fallback rate, and accuracy as a function of the threshold. Then measure end-to-end success per route, because a correct route to a weak specialist still fails.
 
 ### Planner-executor and replanning
 
@@ -222,9 +220,9 @@ flowchart TD
     Q -->|empty| S[synthesize answer from ledger]
 ```
 
-**Structure.** A planner writes a bounded, typed plan before any tool runs. Each step then executes as its own small agent that sees only the tools that step names and only the findings it depends on. After each step, deterministic deviation rules decide whether the plan still holds; when a rule names a concrete deviation, the planner is consulted again with the completed steps, the remaining queue, and the reason, up to a replan budget. A final synthesis call writes the answer from the ledger of findings.
+**Structure.** A planner writes a bounded, typed plan before any tool runs. Each step executes as its own small agent that sees only the tools the step names and only the findings it depends on. After each step, deterministic deviation rules decide whether the plan still holds; when one names a deviation, the planner is consulted again with the completed steps, the remaining queue, and the reason, up to a replan budget. A final synthesis call writes the answer from the ledger of findings.
 
-Holding the plan as data is what makes it useful. It can be validated before anything runs (unknown tools, duplicate ids, dependencies on steps that do not run earlier, which also rules out cycles), shown to a human, logged, and diffed across runs. A useful plan has two properties: every step is verifiable, and the plan is bounded. "Research everything" is not a plan; "find three current policy documents, compare eligibility clauses, then produce a cited summary" is, because each step has an observable completion.
+A plan held as data can be validated before anything runs (unknown tools, duplicate ids, dependencies on steps that do not run earlier, which rules out cycles), shown to a human, and diffed. A useful plan is bounded and every step is verifiable (Chapter 19, "Reasoning and planning inside the loop").
 
 ```python
 # path: book/projects/examples/ch20/patterns/planner_executor.py  (excerpt; full file on disk)
@@ -263,23 +261,29 @@ class PlanStep(BaseModel):
         # ... one synthesis call writes the answer from the findings ledger
 ```
 
-Two methods stay on disk. `plan` asks for a `Plan` through the response schema, validates it, and allows one repair round that quotes the validation errors back before giving up. `execute` builds the step's agent with only the tools the step names, a Definition of Done that requires the first of them to have been called, and only the findings listed in `depends_on`. The loop above is the part to study: a deviation rule returns a reason or nothing, the reason goes to the planner, completed steps are never rerun, and every exit names why it stopped.
+In the loop, a deviation rule returns a reason or nothing, completed steps are never rerun, and every exit names why it stopped. On disk, `plan` allows one repair round that quotes validation errors back.
 
-**Replanning on deviation, not on every step.** A replan is a model call that can make things worse: it can drop a step that was about to succeed, reorder dependencies, or chase the latest observation at the expense of the goal. So the default is to keep executing the plan and consult the planner only when a rule names a meaningful deviation.
+**Replanning on deviation, not on every step.** A replan is a model call that can drop a step about to succeed, reorder dependencies, or chase the latest observation. So consult the planner only when a rule names a meaningful deviation. Useful rules are concrete and cheap: a step failed; a search returned nothing; a step revealed an entity the plan never mentions (Project 5's rule: an anomalous dependency no planned step examines); a precondition of a later step is now false. The planner sees the rule's reason string, which makes replans explainable in the trace.
 
-Useful rules are concrete and cheap: a step failed; a search returned nothing, so the plan's assumption about where to look was wrong; a step revealed an entity the plan never mentions (Project 5's rule: an anomalous dependency that no planned step examines); a precondition of a later step is now false. Each rule returns a reason string, and that reason is what the planner sees, which makes replans explainable in the trace. Treat a plan as a hypothesis about how the work will go; the deviation rules are the written-down conditions for revising it.
+**When to use it.** Long tasks where a reactive loop loses the objective, or steps that need review, different permissions, or their own budgets.
 
-**When to use it.** Longer tasks where a reactive loop loses the global objective; tasks where a human or a policy should review the steps before they run; tasks whose steps need different tools or permissions; and tasks where you want per-step budgets and per-step evaluation.
+**Failure modes.** *Stale plan*: the environment changed and no rule noticed; steps succeed mechanically but answer the wrong question. *Over-planning*: twelve steps for a three-step task. *Replan thrash*: a rule that fires too easily, so `replans` sits near the budget on most runs. *Lost context between steps*: `depends_on` was wrong. *Invalid plans*: caught by validation before execution.
 
-**Advantages.** A reviewable artifact before any side effect, least privilege per step, roughly linear token growth, per-step success rates, and a natural place to insert approval.
+**Cost profile.** One planning call, two calls per step (call the tool, report), one synthesis call, plus one per replan. Keep Chapter 19's d = 600 and assume a 700-token step prompt (the second call also carries the step's 600 tokens) and 1,500-token planning and synthesis calls. Each step then costs about 2,000 input tokens however many came before (illustrative):
 
-**Failure modes.** *Stale plan*: the environment changed after planning and no rule noticed, visible as steps that succeed mechanically but answer the wrong question. *Over-planning*: twelve steps for a three-step task, each paying a model call. *Replan thrash*: a rule that fires too easily, visible as `replans` near the budget on most runs. *Lost context between steps*: a step needs a finding it was not given because `depends_on` was wrong. *Invalid plans*: unknown tools or impossible targets, caught by validation before execution.
+| Steps | ReAct (Chapter 19's table) | Planner-executor |
+|---|---|---|
+| 5 | 13,500 | 13,000 |
+| 10 | 42,000 | 23,000 |
+| 20 | 144,000 | 43,000 |
 
-**Cost profile.** One planning call, two or so calls per step (call the tool, report), one synthesis call, plus one call per replan. Using the earlier illustrative numbers with 700-token step prompts, two calls per step (the second also carrying the step's 600-token observation), and 1,500-token planning and synthesis calls, six steps cost about 15,000 input tokens and twelve steps about 27,000, versus 18,000 and 57,600 for ReAct. Latency is higher than ReAct for short tasks because of the planning and synthesis calls, and lower for long tasks because each step's call is small.
+At five steps the two are even; the gap opens with length. Latency follows the same shape.
 
-**Evaluation.** Plan validity rate; plan quality judged against gold step sets or with a rubric; replan rate and, more importantly, whether replans helped (success on runs with a replan versus similar runs without); per-step success; and end-to-end success against a ReAct baseline on the same cases.
+**Evaluation.** Plan validity; plan quality against gold step sets; whether replans helped (success on runs with a replan versus similar runs without); per-step success; and end-to-end success against a ReAct baseline.
 
 ### Supervisor and workers
+
+> **Deep dive.** Delegation as a bounded tool call with a spawn budget; skip on a first reading.
 
 ```mermaid
 flowchart TD
@@ -296,9 +300,9 @@ flowchart TD
     SV --> L[(task ledger)]
 ```
 
-**Structure.** A supervisor is an agent whose only tools are "delegate to worker X." Each delegation starts a bounded child `AgentRuntime` with its own tools, prompt, budget, and Definition of Done. The supervisor sees only the worker's final answer, never its intermediate tokens, which is the context isolation that makes the pattern worth having. A ledger records every delegation. Child run ids are derived from the parent's (`supervisor.incident_analyst-1`), and the child's `GoalSet` metadata carries the parent run id and request id, so a trace can follow a request from parent to child.
+**Structure.** A supervisor is an agent whose only tools are "delegate to worker X." Each delegation starts a bounded child `AgentRuntime` with its own tools, prompt, budget, and Definition of Done. The supervisor sees only the worker's final answer; that context isolation is the point of the pattern. A ledger records every delegation, and child run ids derive from the parent's (`supervisor.incident_analyst-1`).
 
-The separator rule is book-wide: `.` (the `SEP` constant) separates levels and nothing else, `-` joins words inside a segment, and `/` is never used because the JSONL event store turns run ids into file names. A tool can then read a run's depth by counting dots, as `run_hierarchy` does, and Chapter 22's research team derives its ids the same way.
+The book-wide separator rule: `.` (the `SEP` constant) separates levels, `-` joins words inside a segment, and `/` is never used because the event store turns run ids into file names. Depth is the number of dots.
 
 ```python
 # path: book/projects/examples/ch20/patterns/supervisor.py  (excerpt; full file on disk)
@@ -324,21 +328,17 @@ class Supervisor:
         # ... wrapped as FunctionTool(f"delegate_{member.name}", ...) with a required "task" string
 ```
 
-Delegation as a tool call is the design choice everything else follows from: argument validation, the identical-call detector, the tool-call budget, and the event log all apply to hand-offs without extra code. The pattern adds only a spawn budget shared by the whole tree and a per-worker cap. A worker that fails returns a `semantic` failure observation, so the supervisor learns that the sub-task did not complete and why, rather than receiving an empty answer it might paraphrase as a finding.
+Because delegation is a tool call, validation, the identical-call detector, the tool-call budget, and the event log apply to hand-offs for free. The pattern adds only a tree-wide spawn budget and a per-worker cap. A failed worker returns a `semantic` failure observation, so the supervisor learns why instead of paraphrasing an empty answer as a finding.
 
-**When to use it.** Sub-tasks need different tools or permission domains (the analyst may read metrics; the runbook finder may read the incident archive); their intermediate work is large and the parent only needs a summary; or they can be evaluated and owned separately.
+**When to use it.** Sub-tasks need different tools or permission domains; their intermediate work is large and the parent only needs a summary; or they can be evaluated and owned separately. This is the minimal form; Chapter 22 adds what a team needs: typed envelopes ("Message contracts"), a shared budget ("Budgets at parent and child"), trace ids across processes ("Trace propagation"), and dispatch in code.
 
-The pattern here is the minimal, bounded form. Chapter 22 adds what it leaves out once workers become a team: typed task and result envelopes instead of a result string (section "Message contracts"), a shared token and cost pool split by reserve-then-settle instead of a fixed `Budget` per worker ("Budgets at parent and child"), trace ids that survive thread and process boundaries ("Trace propagation"), a supervisor whose dispatch logic is code rather than a model, and a benchmark that asks whether the extra agents were justified at all.
+**Failure modes.** *Redundant delegation*: the same question twice, reworded; the per-worker cap and ledger expose it. *Context loss at the hand-off*: "check the thing we discussed" means nothing to a worker. *Runaway spawning*: the spawn budget refuses with a permission error the supervisor can read. *Paraphrase drift*: the supervisor drops worker citations; requiring `citations_grounded` on its answer catches it, because worker answers are its observations.
 
-**Advantages.** Context isolation keeps the supervisor's transcript small. Each worker has least privilege and its own budget. Worker quality can be measured and improved independently.
-
-**Failure modes.** *Redundant delegation*: the supervisor asks two workers the same question, or one worker twice with reworded tasks that slip past the identical-call detector; the per-worker cap and the ledger make it visible. *Context loss at the hand-off*: the worker sees only the task string, so a task like "check the thing we discussed" fails; tasks must be self-contained, and the instructions say so. *Supervisor as single point of failure*: if the supervisor misreads a worker's answer, every worker's quality is wasted. *Runaway spawning*: a confused supervisor keeps delegating; the spawn budget refuses with a permission error the supervisor can read. *Paraphrase drift*: the supervisor rewrites worker findings and drops their citations; requiring `citations_grounded` on the supervisor's answer catches it, because the worker answers, citations included, are the supervisor's observations.
-
-**Cost profile.** Supervisor steps (delegations plus one) plus the sum of worker runs. Workers' tokens are often lower than a single agent's would be, since each sees a narrow task; the supervisor's are low because it sees summaries. The total is usually higher than ReAct on the same task, by the cost of the supervisor's own calls. Latency is the sum of sequential delegations unless the supervisor issues several delegate calls in one step and the workers run concurrently.
-
-**Evaluation.** Delegation accuracy (was the right worker chosen, judged against labels), redundant delegations per run, child failure rate and how the supervisor handled it, and cost and success against a single-agent baseline with the union of tools. The baseline comparison is the one that justifies the pattern; skip it and you will not know whether the supervisor paid for itself.
+**Cost and evaluation.** Supervisor steps (delegations plus one) plus the worker runs, usually more than ReAct by the supervisor's own calls. Measure delegation accuracy against labels, redundant delegations, and cost and success against a single-agent baseline with the union of tools; without that baseline you cannot tell whether the supervisor paid for itself.
 
 ### Hierarchical agents
+
+> **Deep dive.** Supervisors of supervisors and the limits they need; skip on a first reading.
 
 ```mermaid
 flowchart TD
@@ -352,7 +352,7 @@ flowchart TD
     end
 ```
 
-**Structure.** Hierarchical agents are supervisors whose members are other supervisors. No new mechanism is needed: a `Supervisor` is a valid member of another `Supervisor`. What the hierarchy adds is shared limits (one spawn budget and one event store for the whole tree), run ids that encode the path from the root (`ops.diagnostics-1.status_checker-1`), and a ledger that rolls up from every level.
+**Structure.** Supervisors whose members are other supervisors; a `Supervisor` is a valid member of another `Supervisor`, so no new mechanism is needed. The hierarchy adds shared limits (one `SpawnBudget`, by default ten agents and depth three, and one event store) and run ids that encode the path from the root (`ops.diagnostics-1.status_checker-1`).
 
 ```python
 # path: book/projects/examples/ch20/patterns/hierarchical.py  (excerpt; full file on disk)
@@ -363,17 +363,9 @@ def build_tree(llm: LLMClient, team: Team, *, spawn: SpawnBudget | None = None,
                       spawn=spawn, store=store)
 ```
 
-`run_hierarchy` (on disk) builds the tree with one shared `SpawnBudget` (ten agents, depth three by default), runs the root, and records the deepest run id it reached.
+**When to use it, and what it costs.** Rarely: only when one supervisor's menu of workers is too long to choose from and sub-teams share context the root does not need. It is the most expensive pattern (thirteen calls to ReAct's five in the table), and every supervisor failure multiplies by depth. *Telephone effect*: details and citations erode as each level summarizes. *Spawn explosion*: agents grow with branching factor to the power of depth, so the shared spawn budget is not optional. *Latency stacking*: each level adds at least two sequential calls.
 
-**When to use it.** Rarely, and only when the organization of the work is itself hierarchical: a task large enough that one supervisor's menu of workers would be too long to choose from well, with sub-teams whose members genuinely share context that the root does not need. A research system that splits "diagnose the platform" into "diagnose the database tier" and "diagnose the delivery tier," each with several specialists, is the shape that fits.
-
-**Advantages.** Each supervisor chooses among a short menu. Contexts stay small at every level. Teams can be developed and tested as units.
-
-**Failure modes.** Everything a supervisor can get wrong, multiplied by depth. *Telephone effect*: each level summarizes, so details and citations erode on the way up. *Spawn explosion*: the number of agents grows with branching factor to the power of depth; the shared spawn budget is not optional. *Diffuse responsibility*: when the answer is wrong, it is hard to tell which level failed without the derived run ids. *Latency stacking*: every level adds at least two sequential calls.
-
-**Cost profile.** The most expensive pattern in this chapter: in the scripted comparison below, the three-level tree made thirteen model calls where ReAct made five on the same task. Worst case grows multiplicatively with depth, so set depth and agent limits explicitly.
-
-**Evaluation.** As for a supervisor, at each level, plus depth and spawn distributions, citation survival from leaf to root (count citations in leaf answers that appear in the root answer), and end-to-end comparison against a flat supervisor with the same leaves. If the flat version is as good, flatten.
+**Evaluation.** Supervisor metrics per level, citation survival from leaf to root, and a comparison against a flat supervisor with the same leaves. If the flat version is as good, flatten. Chapter 22 ("Coordination patterns") covers multi-agent team structures.
 
 ### Reflection
 
@@ -387,7 +379,7 @@ flowchart LR
     N --> A
 ```
 
-**Structure.** Reflection adds a critique and revision stage: generate a candidate, evaluate it against criteria, improve it. In `agentkit` the natural place for the critic is the Definition of Done. A rejected final answer becomes a harness note that the model reads on its next step, with every observation still in its context, so a revision costs one more model call rather than a new run. The implementation runs objective checks first and calls the model critic only when they pass, and the critic sees the evidence the agent actually read.
+**Structure.** Reflection adds critique and revision. In `agentkit` the critic lives in the Definition of Done. A rejected answer becomes a harness note the model reads on its next step, with every observation still in context, so a revision costs one more call rather than a new run.
 
 ```python
 # path: book/projects/examples/ch20/patterns/reflection.py  (excerpt; full file on disk)
@@ -410,17 +402,13 @@ flowchart LR
         return Verdict(self.name, False, f"score {c.score}/5; problems: {c.problems}; fix: {c.fix}")
 ```
 
-This sets the design constraint: repeated self-critique without new evidence mostly consumes tokens, and a model critiquing itself in the same context tends to reinforce its own misconception. Reflection helps when the critique has access to an objective signal: tests, a schema, retrieved evidence, a compiler, an independent model. That is why the critic here is a separate call with its own prompt, why it sees the observations rather than only the answer, and why objective checks run first. A critic that only rereads the answer in the same context is the weakest version and rarely worth its tokens.
+Self-critique without new evidence mostly consumes tokens, and a model critiquing itself in the same context tends to reinforce its own misconception. Reflection helps when the critique has an objective signal: tests, a schema, retrieved evidence, an independent model. So the critic here is a separate call that sees the observations, after cheap objective checks.
 
-**When to use it.** The output has checkable properties the generator tends to miss on the first pass: a required element, a citation per claim, consistency with the retrieved evidence. Coding agents are the clearest case, where the "critic" is the test suite.
+**When to use it.** The output has checkable properties the generator tends to miss on the first pass: a required element, a citation per claim, consistency with the evidence. Coding agents are the clearest case, where the "critic" is the test suite.
 
-**Advantages.** Revision happens with full context and costs one step. Objective feedback is specific, which makes the revision targeted. The bound (`max_dod_rejections`) is enforced by the runtime.
+**Failure modes.** *Sycophantic critic*: near-100 percent first-pass acceptance. *Contrarian critic*: `VERIFICATION_FAILED` on answers a human rates as fine. *Self-agreement*: the same model agrees with itself; use a different prompt, ideally a different model. *Oscillation*: the revision fixes one criterion and breaks another. *Token burn*: each rejected round resends the full transcript.
 
-**Failure modes.** *Sycophantic critic*: the critic approves everything, visible as a near-100 percent first-pass acceptance with no quality change. *Contrarian critic*: it always finds something, visible as runs ending in `VERIFICATION_FAILED` with answers that a human rates as fine. *Self-agreement*: the same model in the same frame of mind agrees with itself; use a different prompt, ideally a different model. *Oscillation*: the revision fixes one criterion and breaks another. *Token burn*: each rejected round resends the full transcript.
-
-**Cost profile.** One critic call per final answer that passes the objective checks, plus one generator step per revision. The revision step is expensive because it carries the whole transcript; the critic call is moderate because it carries evidence and the answer.
-
-**Evaluation.** Measure the paired difference between first drafts and accepted answers on the same cases with an independent evaluator (Chapter 24's paired bootstrap). Track revisions per run, critic agreement with human labels, and the false-rejection rate. If accepted answers are not better than first drafts, the critic adds cost without adding quality.
+**Cost and evaluation.** One critic call per answer that passes the objective checks, plus one full-transcript generator step per revision. Measure the paired difference between first drafts and accepted answers on the same cases, judged independently (Chapter 24's paired bootstrap), plus revisions per run and critic agreement with humans. If accepted answers are not better than first drafts, the critic adds cost without quality.
 
 ### Evaluator-optimizer
 
@@ -435,7 +423,7 @@ flowchart TD
     CTL -->|round budget spent| BEST
 ```
 
-**Structure.** A generator produces a candidate, a separate evaluator scores it, and a controller in code decides: accept, revise with the evaluator's feedback, or stop. It differs from reflection in three ways. The evaluator is independent of the generator (different prompt, often a different model, ideally deterministic checks first). The controller owns the loop, so it can implement stop rules the runtime cannot: pass, round budget, and plateau, meaning no meaningful improvement for a set number of rounds. And the best candidate so far is always kept, so a late regression never replaces an earlier good draft.
+**Structure.** A generator produces a candidate, a separate evaluator scores it, and a controller in code decides: accept, revise with the feedback, or stop. It differs from reflection in three ways. The evaluator is independent (different prompt, often a different model, deterministic checks first). The controller owns the loop, so it can stop on pass, round budget, or plateau (no meaningful improvement for a set number of rounds). And the best candidate so far is kept, so a late regression never replaces a good draft.
 
 ```python
 # path: book/projects/examples/ch20/patterns/evaluator_optimizer.py  (excerpt; full file on disk)
@@ -465,21 +453,21 @@ flowchart TD
         return self._result(False, best, runs, f"round budget of {self.max_rounds} exhausted")
 ```
 
-Ordering the evaluator matters for cost and for signal. Deterministic checks are free, exact, and unambiguous, so they go first and their failures become the most useful feedback. The judge runs only on candidates that pass them, which saves its cost on known-bad drafts and keeps it focused on what rules cannot check. The judge itself is a measurement instrument that must be calibrated against humans (Chapter 24) before its threshold means anything.
+Deterministic checks go first because they are free and exact and make the most useful feedback; the judge runs only on candidates that pass them, and must be calibrated against humans (Chapter 24) before its threshold means anything.
 
-One subtlety separates this pattern from reflection in practice. Each round of `agent_generator` is a fresh agent run, so tools execute again unless you memoize read-only results or hand the generator the previous evidence. The scripted comparison shows it: the evaluator-optimizer made eight tool calls where ReAct made four, because round two re-gathered everything. Project 5 avoids this by separating evidence gathering (planner-executor, done once) from writing (the only thing the loop repeats).
+One subtlety: each round of `agent_generator` is a fresh agent run, so tools execute again unless you memoize read-only results or hand over the previous evidence. In the comparison table the evaluator-optimizer made eight tool calls to ReAct's four, because round two re-gathered everything. Project 5 avoids this by gathering evidence once (planner-executor) and repeating only the writing.
 
-**When to use it.** Quality criteria are explicit and checkable, first attempts often miss them, and feedback is actionable: reports with required structure, generated SQL that must parse and return the right columns, translations against a glossary, code against tests.
+**When to use it.** Criteria are explicit and checkable, first attempts often miss them, and feedback is actionable: reports with required structure, SQL that must parse, code against tests.
 
-**Advantages.** Independent verification; explicit, testable stop rules; best-so-far protection; a natural record of rounds for evaluation.
+**Failure modes.** *Goodhart*: the generator satisfies the evaluator rather than the task, for example with grounded but irrelevant citations. *Uninformative feedback*: "make it better" produces random changes and a plateau. *Evaluator drift*: pass rates move when the judge changes, not the quality. *Infinite polish*: without a plateau rule, the round budget goes on marginal gains.
 
-**Failure modes.** *Goodhart*: the generator learns to satisfy the evaluator rather than the task, for example by adding citations that are technically grounded but irrelevant. *Uninformative feedback*: "make it better" produces random changes and a plateau. *Evaluator drift*: the judge's model or prompt changes and pass rates move without any change in quality. *Infinite polish*: without a plateau rule, the loop spends the round budget on marginal gains.
+**Cost profile.** Rounds times generator cost, plus the judge on candidates that reach it. Rounds are sequential, so the round budget is also a latency budget.
 
-**Cost profile.** Rounds times generator cost, plus evaluator cost for candidates that reach the judge. With deterministic gating the judge often runs once. Latency is sequential across rounds, so the round budget is also a latency budget.
-
-**Evaluation.** Pass rate by round (how often round one passes, how often the loop eventually passes), the score trajectory, plateau rate, evaluator calibration against humans (agreement and Cohen's kappa), and cost per accepted output. Watch the share of accepted outputs whose quality a human rejects; that is the evaluator's false-pass rate and the number that bounds how much you can trust the loop.
+**Evaluation.** Pass rate by round, plateau rate, evaluator calibration against humans (agreement and Cohen's kappa), and cost per accepted output. The share of accepted outputs a human rejects is the evaluator's false-pass rate, which bounds how much you can trust the loop.
 
 ### Parallel agents: fan-out and fan-in
+
+> **Deep dive.** Branch agents in a thread pool and the fan-in policy; skip on a first reading.
 
 ```mermaid
 flowchart LR
@@ -494,7 +482,7 @@ flowchart LR
     J -->|not enough| FAIL[refuse to answer]
 ```
 
-**Structure.** Independent sub-tasks run as bounded agents concurrently; a fan-in step merges their results under an explicit completeness policy. Chapter 17 introduced fan-out over plain steps; here each branch is an agent with its own tools and budget. `AgentRuntime` is synchronous, so branches run in a thread pool whose size is the concurrency limit you set to respect provider rate limits. If you pass a tracer, note that `aie_core` links each span to its parent through context variables, and a thread pool does not inherit them; submit each branch through `contextvars.copy_context().run`, as Chapter 22's research team does, or every branch starts an orphan trace.
+**Structure.** Chapter 17's fan-out with an agent in each branch, merged by a fan-in step under an explicit completeness policy. `AgentRuntime` is synchronous, so branches run in a thread pool sized to respect provider rate limits. With a tracer, submit each branch through `contextvars.copy_context().run`, as Chapter 22 does; a thread pool does not inherit the context variables that link spans, so each branch would start an orphan trace.
 
 ```python
 # path: book/projects/examples/ch20/patterns/parallel.py  (excerpt; full file on disk)
@@ -518,19 +506,15 @@ def _enough(ok: int, total: int, require: Require) -> bool:
     answer = merge(succeeded, missing) if merge else _synthesize(llm, request, succeeded, missing)
 ```
 
-The design decision lives in the fan-in. `require="all"` refuses to answer if any branch failed, which is right when a partial answer is a wrong answer (a compliance check across three systems). `"quorum"` needs a strict majority, which suits redundant branches that check the same thing differently. `"any"` answers from whatever succeeded but must name the missing branches, and the aggregator prompt is told to report disagreements rather than pick a winner silently. Results are returned in branch order, not completion order, so the aggregator's input and the trace are deterministic.
+The design decision lives in the fan-in. `require="all"` refuses to answer if any branch failed, right when a partial answer is a wrong answer (a compliance check across three systems). `"quorum"` needs a strict majority, for redundant branches that check the same thing differently. `"any"` answers from whatever succeeded but names the missing branches. The aggregator is told to report disagreements rather than pick a winner silently, and it receives results in branch order, so its input and the trace are deterministic.
 
-**When to use it.** Sub-tasks are independent (no branch needs another's output) and latency matters: the incident agent checking service health, database metrics, and incident history at once. Also for redundancy: the same question to two differently configured agents, compared at fan-in.
+**When to use it, and what it costs.** Independent sub-tasks where latency matters, such as checking service health, metrics, and incident history at once. Latency drops to the slowest branch plus the merge; cost does not drop at all. *Hidden dependencies* (a branch guessed what another would find), *contradictions* merged silently, *rate-limit storms* without a pool limit, and *silent partials* (a confident answer from two of three branches) are the failures to test for.
 
-**Advantages.** Latency drops from the sum of branches to the slowest branch plus the merge. Branches are isolated: one failing does not corrupt another's context.
-
-**Failure modes.** *Hidden dependencies*: a branch needed another's result and guessed instead. *Contradictory outputs*: branches disagree and the aggregator picks one without saying so. *Rate-limit storms*: fan-out multiplies concurrent calls; without a pool limit you hit provider limits and every branch retries at once. *Silent partials*: an aggregator that writes a confident answer from two of three branches.
-
-**Cost profile.** The sum of branch costs plus the aggregator, the same as running them sequentially plus one call. Only latency improves.
-
-**Evaluation.** Per-branch success, partial-answer rate under each policy, contradiction handling (seed cases where branches must disagree and check the merge reports it), and p95 latency against the sequential version.
+**Evaluation.** Per-branch success, partial-answer rate under each policy, seeded contradictions the merge must report, and p95 latency against the sequential version.
 
 ### Sequential workflows with agents in the steps
+
+> **Deep dive.** A fixed chain with one agent step; skip on a first reading.
 
 ```mermaid
 flowchart LR
@@ -542,7 +526,7 @@ flowchart LR
     W --> OUT[answer]
 ```
 
-**Structure.** A prompt chain whose order is fixed by code, where each step is a single model call, an agent, or plain code, with typed state passed between steps and an optional gate after each. The agent sits inside the one step where the work is open-ended; the chain around it stays deterministic and testable. This is Chapter 17's advice applied: graduate the smallest node that needs an agent, not the whole workflow.
+**Structure.** A chain whose order is fixed by code; each step is a single call, an agent, or plain code, with typed state between steps and an optional gate after each. The agent sits inside the one open-ended step, following Chapter 17's advice to graduate the smallest node that needs an agent, not the whole workflow.
 
 ```python
 # path: book/projects/examples/ch20/patterns/sequential.py  (excerpt; full file on disk)
@@ -569,19 +553,15 @@ flowchart LR
                                  data={"path": path, "state": state})
 ```
 
-**When to use it.** Most of the time when someone asks for "an agent." If you can name the stages (triage, investigate, write, review), make them a chain and let only the stage whose path cannot be predicted be an agent.
+**When to use it.** Most of the time when someone asks for "an agent." If you can name the stages (triage, investigate, write, review), make them a chain and let only the unpredictable stage be an agent.
 
-**Advantages.** Predictable order, per-step metrics, cheap gates that stop bad inputs before expensive steps, and a trace a reviewer can read. Steps that are plain calls are far cheaper and faster than agents.
+**Failure modes.** *Error propagation*: a wrong triage label sends a request down the wrong chain; gates mitigate it. *Rigidity*: a case needs a stage the chain lacks. *Agent step failure*: treat an incomplete agent run as a step failure, not `None` passed downstream.
 
-**Failure modes.** *Error propagation*: a wrong triage label sends a request down the wrong chain; gates mitigate it. *Rigidity*: a case needs a stage the chain does not have. *Agent step failure*: the agent inside a step stops without completing, which the chain must treat as a step failure rather than passing `None` downstream.
-
-**Cost profile.** The sum of steps; latency is the sum. Each non-agent step is one call.
-
-**Evaluation.** Per-step metrics (the triage classifier's confusion matrix, the agent step's success and trajectory metrics), gate rejection rates, path distribution, and end-to-end success.
+**Cost and evaluation.** Cost and latency are the sum of steps. Measure per-step metrics (the triage confusion matrix, the agent step's trajectory metrics), gate rejection rates, path distribution, and end-to-end success.
 
 ## How it works
 
-Project 5 is the Northwind incident-research agent. An alert fires; the on-call engineer asks for an investigation; the system returns a cited report and waits for an incident commander to approve posting it to `#incidents`. One investigation of the Trackline latency alert from the sample data goes like this.
+Project 5 is the Northwind incident-research agent. An alert fires, the on-call engineer asks for an investigation, and the system returns a cited report that an incident commander must approve before it is posted to `#incidents`. Here is one investigation of the sample Trackline latency alert.
 
 ```mermaid
 sequenceDiagram
@@ -613,15 +593,18 @@ sequenceDiagram
     R-->>S: posted MSG-00001, once
 ```
 
-The planner sees the alert and the list of known services and returns a typed plan: read Trackline's metrics, list its recent deploys, search past incidents, search runbooks. Plan validation rejects unknown services, repeating a step that already succeeded, missing runbook search, and plans larger than the remaining step budget, with one repair round that quotes the errors back.
-
-Each step runs as its own `AgentRuntime` with exactly one tool, a three-step budget, and a Definition of Done that requires the tool to have been called and the finding to cite what it observed or state that the tool found no evidence. The first step's metrics tool flags Trackline's p95, error rate, and webhook retries, and reports that dependency `pg-logi-prod` is anomalous while `webhook-dispatcher` is normal. The deviation rule `uncovered_dependency` sees that no planned step examines `pg-logi-prod` and returns a reason. The planner, given the completed step, the remaining queue, and the reason, returns two new steps for the database (metrics, then deploys) followed by the steps it already had. That is the only replan; the remaining steps confirm the picture: sequential scans on the database rose about seventy-fold after a migration at 05:15, and a February postmortem describes the same pattern.
-
-Evidence is collected from tool data, not parsed from text: every research tool returns a list of sources (id, kind, title, excerpt) that the orchestrator folds into an evidence ledger. The writer turns the ledger and step findings into six sections, citing a ledger id in every claim, and the deterministic Definition of Done checks exactly that (bullets, sentences, and table rows alike), plus that the recommended runbook exists and was retrieved. In the offline run the first draft recommends `it-db-index-rebuild-runbook`, which does not exist, and drops a citation; the checker returns four specific problems: one uncited claim and three caused by the invented runbook (`unknown_citation`, `runbook_not_in_catalog`, `runbook_missing`), the writer revises, the second draft passes, and only then does the rubric judge read it.
-
-The report is saved, and a publish run starts whose only tool, `post_report`, is marked `EXTERNAL`. `agentkit`'s default policy requires approval for external side effects, so the run stops with `APPROVAL_REQUIRED` after recording the proposed call. Nothing has been posted. When the incident commander approves, from the CLI or the API and possibly from a different process, the service rebuilds the run from its JSONL event log and resumes it; the tool executes once with an idempotency key derived from the run and request ids; the record moves to `published`.
+1. **Plan.** The planner sees the alert and the known services and returns a typed plan: read Trackline's metrics, list its recent deploys, search past incidents, search runbooks. Validation rejects unknown services, repeated steps, a missing runbook search, and plans over the step budget, with one repair round.
+2. **Execute a step.** Each step is its own `AgentRuntime` with one tool, a three-step budget, and a Definition of Done: the tool was called, and the finding cites what it observed or says it found nothing. The first step flags Trackline's p95, error rate, and webhook retries, and reports dependency `pg-logi-prod` as anomalous.
+3. **Replan on a deviation.** The rule `uncovered_dependency` sees that no planned step examines `pg-logi-prod` and returns a reason. Given the completed step, the queue, and the reason, the planner inserts two database steps (metrics, then deploys) ahead of the rest. That is the only replan.
+4. **Finish the plan.** The remaining steps find that sequential scans on the database rose about seventy-fold after a migration at 05:15, and a February postmortem describes the same pattern. Each tool returns structured sources that the orchestrator folds into an evidence ledger; nothing is parsed from model text.
+5. **Write and check.** The writer turns the ledger and findings into six sections, citing a ledger id in every claim. The deterministic Definition of Done checks those citations and that the recommended runbook exists and was retrieved. The first draft recommends `it-db-index-rebuild-runbook`, which does not exist, and drops a citation, so the checker returns four problems: one `uncited_claim` and three caused by the invented runbook (`unknown_citation`, `runbook_not_in_catalog`, `runbook_missing`).
+6. **Revise and judge.** The writer revises, the second draft passes, and only then does the rubric judge read it.
+7. **Pause for approval.** A publish run starts whose only tool, `post_report`, is marked `EXTERNAL`. The default policy requires approval for external side effects, so the run stops with `APPROVAL_REQUIRED` after recording the proposed call. Nothing is posted yet.
+8. **Resume and post once.** When the incident commander approves, possibly from another process hours later, the service rebuilds the run from its event log and resumes it. The tool executes once, with an idempotency key derived from the run and request ids.
 
 ## Architecture
+
+> **Deep dive.** Project 5's trust boundaries and investigation state machine; skip on a first reading.
 
 ```mermaid
 flowchart TB
@@ -666,9 +649,9 @@ flowchart TB
     PUB --> EVT
 ```
 
-Three boundaries matter. Identity enters only through the server-side directory: the API maps the `X-User` header (standing in for your authentication proxy) to groups and a tenant, and the tools read the principal from `ToolContext`, never from model-supplied arguments, so the model cannot widen its own access. Retrieved documents are untrusted: they are escaped and wrapped in `<untrusted_data>` markers, both in tool output and in the writer's ledger (Chapter 26), and the instructions say they are data, but the real protection is structural, since the only tool with a side effect is not available to any agent that reads documents. And model output never reaches the channel unreviewed: the publish tool reads the report body from the store by investigation id, so what the human approved is byte for byte what gets posted.
+Three boundaries matter. **Identity** enters only through the server-side directory: the API maps the `X-User` header (a stand-in for your authentication proxy) to groups and a tenant, and tools read the principal from `ToolContext`, never from model arguments. **Retrieved documents** are escaped and wrapped in `<untrusted_data>` markers (Chapter 26), but the real protection is structural: no agent that reads documents has the one tool with a side effect. **Model output** never reaches the channel unreviewed: the publish tool reads the report from the store by investigation id, so what the human approved is byte for byte what gets posted.
 
-An investigation moves through a small state machine. Only one state accepts a decision.
+An investigation moves through a small state machine; only `awaiting_approval` accepts a decision.
 
 ```mermaid
 stateDiagram-v2
@@ -684,11 +667,13 @@ stateDiagram-v2
     rejected --> [*]
 ```
 
-The judge's verdict does not appear in the state machine on purpose. The deterministic Definition of Done is a hard gate: a report that fails it cannot be approved. The judge is advisory once the gate passes: it drives revisions inside the loop, and its final verdict is attached to the record so the approver sees "judge: 3/5, cause lacks an independent signal" next to the report. Making a calibrated-but-fallible judge a hard gate would turn its false negatives into missing reports during an incident, which is the wrong failure to optimize for.
+The judge is absent from the state machine on purpose. The deterministic Definition of Done is the hard gate; the judge is advisory: it drives revisions, and its verdict is attached to the record so the approver sees "judge: 3/5, cause lacks an independent signal" next to the report. A judge as hard gate would turn its false negatives into missing reports during an incident.
 
 ## Implementation
 
 ### Layout and configuration
+
+> **Deep dive.** Project files and the limits you can tune; skip on a first reading.
 
 ```
 book/projects/p5-incident-agent/
@@ -702,27 +687,27 @@ book/projects/p5-incident-agent/
               test_approval.py  test_replay.py  test_api_cli.py
 ```
 
-The project depends on `aie_core`, `agentkit`, `ragkit` (for loading and section-chunking the shared runbooks), `evalkit` (for the rubric judge), and `rank-bm25`, all as path dependencies in `pyproject.toml`. Model selection uses `aie_core`'s variables; with `LLM_PROVIDER=fake`, the default, a scripted stand-in model plays every role so the system runs offline.
+With `LLM_PROVIDER=fake`, the default, a scripted model plays every role offline. The README lists install, run, and Docker commands.
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `LLM_PROVIDER`, `LLM_MODEL`, provider keys | `fake` | model for planner, step agents, writer, judge |
-| `P5_STATE_DIR` | `.p5-state` | investigation records, event logs, channel log |
-| `P5_MAX_PLAN_STEPS` | 8 | executed steps per investigation across replans |
-| `P5_MAX_REPLANS` | 2 | replans allowed before the investigation fails |
-| `P5_MAX_REVISIONS` | 3 | writer rounds in the evaluator-optimizer loop |
-| `P5_MIN_IMPROVEMENT` | 0.05 | score gain below which a round counts as no progress |
-| `P5_JUDGE_PASS_SCORE` | 4 | rubric score the judge requires, 1 to 5 |
+| `LLM_PROVIDER`, `LLM_MODEL`, provider keys | `fake` | model for every role |
+| `P5_STATE_DIR` | `.p5-state` | records, event logs, channel log |
+| `P5_MAX_PLAN_STEPS` | 8 | steps per investigation, across replans |
+| `P5_MAX_REPLANS` | 2 | replans before the investigation fails |
+| `P5_MAX_REVISIONS` | 3 | writer rounds |
+| `P5_MIN_IMPROVEMENT` | 0.05 | score gain that counts as progress |
+| `P5_JUDGE_PASS_SCORE` | 4 | judge pass score, 1 to 5 |
 | `P5_JUDGE_MODEL` | unset | a different model for the judge |
 | `P5_STEP_MAX_STEPS`, `P5_STEP_MAX_TOOL_CALLS` | 3, 2 | budget of each step agent |
-| `P5_MAX_LLM_CALLS` | 60 | hard ceiling on model calls per investigation, all roles |
+| `P5_MAX_LLM_CALLS` | 60 | model-call ceiling per investigation, all roles |
 | `P5_CHANNEL` | `#incidents` | where approved reports go |
-
-The environment template is `.env.example`, and the README lists install, run, and Docker commands.
 
 ### Tools
 
-Four read-only research tools are built per investigation, bound to the alert's time so the model cannot ask about a different window, plus one external tool for publishing. Searches go through the knowledge base, which loads the shared documents with `ragkit`, keeps runbooks (by tag) and incident reports (by id prefix), chunks them by Markdown section, ranks with BM25, filters by ACL before anything leaves the function, and returns the best chunk per document, since the document id is the citation unit everyone reasons about.
+> **Deep dive.** How research tools wrap untrusted text and return structured sources; skip on a first reading.
+
+Four read-only research tools are built per investigation, bound to the alert's time window, plus one external tool for publishing. Searches rank section chunks with BM25, filter by ACL before anything leaves the knowledge base, and return the best chunk per document, since the document id is the citation unit.
 
 ```python
 # path: book/projects/p5-incident-agent/incident_agent/tools.py  (excerpt; full file on disk)
@@ -760,11 +745,11 @@ def publish_tool(channel: Channel, load: Callable[[str], Investigation | None]) 
         post_report, side_effect=SideEffect.EXTERNAL, requires_approval=True, idempotent=True, pass_context=True)
 ```
 
-If your organization uses Chapter 16's governed tool layer, wrap its executor with `agentkit.executor_tools(executor, ctx)` instead of `FunctionTool`; the executor's policy, idempotency store, and audit log stay in force, and the rest of the project is unchanged.
+With Chapter 16's governed tool layer, wrap its executor with `agentkit.executor_tools(executor, ctx)` instead of `FunctionTool`; its policy, idempotency store, and audit log stay in force.
 
 ### The deterministic Definition of Done and the deviation rules
 
-The report contract is small enough to state in a sentence: six named sections; every sentence or bullet in Summary, Impact, Timeline, and Likely cause cites at least one source; every citation is a source this investigation observed; the recommended runbook exists and was retrieved. The checker returns a list of named problems, each with a message written to be useful as revision feedback. These checks are the hard gate: they are cheap, exact, and cannot be talked out of a verdict, which is why they run before the rubric judge and why their output makes the best revision feedback.
+The report contract fits in a sentence: six named sections; every sentence or bullet in Summary, Impact, Timeline, and Likely cause cites at least one source; every citation is a source this investigation observed; the recommended runbook exists and was retrieved. The checker returns named problems whose messages double as revision feedback.
 
 ```python
 # path: book/projects/p5-incident-agent/incident_agent/domain/dod.py  (excerpt; full file on disk)
@@ -797,9 +782,9 @@ def check_report(report: str, evidence_ids: Iterable[str], runbook_catalog: Iter
     return problems
 ```
 
-What counts as a claim is defined in `report.py`: each bullet is one claim, prose is split into sentences at a period followed by a capital letter (so version numbers survive), and table rows are skipped. The definition is crude on purpose. A citation per sentence is a check a reviewer can verify by eye and a writer can satisfy without guessing, and it is strict enough to catch the common failure, an unsupported inference written as fact.
+What counts as a claim is defined in `report.py`: each bullet is one claim, prose splits into sentences at a period followed by a capital letter (so version numbers survive), and table rows are skipped. It is crude on purpose: a reviewer can check it by eye, and it catches the common failure, an unsupported inference written as fact.
 
-The deviation rules are just as small. Each reads the finished step, the structured data its tools returned, and the steps done or queued, and returns a reason or nothing. A third rule on disk, `step_failed`, fires when a step agent did not complete.
+The deviation rules are as small: each reads the finished step, its tools' data, and the planned steps, and returns a reason or nothing (a third, `step_failed`, is on disk).
 
 ```python
 # path: book/projects/p5-incident-agent/incident_agent/domain/deviation.py  (excerpt; full file on disk)
@@ -824,7 +809,9 @@ Note what `no_evidence` does not fire on: a deploy query that finds no deploys. 
 
 ### The orchestrator
 
-`IncidentResearchAgent` composes the two patterns. The investigation loop is the planner-executor from earlier in the chapter, specialized with domain validation and the evidence ledger; the writing loop is the evaluator-optimizer, specialized so that evidence is gathered once and only writing repeats.
+> **Deep dive.** How `IncidentResearchAgent` specializes the two patterns; skip on a first reading.
+
+`IncidentResearchAgent` runs the planner-executor, with domain validation and the evidence ledger, then the evaluator-optimizer, which repeats only the writing.
 
 ```python
 # path: book/projects/p5-incident-agent/incident_agent/agent.py  (excerpt; full file on disk)
@@ -863,17 +850,17 @@ Note what `no_evidence` does not fire on: a deploy query that finds no deploys. 
                 ids.append(ev.id)
 ```
 
-`execute` builds one `AgentRuntime` per step with exactly the tool the step names and a Definition of Done that requires the tool to have been called and the finding to be grounded in a citation or to say the tool found no evidence. Evidence comes from the tools' structured `sources`, never from parsing the model's text, which is why a citation the model invents cannot enter the ledger.
+Because the ledger is built from the tools' structured `sources`, a citation the model invents cannot enter it.
 
-`write_and_evaluate` (on disk) is the evaluator-optimizer loop from earlier in the chapter with domain pieces plugged in: each round the writer drafts from the ledger, `check_report` runs, the judge runs only on a draft with no problems, the round is scored, the best report is kept, and the loop stops on acceptance, plateau, or the revision budget. A best report that still has Definition-of-Done problems ends as `needs_revision`; one without problems moves to `awaiting_approval`.
+`write_and_evaluate` (on disk) is the evaluator-optimizer loop with `check_report` as the deterministic check. A best report that still has Definition-of-Done problems ends as `needs_revision`; one without problems moves to `awaiting_approval`. Its scoring function, `round_score`, ranks any report that fails the Definition of Done below any that passes, fewer problems above more, and passing reports by the judge's score. The weights are illustrative; what matters is that "best so far" has a testable definition.
 
-The scoring function (`round_score`) makes the controller's preferences explicit: any report that fails the Definition of Done scores below any report that passes it, fewer problems score higher, and among passing reports the judge's normalized score decides. The weights are illustrative; what matters is that "best so far" has a definition you can test (`test_round_score_orders_dod_failures_below_any_pass`).
-
-The judge reuses `evalkit`'s `LLMJudge` (Chapter 24) with one rubric: is the cause supported by the cited evidence, is observation separated from inference, are the next steps specific and safe. It receives the evidence ledger, so it judges support, not style.
+The judge is `evalkit`'s `LLMJudge` (Chapter 24) with one rubric: is the cause supported by the cited evidence, is observation separated from inference, are the next steps specific and safe. It sees the evidence ledger, so it judges support, not style.
 
 ### Publishing behind an approval
 
-The publish step has no decision to make, so its "model" is a small deterministic function that always proposes the same `post_report` call. `AgentRuntime` is used for what an irreversible action needs: a durable event log, a policy check, an approval pause that survives a restart, an idempotency key, and resume.
+> **Deep dive.** The publish run that pauses for approval and resumes from its log; skip on a first reading.
+
+The publish step has no decision to make, so its "model" is a function that always proposes the same `post_report` call. `AgentRuntime` supplies what an irreversible action needs: a durable log, a policy check, an approval pause that survives a restart, an idempotency key, and resume.
 
 ```python
 # path: book/projects/p5-incident-agent/incident_agent/agent.py  (excerpt; full file on disk)
@@ -894,11 +881,13 @@ class Publisher:
         return self.runtime.resume(run_id, approve=approve, reason=f"{reviewer}: {reason}".strip())
 ```
 
-`IncidentService.investigate` saves the record before requesting publication (the tool reads the report from the store) and checks that the publish run actually paused; if it ended any other way, the investigation is marked failed rather than trusted. `decide` accepts only `awaiting_approval`, requires the reviewer to be on-call staff in the alert's tenant, resumes the run, and records the message id from the run's artifacts. The CLI and the FastAPI app are thin shells over these two methods.
+`IncidentService.investigate` saves the record before requesting publication and checks that the publish run actually paused; any other ending marks the investigation failed. `decide` accepts only `awaiting_approval`, requires the reviewer to be on-call staff in the alert's tenant, and resumes the run. The CLI and the FastAPI app are thin shells over these two methods.
 
 ### Tests
 
-The suite runs offline with the scripted model. Two kinds of test get a listing here because they are specific to agents: trajectory tests, which assert the path an investigation took, and replay tests, which assert that recorded runs reproduce.
+> **Deep dive.** Trajectory and replay tests specific to agents; skip on a first reading.
+
+The suite runs offline. Trajectory tests assert the path an investigation took; replay tests assert that recorded runs reproduce.
 
 ```python
 # path: book/projects/p5-incident-agent/tests/test_trajectory.py  (excerpt; full file on disk)
@@ -922,7 +911,7 @@ def test_main_alert_replans_once_to_examine_the_anomalous_dependency(service):
     assert "deploy:CHG-2026-0907" in inv.evidence and "[deploy:CHG-2026-0907]" in inv.report
 ```
 
-A companion test on disk sets `max_replans=0` and asserts the investigation fails closed: status `failed`, no report, no publish run, one step executed.
+A companion test sets `max_replans=0` and asserts the investigation fails closed: no report, no publish run, one step executed.
 
 ```python
 # path: book/projects/p5-incident-agent/tests/test_replay.py  (excerpt; full file on disk)
@@ -945,7 +934,7 @@ def test_cassette_detects_a_prompt_change(make_service, tmp_path, monkeypatch):
     assert len(replayer.misses) == 1                 # planning and execution replayed; the writer call is new
 ```
 
-Step replay uses `agentkit.replay` on each step's event log. A whole investigation also makes model calls outside any agent loop (planner, writer, judge), so it needs a second mechanism: the cassette in `adapters/cassette.py` records every completion keyed by a hash of the request and serves them back. Recording a real run once and replaying it in CI turns "the report did not change" into a deterministic test, and a request the cassette has never seen is reported as a miss that pinpoints which prompt changed.
+Step replay uses `agentkit.replay` on each step's event log. Planner, writer, and judge calls sit outside any agent loop, so the cassette in `adapters/cassette.py` records every completion keyed by a request hash and serves it back. A request the cassette has never seen is reported as a miss that pinpoints which prompt changed.
 
 ## Code walkthrough
 
@@ -966,9 +955,9 @@ round 2: score=1.00 dod_problems=0 judge=5/5
 usage: {"model_calls": 17, "by_role": {"planner": 2, "executor": 12, "writer": 2, "judge": 1}, "tokens": 12245}
 ```
 
-Read the summary top to bottom the way you would read the trace. The trajectory shows the replan: two `pg-logi-prod` steps jumped the queue ahead of the planned deploy and search steps. The deviation line gives the exact reason, which is the first thing a reviewer asks for. The two rounds show the evaluator-optimizer doing its job: four Definition-of-Done problems in the first draft, none in the second, and a judge call only on the second. The usage line is the cost profile in miniature: twelve of seventeen model calls are step agents, because each step is a two-call run (call the tool, report).
+The trajectory shows the replan: two `pg-logi-prod` steps jumped ahead of the planned ones, for the reason on the deviation line. The rounds show four Definition-of-Done problems in the first draft, none in the second, and a judge call only on the second. Twelve of seventeen calls are step agents, because each step is a two-call run (call the tool, report).
 
-The accepted report's Likely cause section reads, in part: "The migration CHG-2026-0907 preceded the degradation [deploy:CHG-2026-0907]. Database signals moved with it: pg-logi-prod.seq_scans_per_s baseline 12/s, at 06:10 UTC 880/s (x73.3) [metric:pg-logi-prod.seq_scans_per_s]. This matches a past incident in which a migration dropped a composite index and queries fell back to sequential scans [inc-2026-02-tracking-latency]. Confidence is moderate: the index loss is inferred, not yet confirmed [metric:pg-logi-prod.seq_scans_per_s]." Every sentence points at something a human can open. The recommendation is `it-incident-response-runbook`, which exists and was retrieved; the database failover runbook, which the search also surfaced, is not recommended, and the replication-lag metric that might have suggested it stayed below its absolute floor.
+The accepted report's Likely cause section reads, in part: "The migration CHG-2026-0907 preceded the degradation [deploy:CHG-2026-0907]. Database signals moved with it: pg-logi-prod.seq_scans_per_s baseline 12/s, at 06:10 UTC 880/s (x73.3) [metric:pg-logi-prod.seq_scans_per_s]. This matches a past incident in which a migration dropped a composite index and queries fell back to sequential scans [inc-2026-02-tracking-latency]. Confidence is moderate: the index loss is inferred, not yet confirmed [metric:pg-logi-prod.seq_scans_per_s]." The recommended `it-incident-response-runbook` exists and was retrieved; the failover runbook the search also surfaced is not recommended, because replication lag stayed below its floor.
 
 Approve it from a second shell and replay it:
 
@@ -984,69 +973,68 @@ inv-alr-2026-0914-01-05113e.s5: identical: 2 decisions reproduced
 ...
 ```
 
-The approval ran in a new process with nothing in memory; the run was rebuilt from `.p5-state/events/<id>.publish.jsonl`. Approving again returns "refused: investigation ... is published", and the channel log still holds one message.
+The approval ran in a new process, rebuilding the run from `.p5-state/events/<id>.publish.jsonl`. Approving again is refused, and the channel still holds one message.
 
 ## Production considerations
 
-**Latency.** Count the sequential model calls on the critical path, not the total. Project 5's offline run has seventeen calls, all sequential, which at an illustrative one to three seconds per call is well beyond an interactive budget. That is acceptable for an asynchronous investigation that pages a human, and unacceptable for a chat reply. Two changes cut it without changing behavior: run independent steps concurrently (metrics and deploys for the same service do not depend on each other, so adding `depends_on` to `PlanStep` lets the orchestrator fan them out), and let steps whose tool output is already the finding skip the second "report" call. In production, the API should return 202 with a status URL and run the investigation on a queue (Chapter 28 designs the job protocol, Chapter 29 the queue).
+> **Deep dive.** Latency, cost metering, and scaling for Project 5; skip on a first reading.
 
-**Cost.** Meter every role, not only the agents. The `MeteredLLM` wrapper attributes calls to planner, executor, writer, and judge, and enforces a hard ceiling across all of them, so a pathological plan cannot spend more than the investigation is worth. A separately configured judge model gets its meter through `MeteredLLM.share`, so it counts against the same ceiling and appears in the same usage record; a second, independent meter would silently double the ceiling (`test_a_separate_judge_model_shares_the_investigation_call_ceiling`). Move the judge to a cheaper model only after calibrating it against human labels (Chapter 30 turns these counts into a cost model).
+**Latency.** Project 5's seventeen sequential calls, at an illustrative one to three seconds each, suit an asynchronous investigation, not a chat reply. Two changes cut latency without changing behavior: run independent steps concurrently (a `depends_on` field on `PlanStep` would let metrics and deploys for one service run together), and let steps whose tool output is already the finding skip the second "report" call. In production the API should return 202 with a status URL and run the investigation on a queue (Chapter 28 designs the job protocol, Chapter 29 the queue).
 
-**Security.** The model never supplies identity: tools read groups and tenant from `ToolContext`, which the harness fills from the server-side directory. Retrieval applies ACLs before ranking results leave the knowledge base, so a document the caller cannot read never appears even as a title. The publish tool's isolation from document-reading agents, described under Architecture, is what keeps a prompt injection inside a runbook from reaching the channel (Chapter 26). The approver must be on-call staff in the same tenant; a four-eyes rule (approver differs from requester) is a one-line addition worth making for higher-impact actions.
+**Cost.** `MeteredLLM` attributes calls to every role and enforces one ceiling across them; a separate judge model joins it through `MeteredLLM.share`, since a second meter would silently double the ceiling. Chapter 30 turns these counts into a cost model.
 
-**Operations.** Every agent run writes a JSONL event log under a derived run id (`<investigation>.<step>`), so one investigation's runs sort together. Alert on the distribution of statuses and step termination reasons, not only on errors: a rise in `needs_revision` or "replan budget exhausted" after a prompt change is a regression no exception will reveal. Replay a committed cassette of real investigations in CI on every prompt, model, or harness change. The single API worker is deliberate, since approvals resume runs from files; scaling out needs a shared event store and run-level locking (Chapter 38).
+**Security.** ACLs apply before results leave the knowledge base, so an unreadable document never appears even as a title. A four-eyes rule (approver differs from requester) is a one-line addition worth making for higher-impact actions.
+
+**Operations.** Each agent run logs under a derived run id (`<investigation>.<step>`), so an investigation's runs sort together. The single API worker is deliberate, since approvals resume runs from files; scaling out needs a shared event store and run-level locking (Chapter 38).
 
 ## Common mistakes
 
-- **Choosing the architecture before the baseline.** Building a supervisor with five specialists without first measuring a single ReAct agent with the same tools. Without the baseline you cannot show the extra calls bought anything.
-- **Writing a second agent loop.** A pattern implementation that calls the model and executes tools itself loses budgets, policy, events, and replay. Compose `AgentRuntime` runs instead.
-- **Replanning on every step.** It doubles calls and makes plans chase the latest observation. Write deviation rules and replan only when one fires.
-- **Reflection without new evidence.** A critic that rereads the answer in the same context mostly agrees with it. Give the critic observations, objective checks, or a different model.
-- **Non-self-contained delegation.** "Check the thing above" means nothing to a worker that sees only its task string.
-- **Unbounded fan-out.** Launching one branch per item without a concurrency limit, then discovering provider rate limits during an incident.
-- **Letting the model retype the approved artifact.** If the publish call carries the report text in its arguments, what is posted can differ from what was approved. Pass a reference and read the artifact from the store.
+- **Choosing the architecture before the baseline.** Without a single ReAct agent with the same tools to compare against, you cannot show the extra calls bought anything.
+- **Replanning on every step.** It doubles calls and makes plans chase the latest observation.
+- **Unbounded fan-out.** One branch per item without a concurrency limit meets provider rate limits during an incident.
+- **Letting the model retype the approved artifact.** Pass a reference and read the artifact from the store, so what is posted is what was approved.
 
 ## Failure modes
 
 | Failure | How it shows in telemetry | How to test for it |
 |---|---|---|
-| Wandering ReAct loop | runs ending `NO_PROGRESS` or `REPEATED_ACTION`; tool calls per run creeping up | scripted model that repeats a call; assert the stop reason and the tool-call count |
-| Misroute | specialist runs ending `VERIFICATION_FAILED` with marginal route confidence | labeled routing set; confusion matrix in CI |
-| Stale plan | steps succeed but the final answer addresses a narrower question; no deviations logged | cases where step one reveals a new entity; assert a replan and the new step |
-| Replan thrash | replans near the budget on most runs; investigations failing with "replan budget exhausted" | `max_replans=0` test that fails closed; replan-rate metric per release |
-| Invented runbook or citation | DoD problems `runbook_not_in_catalog` or `unknown_citation` in round records | DoD unit tests with invented ids; trajectory test asserting the round sequence |
-| Uncited inference | `uncited_claim` problems; judge flags "cause lacks an independent signal" | DoD test removing one citation; judge-calibration set with weak causes |
-| Writer plateau | `needs_revision` with "plateau after round 2" | writer that ignores feedback; assert status and that approval is refused |
-| Supervisor runaway | spawn-budget refusals in observations; agents spawned per run at the cap | supervisor that delegates every step; assert the ledger length |
-| Silent partial merge | aggregated answers with fewer sources than branches; `missing` non-empty | `require="all"` and `"quorum"` tests with one failing branch |
-| Duplicate side effect | two channel messages for one investigation | approve twice; replay the publish tool with the same key; assert one message |
-| Cross-tenant leak | a retail document id in a logistics investigation's evidence | ACL tests on the knowledge base; tenant checks on investigate, read, decide |
+| Wandering ReAct loop | runs ending `NO_PROGRESS` or `REPEATED_ACTION`; tool calls per run creeping up | scripted model repeats a call; assert stop reason and tool-call count |
+| Misroute | specialist runs ending `VERIFICATION_FAILED` after marginal route confidence | labeled routing set; confusion matrix in CI |
+| Stale plan | steps succeed, answer is narrower than the question; no deviations logged | step one reveals a new entity; assert a replan and the new step |
+| Replan thrash | replans near the budget; failures with "replan budget exhausted" | `max_replans=0` fails closed; replan rate per release |
+| Invented runbook or citation | `runbook_not_in_catalog` or `unknown_citation` in round records | DoD unit tests with invented ids; assert the round sequence |
+| Uncited inference | `uncited_claim`; judge flags "cause lacks an independent signal" | DoD test removing one citation; judge calibration set with weak causes |
+| Writer plateau | `needs_revision` with "plateau after round 2" | writer ignores feedback; assert status and refused approval |
+| Supervisor runaway | spawn-budget refusals; agents per run at the cap | supervisor delegates every step; assert ledger length |
+| Silent partial merge | fewer sources than branches; `missing` non-empty | `require="all"` and `"quorum"` with one failing branch |
+| Duplicate side effect | two channel messages for one investigation | approve twice; replay with the same key; assert one message |
+| Cross-tenant leak | a retail document id in a logistics investigation's evidence | knowledge-base ACL tests; tenant checks on investigate, read, decide |
 
-Two of these are easy to misdiagnose. A stale plan produces no errors: every step completes and the report is internally consistent. The tell is an evidence ledger with no source about the entity the first step surfaced; the fix is a deviation rule, not a better prompt. A writer plateau looks like a model-quality problem, but it is usually uninformative feedback: if the round records show the same problem codes in every round, the feedback text for that code is what needs work.
+Two of these are easy to misdiagnose. A stale plan produces no errors; the tell is an evidence ledger with no source about the entity the first step surfaced, and the fix is a deviation rule, not a better prompt. A writer plateau looks like a model-quality problem but is usually uninformative feedback: if the same problem codes recur every round, fix the feedback text for that code.
 
 ## Tradeoffs
 
-**Adaptivity versus predictability.** ReAct adapts at every step and is the hardest to predict; a sequential workflow is fully predictable and cannot adapt at all. Planner-executor sits between them, adaptive only at named deviations, which is why it suits regulated or reviewed work.
+**Adaptivity versus predictability.** ReAct adapts at every step and is the hardest to predict; a sequential workflow is fully predictable and cannot adapt. Planner-executor adapts only at named deviations, which is why it suits regulated or reviewed work.
 
-**Context sharing versus isolation.** One agent sees everything and loses nothing at hand-offs, but its context grows without bound. Supervisors and per-step agents keep contexts small and permissions tight, at the price of hand-off loss and more calls.
+**Context sharing versus isolation.** One agent loses nothing at hand-offs, but its context grows without bound; supervisors and per-step agents keep contexts small at the price of hand-off loss and more calls.
 
-**Quality loops versus latency and cost.** Each evaluator round adds a full generation plus evaluation to the critical path. Deterministic gating keeps judge cost down; plateau rules keep the loop from polishing; but a loop that rarely improves the outcome should be removed, not tuned.
+**Quality loops versus latency and cost.** Each round adds a generation and an evaluation to the critical path; a loop that rarely improves the outcome should be removed, not tuned.
 
-**Hard gates versus advisory signals.** Deterministic checks make good gates because their errors are rare and explainable. Model judges make good signals and poor gates, because their errors are frequent and hard to explain; a judge used as a hard gate turns its false negatives into missing reports during an incident. Gate on deterministic checks and show the judge's verdict to the human, as Project 5 does.
+**Hard gates versus advisory signals.** Deterministic checks make good gates because their errors are rare and explainable; model judges make good signals and poor gates (see Architecture).
 
 ## Evaluation and testing
 
-Evaluate an architecture at three levels, and keep them separate so a regression points at its layer.
+Evaluate at three levels, kept separate so a regression points at its layer.
 
-**Outcome.** The task's own metric on a frozen set: for Project 5, whether the report names the correct cause and a valid runbook, judged against gold labels per alert, plus the DoD pass rate and the judge's score distribution. Compare every architecture against the simplest baseline on the same cases, with paired statistics (Chapter 24), and report cost per successful case and p95 latency next to success rate.
+**Outcome.** The task's own metric on a frozen set: for Project 5, correct cause and valid runbook against gold labels per alert, plus the DoD pass rate. Compare against the simplest baseline with paired statistics (Chapter 24), with cost per successful case and p95 latency next to success rate.
 
-**Trajectory.** Assertions about the path, read from events: the expected tool and target sequence for each scripted scenario, the number of replans and their reasons, which tools each step agent could see, that the publish tool never executed before approval. Trajectory tests are cheap, deterministic, and catch regressions that outcome metrics miss, such as an agent that reaches the right answer through a step it should not have been allowed to take.
+**Trajectory.** Assertions about the path, read from events: the tool and target sequence, the replans and their reasons, which tools each step agent could see, that publishing never ran before approval. They are cheap and catch a right answer reached through a step that should not have been allowed.
 
-**Components.** Each decision-maker evaluated as what it is: the router as a classifier, the planner on plan validity and gold-step coverage, the deviation rules on precision (did a replan change the outcome), the judge on agreement with humans, the deterministic DoD with unit tests for every problem code.
+**Components.** Each decision-maker as what it is, using the Evaluation paragraph of its pattern above; for Project 5, add deviation-rule precision (did a replan change the outcome) and a unit test per DoD problem code.
 
-Replay ties the levels together. Harness replay of recorded step runs checks that a new verifier, policy, or truncation limit still accepts what it should (`test_a_stricter_verifier_would_have_rejected_a_recorded_answer` shows the reverse: a stricter verifier rejecting an answer that was accepted when recorded). Counterfactual replay runs a new planner or prompt against recorded observations and reports where decisions diverge and which calls have no recording. The cassette replays whole investigations, model calls outside agent loops included, so a CI job can assert that a refactor changed nothing and can name the first prompt that did.
+Replay ties the levels together. Harness replay of recorded step runs shows whether a new verifier, policy, or truncation limit changes what is accepted. Counterfactual replay runs a new planner or prompt against recorded observations and reports where decisions diverge. The cassette replays whole investigations and names the first prompt that changed.
 
-For Project 5 specifically, the minimum release gate is: all offline tests green, cassette replays of the recorded investigations identical, DoD pass rate and judge agreement on the frozen set at or above the previous release, and no increase in average model calls per investigation beyond an agreed tolerance.
+Project 5's release gate: offline tests and cassette replays pass, and DoD pass rate, judge agreement, and model calls per investigation hold at the previous release's level.
 
 ## Before you ship
 

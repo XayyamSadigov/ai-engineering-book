@@ -59,7 +59,7 @@ CREATE TABLE policy_versions (
 
 CREATE TABLE evaluator_versions (
     id             BIGSERIAL PRIMARY KEY,
-    name           TEXT NOT NULL,                -- 'faithfulness-judge'
+    name           TEXT NOT NULL,                -- 'groundedness-judge'
     version        TEXT NOT NULL,
     judge_model_id BIGINT REFERENCES model_versions(id),
     rubric_hash    TEXT NOT NULL,

@@ -80,8 +80,8 @@ def test_invented_deadline_is_unsupported_and_wrong_citation_is_flagged() -> Non
     out = {"answer": "You can carry over up to 10 unused PTO days. They must be used by 30 June.",
            "citations": ["hr-travel-policy"]}
     s = _scores(RagAnswerEvaluator(), RAG_CASE, out)
-    assert s["rag_faithfulness"].value == 0.5
-    assert s["rag_faithfulness"].detail[0]["unsupported_atoms"] == ["30"]
+    assert s["rag_groundedness"].value == 0.5
+    assert s["rag_groundedness"].detail[0]["unsupported_atoms"] == ["30"]
     assert not s["rag_citations_valid"].passed
 
 

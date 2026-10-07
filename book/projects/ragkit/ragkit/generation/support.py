@@ -2,7 +2,7 @@
 """Deterministic text helpers shared by the packer, validator and streamer.
 
 Everything here is cheap and explainable: citation-marker parsing, content-word extraction,
-and a lexical support score. Lexical support is a smoke alarm, not a faithfulness judge. It
+and a lexical support score. Lexical support is a smoke alarm, not a groundedness judge. It
 catches invented numbers and claims that share almost no vocabulary with their evidence; it
 cannot catch a paraphrase that reverses meaning. Use an LLM judge (validator hook) or human
 review for that, and measure both against labels (Chapter 14).

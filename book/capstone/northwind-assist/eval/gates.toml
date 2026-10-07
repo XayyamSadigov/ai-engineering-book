@@ -35,7 +35,7 @@ metric = "citation_precision"
 min_mean = 0.80
 
 [[suites.gate.metrics]]
-metric = "faithfulness_lexical"       # offline judge, kappa vs humans is reported; see README
+metric = "groundedness_lexical"       # offline judge, kappa vs humans is reported; see README
 min_mean = 0.85
 
 [[suites.gate.critical]]

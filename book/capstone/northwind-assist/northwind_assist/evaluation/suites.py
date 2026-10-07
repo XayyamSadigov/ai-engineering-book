@@ -5,7 +5,7 @@ Every target goes through the real orchestrator (guards, routing, caches, budget
 side door, so an eval run measures what production runs. Suites:
 
   rag       retrieval metrics, no_permission_leak, abstention, citation validity (ragkit.eval) and an
-            offline lexical faithfulness check whose agreement with a human-labeled sample is reported
+            offline lexical groundedness check whose agreement with a human-labeled sample is reported
   tools     Chapter 25 trajectory assertions over agentkit event logs, plus end-state checks
   security  effect_prevented per attack: no off-allowlist URL rendered, no canary or forbidden
             document leaked, no outbound send without approval, no poisoned memory written
@@ -34,7 +34,7 @@ from ..domain.intents import Intent
 from ..orchestrator import ChatRequest
 from ..security.auth import DEV_PERSONAS
 
-LABELS_PATH = _paths.CAPSTONE_ROOT / "eval" / "data" / "faithfulness_labels.jsonl"
+LABELS_PATH = _paths.CAPSTONE_ROOT / "eval" / "data" / "groundedness_labels.jsonl"
 
 
 def persona_ctx(name: str) -> RequestContext:
@@ -63,7 +63,7 @@ def rag_target(c: Container):
     return target
 
 
-def lexical_faithfulness(answer: str, evidence: str, min_support: float = 0.6) -> float:
+def lexical_groundedness(answer: str, evidence: str, min_support: float = 0.6) -> float:
     """Share of answer sentences whose content is lexically present in the cited evidence."""
     sents = [s for s in split_sentences(answer) if strip_markers(s)]
     if not sents:
@@ -72,28 +72,28 @@ def lexical_faithfulness(answer: str, evidence: str, min_support: float = 0.6) -
     return ok / len(sents)
 
 
-def faithfulness_evaluator() -> FunctionEvaluator:
+def groundedness_evaluator() -> FunctionEvaluator:
     def fn(case: EvalCase, output: Any) -> Score:
         out = RagOutput.coerce(output)
         if out.abstained or not out.answer:
-            return Score(name="faithfulness_lexical", value=1.0, passed=True, detail="no claims")
+            return Score(name="groundedness_lexical", value=1.0, passed=True, detail="no claims")
         cited = set(out.cited_chunk_ids)
         evidence = "\n".join(c.text for c in out.packed_chunks if c.id in cited) or \
             "\n".join(c.text for c in out.packed_chunks)
-        v = lexical_faithfulness(out.answer, evidence)
-        return Score(name="faithfulness_lexical", value=v, passed=v >= 0.99)
+        v = lexical_groundedness(out.answer, evidence)
+        return Score(name="groundedness_lexical", value=v, passed=v >= 0.99)
 
-    return FunctionEvaluator("faithfulness_lexical", fn, version="lexical-0.6")
+    return FunctionEvaluator("groundedness_lexical", fn, version="lexical-0.6")
 
 
 def rag_evaluators() -> list[Any]:
-    return [retrieval_evaluator(), answer_evaluator(), faithfulness_evaluator()]
+    return [retrieval_evaluator(), answer_evaluator(), groundedness_evaluator()]
 
 
 def judge_calibration(path: Path = LABELS_PATH) -> dict[str, Any]:
     """Agreement of the offline lexical judge with a small human-labeled sample (Chapter 24)."""
     rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
-    judge = ["supported" if lexical_faithfulness(r["answer"], r["evidence"]) >= 0.99 else "unsupported" for r in rows]
+    judge = ["supported" if lexical_groundedness(r["answer"], r["evidence"]) >= 0.99 else "unsupported" for r in rows]
     human = [r["human_label"] for r in rows]
     agree = sum(a == b for a, b in zip(judge, human, strict=True)) / len(rows)
     disagreements = [r["id"] for r, j in zip(rows, judge, strict=True) if j != r["human_label"]]
@@ -215,5 +215,5 @@ def security_target(c: Container):
     return target, FunctionEvaluator("security", evaluate, metric_names=["effect_prevented", "attack_detected"])
 
 
-__all__ = ["rag_target", "rag_evaluators", "faithfulness_evaluator", "judge_calibration", "tool_target",
-           "tool_evaluators", "security_target", "persona_ctx", "lexical_faithfulness"]
+__all__ = ["rag_target", "rag_evaluators", "groundedness_evaluator", "judge_calibration", "tool_target",
+           "tool_evaluators", "security_target", "persona_ctx", "lexical_groundedness"]

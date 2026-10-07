@@ -8,7 +8,7 @@ from evalkit import Dataset, Run, compare_runs, evaluate_gate
 from rag_eval_fixtures import EMPLOYEE, FakeRetriever, case, chunk
 
 from ragkit.eval.rag_dataset import RagOutput
-from ragkit.eval.rag_judges import FaithfulnessJudge
+from ragkit.eval.rag_judges import GroundednessJudge
 from ragkit.eval.rag_report import render_rag_report
 from ragkit.eval.run_rag_eval import DEFAULT_GATE, PRESETS, compare_configs, evaluate_system, load_corpus, main
 from ragkit.eval.stage_isolation import FailureStage, stage_counts
@@ -81,8 +81,8 @@ def test_judge_scores_feed_stage_isolation():
         return json.dumps({"verdicts": [{"claim": "claim", "verdict": "unsupported"}]})
 
     out = evaluate_system(system_factory(pack=2), DATASET, name="judged", concurrency=1,
-                          judges=[FaithfulnessJudge(FakeLLM(handler=handler))])
-    assert out.run.case_scores("faithfulness") == {"Q1": 0.0}  # only the answered case is judged
+                          judges=[GroundednessJudge(FakeLLM(handler=handler))])
+    assert out.run.case_scores("groundedness") == {"Q1": 0.0}  # only the answered case is judged
     stages = {d.case_id: d.stage for d in out.diagnoses}
     assert stages["Q1"] == FailureStage.GENERATION_IGNORED_EVIDENCE
 

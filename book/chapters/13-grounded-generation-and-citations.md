@@ -923,7 +923,7 @@ Count each mode separately; otherwise provider outages inflate the abstention ra
 
 **Stale source preferred.** The answer cites the older side of a detected conflict. *Telemetry:* `stale_source_preferred` and the conflict-note rate; gold questions tagged `conflicting-versions` (RQ-001, RQ-002). *Test:* naive scripted model citing only the FAQ. *Fix beyond code:* supersession metadata and content cleanup.
 
-**Silent conflict blending.** The answer cites both sides and reports `answered`, sometimes averaging ("5 to 10 days"). *Telemetry:* `conflict_unreported` warnings. *Test:* both-sides answer without conflict status produces the warning. Chapter 14's groundedness judge (`FaithfulnessJudge`) measures blended answers on the gold set.
+**Silent conflict blending.** The answer cites both sides and reports `answered`, sometimes averaging ("5 to 10 days"). *Telemetry:* `conflict_unreported` warnings. *Test:* both-sides answer without conflict status produces the warning. Chapter 14's `GroundednessJudge` measures blended answers on the gold set.
 
 **Injection followed.** The answer repeats or acts on instructions from a document. *Telemetry:* flagged-source events, `support_only_flagged` errors, output scans for email addresses and URLs not in clean evidence. *Test:* the compromised model that echoes the newsletter's request must have that claim dropped while the legitimate delivery claim survives.
 

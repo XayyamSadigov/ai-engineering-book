@@ -70,7 +70,7 @@ def run_suites(settings: Settings, out: Path, suites: list[str]) -> dict[str, An
         lat = [cr.latency_ms for cr in run.results]
         summary["rag"] = {"cases": len(ds), **{m: round(run.mean(m), 3) for m in (
             "no_permission_leak", "recall@5", "hit@1", "mrr", "abstention_correct", "citation_precision",
-            "citations_valid", "faithfulness_lexical")},
+            "citations_valid", "groundedness_lexical")},
             "p50_ms": round(_percentile(lat, 50), 1), "p95_ms": round(_percentile(lat, 95), 1),
             "cost_per_case_usd": round(run.cost_per_case_usd, 6)}
     if "tools" in suites:

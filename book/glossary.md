@@ -429,8 +429,7 @@ data; fail-open lets it proceed and suits only low-risk checks where availabilit
 **Faithfulness**: Whether an output represents its source accurately: no contradictions, no changed
 numbers or names, no dropped qualifiers. Distinct from groundedness, which asks whether each claim is
 supported; an answer can be supported claim by claim and still drop a condition the source states. Many
-libraries use the word for groundedness: ragkit's `faithfulness` score and Chapter 25's
-`rag_faithfulness` both measure groundedness. Summaries are evaluated mainly for faithfulness.
+libraries use the word for groundedness. Summaries are evaluated mainly for faithfulness.
 (Ch 24, 25)
 
 **FakeLLM and FakeEmbeddings**: The scripted `aie_core` model client that returns predefined responses
@@ -482,7 +481,7 @@ provider infrastructure can still introduce variation. (Ch 2)
 **Groundedness**: Whether every material claim in an output is supported (stated or directly
 implied) by the evidence the system was given. It needs no reference answer, so it can run on
 production traffic; a grounded answer can still be wrong if the evidence was outdated. Measured by a
-lexical support check (Ch 25), a claim-level judge (Ch 14, reported as `faithfulness`), or a rubric
+lexical support check (Ch 25), a claim-level judge (Ch 14), or a rubric
 judge (Ch 24); Chapter 24 compares them. The book's grounded answer contract tells the generator to use
 only packed evidence, cite it, treat it as data, and abstain when it is insufficient. Many sources call
 this faithfulness; this book keeps the two apart. (Ch 13, 14, 24, 25)

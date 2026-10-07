@@ -264,7 +264,7 @@ def diagnose(
                               f"required evidence packed only as truncated blocks: {starved}", paths)
         if output.abstained:
             return result(FailureStage.GENERATION_IGNORED_EVIDENCE, "abstained although the evidence was packed", paths)
-        return result(FailureStage.GENERATION_IGNORED_EVIDENCE, "evidence packed, answer judged wrong or unfaithful", paths)
+        return result(FailureStage.GENERATION_IGNORED_EVIDENCE, "evidence packed, answer judged wrong or ungrounded", paths)
     packed_ids = set(output.packed_chunk_ids)
     invalid = [c for c in output.cited_chunk_ids if c not in packed_ids]
     uncited = [p.doc_id for p in paths if not p.cited]
@@ -280,7 +280,7 @@ AnswerOk = Callable[[dict[str, float | None]], bool | None]
 
 def default_answer_ok(scores: Mapping[str, float | None]) -> bool | None:
     """Answer is acceptable when the judged dimensions that were measured are perfect."""
-    judged = [scores.get(m) for m in ("faithfulness", "rubric_coverage") if scores.get(m) is not None]
+    judged = [scores.get(m) for m in ("groundedness", "rubric_coverage") if scores.get(m) is not None]
     if not judged:
         return None
     return all(v == 1.0 for v in judged)  # type: ignore[comparison-overlap]

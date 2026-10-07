@@ -27,7 +27,7 @@ from .stage_isolation import OWNER, FailureStage, StageDiagnosis, stage_counts, 
 
 HEADLINE_RETRIEVAL = ["hit@1", "hit@5", "recall@5", "recall@10", "precision@5", "mrr", "ndcg@10", "context_relevance", "evidence_packed"]
 HEADLINE_ANSWER = ["abstention_correct", "citation_precision", "citation_recall", "citations_valid",
-                   "faithfulness", "contradiction_free", "rubric_coverage", "relevance"]
+                   "groundedness", "contradiction_free", "rubric_coverage", "relevance"]
 
 
 def _f(x: float | None, d: int = 3) -> str:
@@ -179,7 +179,7 @@ def render_rag_report(
     baseline_diagnoses: Sequence[StageDiagnosis] | None = None,
     gate: GateResult | None = None,
     title: str = "RAG evaluation",
-    slice_metrics: Sequence[str] = ("recall@5", "faithfulness", "abstention_correct"),
+    slice_metrics: Sequence[str] = ("recall@5", "groundedness", "abstention_correct"),
     slice_min_n: int = 2,
     n_resamples: int = 2000,
     seed: int = 0,
@@ -211,7 +211,7 @@ def render_rag_report(
     if baseline is not None:
         out += ["## Per-case regressions", ""]
         any_reg = False
-        for m in ("recall@5", "evidence_packed", "abstention_correct", "faithfulness", "rubric_coverage"):
+        for m in ("recall@5", "evidence_packed", "abstention_correct", "groundedness", "rubric_coverage"):
             if m not in run.metric_names():
                 continue
             regs = [d for d in per_case_deltas(baseline, run, m) if d.delta < 0]

@@ -18,7 +18,7 @@
     "abstention_correct": 0.669,
     "citation_precision": 0.939,
     "citations_valid": 1.0,
-    "faithfulness_lexical": 1.0,
+    "groundedness_lexical": 1.0,
     "p50_ms": 11.2,
     "p95_ms": 14.4,
     "cost_per_case_usd": 0.00144

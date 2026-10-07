@@ -81,8 +81,8 @@ class ExtractiveGenerator:
     """Packs the top `pack_k` hits, answers with the best-overlapping sentence, or abstains.
 
     A stand-in for Chapter 13's grounded generator with the same observable contract: packed
-    evidence, cited chunk ids, and an abstention flag. It is faithful by construction (it only
-    quotes), which makes it a useful control: any faithfulness failure it shows is a judge bug.
+    evidence, cited chunk ids, and an abstention flag. It is grounded by construction (it only
+    quotes), which makes it a useful control: any groundedness failure it shows is a judge bug.
     """
 
     def __init__(self, *, pack_k: int = 3, min_overlap: float = 0.4) -> None:
@@ -245,7 +245,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--baseline", default="lexical-k5-pack1", choices=sorted(PRESETS))
     ap.add_argument("--candidate", default="lexical-rerank-k5-pack4", choices=sorted(PRESETS))
     ap.add_argument("--judges", default="none", choices=["none", "llm"],
-                    help="llm: add faithfulness, rubric coverage, relevance judges via aie_core settings")
+                    help="llm: add groundedness, rubric coverage, relevance judges via aie_core settings")
     ap.add_argument("--out", default="out/rag_eval")
     args = ap.parse_args(argv)
 

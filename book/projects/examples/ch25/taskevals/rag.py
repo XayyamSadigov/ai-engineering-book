@@ -1,5 +1,5 @@
 # path: book/projects/examples/ch25/taskevals/rag.py
-"""A small RAG answer evaluator over evidence: faithfulness, answer relevance, citations, abstention.
+"""A small RAG answer evaluator over evidence: groundedness, answer relevance, citations, abstention.
 
 Chapter 14 owns RAG evaluation in depth (retrieval metrics, stage isolation, the gold set).
 This module is the compact version a task suite needs when a feature contains a RAG step:
@@ -8,7 +8,7 @@ This module is the compact version a task suite needs when a feature contains a 
     expected = {"answerable": true, "required_sources": ["pto-policy"]}      # optional
     output   = {"answer": "... [pto-policy]", "citations": ["pto-policy"]}
 
-Faithfulness here is claim-level: split the answer into sentences, call a sentence supported
+Groundedness here is claim-level: split the answer into sentences, call a sentence supported
 when one evidence passage covers enough of its content words and contains every number and
 identifier it states. It is a lexical proxy; `judge_evaluators` adds evalkit's calibrated
 GROUNDEDNESS and RELEVANCE judges for the semantic version.
@@ -52,7 +52,7 @@ def answer_relevance(question: str, answer: str) -> float:
     return len(q & content_words(answer)) / len(q) if q else 1.0
 
 
-RAG_METRICS = ["rag_faithfulness", "rag_answer_relevance", "rag_citations_valid", "rag_abstention_correct"]
+RAG_METRICS = ["rag_groundedness", "rag_answer_relevance", "rag_citations_valid", "rag_abstention_correct"]
 
 
 class RagAnswerEvaluator:
@@ -82,15 +82,15 @@ class RagAnswerEvaluator:
                   detail={"cited": sorted(cited), "retrieved": sorted(evidence_ids)} if not citations_ok else None),
         ]
         if abstained:
-            # Nothing was claimed: faithfulness is vacuous, relevance is decided by abstention correctness.
-            scores += [Score(name="rag_faithfulness", value=1.0, passed=True),
+            # Nothing was claimed: groundedness is vacuous, relevance is decided by abstention correctness.
+            scores += [Score(name="rag_groundedness", value=1.0, passed=True),
                        Score(name="rag_answer_relevance", value=float(abstention_ok), passed=abstention_ok)]
             return scores
         claims = claim_support(answer, evidence)
-        faith = sum(c["supported"] for c in claims) / len(claims) if claims else 1.0
+        grounded = sum(c["supported"] for c in claims) / len(claims) if claims else 1.0
         rel = answer_relevance(case.input["question"], answer)
         scores += [
-            Score(name="rag_faithfulness", value=faith, passed=faith >= 1.0,
+            Score(name="rag_groundedness", value=grounded, passed=grounded >= 1.0,
                   detail=[c for c in claims if not c["supported"]] or None),
             Score(name="rag_answer_relevance", value=min(1.0, rel), passed=rel >= self.min_relevance),
         ]

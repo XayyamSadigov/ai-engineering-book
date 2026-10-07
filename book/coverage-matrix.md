@@ -112,7 +112,7 @@ in each chapter's Exercises section; their solutions are in `solutions/`.
 | Evidence packing, grounding, citations, abstention | Yes | 13 | Production | `ragkit.generation` GroundedQA |
 | Handling conflicting versions and hallucination reduction | Yes | 13, 15 | Production | Packer conflict notes; Project 3 authority layer |
 | Retrieval metrics: hit@k, recall@k, precision@k, MRR, nDCG | Yes | 14 | Production | `ragkit.eval.rag_metrics` |
-| Context relevance, faithfulness, answer relevance judges | Yes | 14 | Production | `ragkit.eval.rag_judges` |
+| Context relevance, groundedness, answer relevance judges | Yes | 14 | Production | `ragkit.eval.rag_judges` |
 | Stage isolation of RAG failures | Yes | 14 | Production | `ragkit.eval.stage_isolation` |
 | Indexing pipelines, incremental updates, deletion | Yes | 15 | Production | Project 3 ingestion worker |
 | ACL-aware retrieval and multi-tenancy | Yes | 15, 27 | Production | Project 3 ACL tests |

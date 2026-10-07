@@ -65,5 +65,5 @@ flowchart LR
 - A human approver can approve a malicious draft. The approval card shows exact text and the
   argument hash; four-eyes forbids self-approval. Training and sampling of approvals are process
   controls outside the code.
-- The offline lexical faithfulness judge misses negations (kappa against the labeled sample is
+- The offline lexical groundedness judge misses negations (kappa against the labeled sample is
   reported). Online, sampled answers go to an LLM judge calibrated per Chapter 24.

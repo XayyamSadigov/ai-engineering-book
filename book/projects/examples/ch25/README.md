@@ -12,7 +12,7 @@ ch25/
   pyproject.toml  conftest.py  .env.example
   taskevals/
     prompts.py          PromptContractEvaluator, reply_judge (rubric)
-    rag.py              RagAnswerEvaluator (faithfulness, relevance, citations, abstention), judge_evaluators
+    rag.py              RagAnswerEvaluator (groundedness, relevance, citations, abstention), judge_evaluators
     trajectory.py       thin Trajectory JSON view, TrajectorySpec, assertions, TrajectoryEvaluator, pass_at_k
     replay.py           agentkit event logs -> Trajectory export (trajectory_from_events), recorded_run_target,
                         agentkit_replay_target (counterfactual replay via agentkit.replay), replay_fidelity_evaluator

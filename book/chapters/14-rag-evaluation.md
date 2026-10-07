@@ -188,7 +188,7 @@ It exists because recall and evidence sufficiency are blind to noise. A configur
 
 With retrieval measured, the answer is evaluated given the evidence that was actually packed. Five dimensions, each one a separate score, each one answering a different user-facing question.
 
-**Groundedness.** Is every factual claim in the answer supported by the packed evidence? This is the hallucination metric for RAG. Chapter 24 defines the term and separates it from faithfulness (no distortion of the source). The `faithfulness` score in ragkit, produced by `FaithfulnessJudge`, follows the RAGAS naming but measures what Chapter 24 calls groundedness. The implementation decomposes it: a first judge call extracts atomic claims from the answer ("Up to 10 PTO days carry over", "Carried-over days expire on 31 March"); a second call checks each claim against the evidence, labeling it supported, unsupported, or contradicted, with the ids of the passages it relied on. The `faithfulness` score is the supported fraction. A second score, `contradiction_free`, fails when any claim is contradicted, which covers the contradiction part of faithfulness in Chapter 24's sense but not dropped qualifiers. The decomposition costs one extra call and buys three things:
+**Groundedness.** Is every factual claim in the answer supported by the packed evidence? This is the hallucination metric for RAG. Chapter 24 defines the term and separates it from faithfulness (no distortion of the source). ragkit's `GroundednessJudge` decomposes it: a first judge call extracts atomic claims from the answer ("Up to 10 PTO days carry over", "Carried-over days expire on 31 March"); a second call checks each claim against the evidence, labeling it supported, unsupported, or contradicted, with the ids of the passages it relied on. The `groundedness` score is the supported fraction. A second score, `contradiction_free`, fails when any claim is contradicted, which covers the contradiction part of faithfulness in Chapter 24's sense but not dropped qualifiers. The decomposition costs one extra call and buys three things:
 
 - a score that degrades proportionally (one invented number in a five-claim answer is 0.8, not a vague "2 out of 3");
 - a list of the unsupported claims, which is what a human reviewer and a developer actually need;
@@ -225,7 +225,7 @@ Chapter 24 formalizes the judge contract that this chapter relies on: one dimens
 
 **Holistic versus decomposed.** A single-call "groundedness 0 to 3" rubric judge is cheaper and is available as `holistic_groundedness_judge`. Chapter 24's "Which groundedness evaluator when" compares it with the claim-level judge and with Chapter 25's free lexical check, which suits CI smoke tests and production monitoring. Use it as the baseline when you calibrate the claim-level judge, not as a substitute. If both agree with humans equally on your data, keep the cheaper one; on most RAG data the decomposed judge has the lower false pass rate (the share of answers humans fail that the judge passes), because a fluent answer with one invented number fools a holistic judge more easily than a per-claim check.
 
-Calibration follows Chapter 24's procedure with RAG-specific sampling: stratify the human-labeled sample by abstention outcome, by tag (multi-hop and conflicting-versions cases are where judges disagree most), and by stage-isolation label. Report agreement on the pass/fail decision the gate uses (a `faithfulness` score equal to 1.0), and the false pass rate above all. A groundedness judge that passes a third of the answers humans fail will let hallucination regressions through any gate built on it.
+Calibration follows Chapter 24's procedure with RAG-specific sampling: stratify the human-labeled sample by abstention outcome, by tag (multi-hop and conflicting-versions cases are where judges disagree most), and by stage-isolation label. Report agreement on the pass/fail decision the gate uses (a `groundedness` score equal to 1.0), and the false pass rate above all. A groundedness judge that passes a third of the answers humans fail will let hallucination regressions through any gate built on it.
 
 ### Stage isolation
 
@@ -371,7 +371,7 @@ book/projects/ragkit/
   ragkit/eval/
     rag_dataset.py        RagExpectation, RagOutput, gold conversion, synthetic generation + filters
     rag_metrics.py        hit/recall/precision@k, MRR, nDCG, leaks, context relevance, citations, abstention
-    rag_judges.py         FaithfulnessJudge, RubricCoverageJudge, ContextRelevanceJudge, evalkit rubric judges
+    rag_judges.py         GroundednessJudge, RubricCoverageJudge, ContextRelevanceJudge, evalkit rubric judges
     stage_isolation.py    FailureStage, diagnose, diagnose_run, stage_counts, stage_shift
     rag_report.py         render_rag_report
     run_rag_eval.py       offline demo system, presets, DEFAULT_GATE, compare_configs, CLI
@@ -552,9 +552,9 @@ VERIFY_SYSTEM = (
     "knowledge, even if you believe the claim is true. List the ids of the passages you relied on."
 )
 # ...
-    def verify(self, claims: Sequence[str], evidence: Sequence[Chunk]) -> FaithfulnessResult:
+    def verify(self, claims: Sequence[str], evidence: Sequence[Chunk]) -> GroundednessResult:
         if not claims:
-            return FaithfulnessResult(claims=[], verdicts=[])
+            return GroundednessResult(claims=[], verdicts=[])
         numbered = "\n".join(f"{i + 1}. {c}" for i, c in enumerate(claims))
         # ...
         parsed, _ = complete_structured(self.client, req, _Verdicts, self.max_repair_attempts)
@@ -569,7 +569,7 @@ VERIFY_SYSTEM = (
                 v.verdict = "unsupported"
                 v.reasoning = f"[downgraded: cited evidence {v.evidence_ids} was not shown] {v.reasoning}"
                 downgraded.append(v.claim)
-        return FaithfulnessResult(claims=list(claims), verdicts=verdicts, downgraded=downgraded)
+        return GroundednessResult(claims=list(claims), verdicts=verdicts, downgraded=downgraded)
     # ...
     def __call__(self, case: EvalCase, output: Any) -> list[Score]:
         out = RagOutput.coerce(output)
@@ -627,7 +627,7 @@ The decision tree from the diagram above, in code: permission first, then absten
 
 The `None` values matter: a stage that the trace does not record is "unknown", not "lost", so a retriever without a reranker is never blamed for a rerank drop. When no required document was lost, the rest of `diagnose` (on disk) checks for evidence packed only as truncated blocks (`truncated-in-packing`), then for an abstention or a failed judge verdict (`generation-ignored-evidence`), then for invalid or missing citations (`citation-error`).
 
-`stage_lists` reads four trace layouts: (1) Chapter 12's ordered `stages` list, whose entries have a `kind` of `retrieve`, `fusion`, or `rerank` and their `candidate_ids` (transform stages carry no ids and are skipped); (2) the flat traces of Chapter 12's single retrievers (`stage` plus `candidate_ids`); (3) the traces of its hybrid retriever (per-retriever sub-traces plus `fused_ids`); and (4) a generic flat form (`trace["bm25_ids"]`) for other retrievers. `diagnose_run` applies `diagnose` to a stored run, with `default_answer_ok` treating an answer as acceptable when the `faithfulness` (groundedness) and `rubric_coverage` scores, if measured, are both 1.0.
+`stage_lists` reads four trace layouts: (1) Chapter 12's ordered `stages` list, whose entries have a `kind` of `retrieve`, `fusion`, or `rerank` and their `candidate_ids` (transform stages carry no ids and are skipped); (2) the flat traces of Chapter 12's single retrievers (`stage` plus `candidate_ids`); (3) the traces of its hybrid retriever (per-retriever sub-traces plus `fused_ids`); and (4) a generic flat form (`trace["bm25_ids"]`) for other retrievers. `diagnose_run` applies `diagnose` to a stored run, with `default_answer_ok` treating an answer as acceptable when the `groundedness` and `rubric_coverage` scores, if measured, are both 1.0.
 
 ### Wiring, gate, and comparison
 
@@ -744,7 +744,7 @@ These are failures of the evaluation itself: ways the measurement lies.
 
 **Lenient groundedness judge.** The judge passes answers with invented numbers, often because it checks topical similarity rather than claim support. It shows up as a high judge pass rate with a rising false pass rate in human spot checks. The evidence-id cross-check and periodic calibration on stratified samples are the defenses.
 
-**Judge injected through evidence.** A retrieved passage tells the judge to pass the answer. It shows up as a `faithfulness` score of 1.0 on cases whose packed evidence contains instruction-like text. Keep an injected-evidence case in the judge's own tests and alert when judged scores correlate with Chapter 13's flagged-span markers.
+**Judge injected through evidence.** A retrieved passage tells the judge to pass the answer. It shows up as a `groundedness` score of 1.0 on cases whose packed evidence contains instruction-like text. Keep an injected-evidence case in the judge's own tests and alert when judged scores correlate with Chapter 13's flagged-span markers.
 
 ## Tradeoffs
 
@@ -752,7 +752,7 @@ These are failures of the evaluation itself: ways the measurement lies.
 
 **Curated gold set versus sampled traffic.** A curated set is stable, labeled, and reproducible, so it can gate releases, but it drifts away from what users actually ask. Sampled production questions have the real distribution and phrasing, but they need evidence labels and redaction, and they change between runs. Gate on the curated set, refresh it from sampled traffic and user-reported failures, and report the sampled set as its own slice. (Claim-level versus holistic judging is covered under Judging RAG answers reliably.)
 
-**Strict versus lenient pass criteria.** Requiring a `faithfulness` score of exactly 1.0 makes the gate sensitive to judge noise; a threshold such as 0.8 tolerates noise and lets minor fabrications through. Prefer the strict criterion for regulated content (HR policy, security) and a threshold with human review of the failures elsewhere.
+**Strict versus lenient pass criteria.** Requiring a `groundedness` score of exactly 1.0 makes the gate sensitive to judge noise; a threshold such as 0.8 tolerates noise and lets minor fabrications through. Prefer the strict criterion for regulated content (HR policy, security) and a threshold with human review of the failures elsewhere.
 
 **Single gate versus slice gates.** Gating only on aggregates is stable and misses slice regressions; gating every slice catches them and produces false alarms on small slices. Gate aggregates, gate large slices with a tolerance, report small slices, and gate critical tags (forbidden-doc) on every case.
 
@@ -819,7 +819,7 @@ For the judges' real behavior, tests are not enough: calibrate against human lab
 
 **P2.** (about 90 min) Add a `first_stage_recall` evaluator that reads each candidate list from the trace and reports recall@50 per list and for their union, so a report can show coverage before fusion and reranking.
 
-**P3.** (about 90 min) Implement a judge cache for `FaithfulnessJudge` keyed by judge version, a hash of the answer, and the packed chunk ids, with a JSONL backend. Show with a test that re-scoring a stored run makes no judge calls.
+**P3.** (about 90 min) Implement a judge cache for `GroundednessJudge` keyed by judge version, a hash of the answer, and the packed chunk ids, with a JSONL backend. Show with a test that re-scoring a stored run makes no judge calls.
 
 **P4.** (about 3 hours) Extend `synthesize_questions` with an embedding-based dedupe using `aie_core` embeddings and a multi-chunk mode that shows the model two chunks from different documents and asks for a question requiring both. Report how the difficulty distribution changes.
 

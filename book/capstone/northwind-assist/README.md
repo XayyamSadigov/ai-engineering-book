@@ -87,7 +87,7 @@ northwind-assist/
                                                       configmap, secret.example
   docs/threat-model.md                                trust boundaries, threats, controls, tests, residual risks
   eval/gates.toml                                     release thresholds (Chapter 25 format)
-  eval/data/faithfulness_labels.jsonl                 human-labeled sample for judge agreement
+  eval/data/groundedness_labels.jsonl                 human-labeled sample for judge agreement
   eval/reference/                                     offline reference runs: candidate and ACL-disabled
   northwind_assist/
     _paths.py            book example directories on sys.path (appended, never prepended)

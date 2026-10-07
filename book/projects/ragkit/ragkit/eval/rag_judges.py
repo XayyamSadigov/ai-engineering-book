@@ -1,12 +1,12 @@
 # path: book/projects/ragkit/ragkit/eval/rag_judges.py
-"""LLM judges for RAG answers: claim-level faithfulness, rubric coverage, relevance, context relevance.
+"""LLM judges for RAG answers: claim-level groundedness, rubric coverage, relevance, context relevance.
 
 Design rules, all inherited from Chapter 24 and made specific to RAG:
 
-* One dimension per call. Faithfulness (is every claim supported by the packed evidence?) and
+* One dimension per call. Groundedness (is every claim supported by the packed evidence?) and
   coverage (does the answer contain the facts the rubric requires?) move independently: an
-  answer can be perfectly faithful and useless, or complete and partly invented.
-* Faithfulness is decomposed. A holistic "is this grounded? 0-3" judge blends a long correct
+  answer can be perfectly grounded and useless, or complete and partly invented.
+* Groundedness is decomposed. A holistic "is this grounded? 0-3" judge blends a long correct
   answer with one invented number into a 2. Extracting atomic claims first and checking each
   one against the evidence yields a fraction, a list of the unsupported claims, and a per-claim
   trail a human can audit.
@@ -14,7 +14,7 @@ Design rules, all inherited from Chapter 24 and made specific to RAG:
   supported by an evidence id that was never shown to the generator is downgraded.
 * Evidence and answers are untrusted data, wrapped in tags the judge is told never to obey.
   RAG evidence is exactly where indirect prompt injection lives (Chapter 26).
-* Abstentions are not judged for faithfulness or coverage. The evaluators return no score, so
+* Abstentions are not judged for groundedness or coverage. The evaluators return no score, so
   averages are over answered cases, and abstention quality is measured deterministically.
 """
 from __future__ import annotations
@@ -64,7 +64,7 @@ def _request(system: str, user: str, model: str | None, purpose: str, max_tokens
     )
 
 
-# ============================================================================ faithfulness
+# ============================================================================ groundedness
 class _Claims(BaseModel):
     claims: list[str] = Field(description="atomic, self-contained factual claims made by the answer")
 
@@ -80,7 +80,7 @@ class _Verdicts(BaseModel):
     verdicts: list[ClaimVerdict]
 
 
-class FaithfulnessResult(BaseModel):
+class GroundednessResult(BaseModel):
     claims: list[str]
     verdicts: list[ClaimVerdict]
     downgraded: list[str] = Field(default_factory=list)  # claims whose cited evidence id did not exist
@@ -121,10 +121,10 @@ VERIFY_SYSTEM = (
 )
 
 
-class FaithfulnessJudge:
-    """Two-step faithfulness: extract claims, then verify each against the packed evidence."""
+class GroundednessJudge:
+    """Two-step groundedness: extract claims, then verify each against the packed evidence."""
 
-    name = "faithfulness"
+    name = "groundedness"
 
     def __init__(self, client: LLMClient, *, model: str | None = None, max_repair_attempts: int = 2) -> None:
         self.client = client
@@ -145,9 +145,9 @@ class FaithfulnessJudge:
         parsed, _ = complete_structured(self.client, req, _Claims, self.max_repair_attempts)
         return [c.strip() for c in parsed.claims if c.strip()]  # type: ignore[attr-defined]
 
-    def verify(self, claims: Sequence[str], evidence: Sequence[Chunk]) -> FaithfulnessResult:
+    def verify(self, claims: Sequence[str], evidence: Sequence[Chunk]) -> GroundednessResult:
         if not claims:
-            return FaithfulnessResult(claims=[], verdicts=[])
+            return GroundednessResult(claims=[], verdicts=[])
         numbered = "\n".join(f"{i + 1}. {c}" for i, c in enumerate(claims))
         req = _request(
             VERIFY_SYSTEM,
@@ -168,15 +168,15 @@ class FaithfulnessJudge:
                 v.verdict = "unsupported"
                 v.reasoning = f"[downgraded: cited evidence {v.evidence_ids} was not shown] {v.reasoning}"
                 downgraded.append(v.claim)
-        return FaithfulnessResult(claims=list(claims), verdicts=verdicts, downgraded=downgraded)
+        return GroundednessResult(claims=list(claims), verdicts=verdicts, downgraded=downgraded)
 
-    def judge(self, question: str, answer: str, evidence: Sequence[Chunk]) -> FaithfulnessResult:
+    def judge(self, question: str, answer: str, evidence: Sequence[Chunk]) -> GroundednessResult:
         return self.verify(self.extract_claims(question, answer), evidence)
 
     # ------------------------------------------------------------------ evaluator protocol
     @property
     def metric_names(self) -> list[str]:
-        return ["faithfulness", "contradiction_free"]
+        return ["groundedness", "contradiction_free"]
 
     def __call__(self, case: EvalCase, output: Any) -> list[Score]:
         out = RagOutput.coerce(output)
@@ -185,7 +185,7 @@ class FaithfulnessJudge:
         r = self.judge(rag_input(case).question, out.answer, out.packed_chunks)
         detail = {"unsupported": r.unsupported_claims, "downgraded": r.downgraded, "n_claims": r.n}
         return [
-            Score(name="faithfulness", value=r.score, passed=r.score == 1.0, detail=detail),
+            Score(name="groundedness", value=r.score, passed=r.score == 1.0, detail=detail),
             Score(name="contradiction_free", value=0.0 if r.contradicted else 1.0, passed=r.contradicted == 0),
         ]
 
@@ -338,14 +338,14 @@ def holistic_groundedness_judge(client: LLMClient, *, model: str | None = None) 
 
 def default_judges(client: LLMClient, *, model: str | None = None) -> list[Any]:
     return [
-        FaithfulnessJudge(client, model=model),
+        GroundednessJudge(client, model=model),
         RubricCoverageJudge(client, model=model),
         answer_relevance_judge(client, model=model),
     ]
 
 
 __all__ = [
-    "RAG_JUDGE_PROMPT_VERSION", "render_evidence", "ClaimVerdict", "FaithfulnessResult", "FaithfulnessJudge",
+    "RAG_JUDGE_PROMPT_VERSION", "render_evidence", "ClaimVerdict", "GroundednessResult", "GroundednessJudge",
     "RubricCoverageJudge", "ContextRelevanceJudge", "answer_relevance_judge", "holistic_groundedness_judge",
     "default_judges",
 ]

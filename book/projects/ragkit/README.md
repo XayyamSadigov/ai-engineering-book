@@ -126,7 +126,7 @@ logs one warning and delegates to `LexicalOverlapReranker`.
 ragkit/eval/
   rag_dataset.py      # RagExpectation, RagInput, RagOutput, from_grounded_qa, load_gold_dataset, synthesize_questions
   rag_metrics.py      # hit/recall/precision@k, MRR, nDCG (required=2, acceptable=1), leak_report, citations, abstention
-  rag_judges.py       # FaithfulnessJudge (claims + support), RubricCoverageJudge, ContextRelevanceJudge, evalkit rubric judges
+  rag_judges.py       # GroundednessJudge (claims + support), RubricCoverageJudge, ContextRelevanceJudge, evalkit rubric judges
   stage_isolation.py  # FailureStage, diagnose, diagnose_run, stage_counts, stage_shift
   rag_report.py       # render_rag_report (leaks first, paired deltas, stage table, slices)
   run_rag_eval.py     # offline demo system, PRESETS, DEFAULT_GATE, compare_configs, CLI

@@ -3,8 +3,8 @@
 
 Caveat stated up front: citation validity uses the same `deterministic_support` definition as
 the verification guard, so configurations with the guard pass it by construction offline. It
-measures "did an unsupported claim ship", not independent faithfulness. With a live model, add
-an LLM faithfulness judge (Chapter 24's evalkit) as an independent measurement.
+measures "did an unsupported claim ship", not independent groundedness. With a live model, add
+an LLM groundedness judge (Chapter 24's evalkit) as an independent measurement.
 """
 from __future__ import annotations
 
@@ -76,7 +76,7 @@ def score(q: Question, report: AnswerReport, corpus: Corpus, principal: dict[str
     detail = {
         "coverage": doc_recall == 1.0,
         "key_facts": fact_recall >= 0.75,
-        "faithful": bool(claims) and valid == len(claims),
+        "grounded": bool(claims) and valid == len(claims),
         "conflicts_handled": flagged if q.expects_conflict else not flagged,
     }
     return Score(

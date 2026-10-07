@@ -1,6 +1,15 @@
 # Chapter 25 — Evaluating AI Systems in Practice
 
-Chapter 24 built the evaluation core: cases, runs, judges, statistics, and a gate. This chapter puts it to work on the shapes of system you actually ship. After it you will be able to write evaluators for prompts, RAG answers, agents, extraction, classification, summarization, and tool use. You will evaluate an agent by its trajectory, read straight from the event logs of Chapter 19's `agentkit` runtime, and replay recorded runs against a new planner without touching production. You will generate synthetic cases with a model and filter them before they mislead you, and run a fast evaluation suite on every merge request with a release gate that fails the pipeline and attaches a report. Finally, you will carry evaluation into production by joining user feedback to trace ids and comparing a canary with control under a sequential rule that survives repeated looks. The code is `book/projects/examples/ch25/`: a `taskevals` package of task-specific evaluators on top of `evalkit`, four offline suites for Northwind Assist, a `release_gate.py` script, a pytest plugin, and ready-to-adapt GitHub Actions and GitLab CI definitions.
+Chapter 24 built the evaluation core: cases, runs, judges, statistics, and a gate. This chapter puts it to work on the shapes of system you actually ship, from a single prompt to an agent that acts, and carries it through CI into production.
+
+**You will be able to:**
+- Choose and write an evaluator that fits the output shape: prompt, RAG answer, agent trajectory, extracted record, label, summary, or tool call.
+- Evaluate an agent by its trajectory and end state, read from `agentkit` event logs, and replay recorded runs against a new planner without side effects.
+- Generate synthetic evaluation cases, filter them for answerability and duplicates, and measure their bias.
+- Wire fast and full suites into CI behind a release gate that blocks on missing runs, missing baselines, and critical failures.
+- Join production feedback to traces, turn corrections into regression cases, and decide a canary with a rule that survives repeated looks.
+
+**Prerequisites:** Chapter 24 (`evalkit` cases, runs, judges, gates), Chapter 19 (the `agentkit` event log and replay), Chapter 14 (RAG evaluation). | **Code:** `book/projects/examples/ch25/` (run: `cd book/projects/examples/ch25 && pytest -q`) | **Builds:** the `taskevals` package, four Northwind Assist suites, and the `release_gate.py` CI gate.
 
 ## Why this matters
 
@@ -147,7 +156,7 @@ Three refinements make field metrics useful for a release decision. **Weighting*
 
 ### Classification: macro-F1, per-class recall, calibration
 
-Chapter 24 explained why accuracy hides rare classes and why thresholds are product decisions. In practice, a classification suite needs three run-level numbers beyond per-case correctness. **Macro-F1** averages F1 over classes so that a six-ticket class counts as much as a sixty-ticket one. **Per-class recall** for the classes whose misses are costly (security incidents at Northwind) gets its own floor in the gate. **Calibration** (expected calibration error and Brier score) matters whenever confidence drives routing or escalation; if the classifier says 0.9 and is right 60% of the time, an escalation threshold at 0.7 is meaningless.
+Chapter 24 explained why accuracy hides rare classes and why thresholds are product decisions. In practice, a classification suite needs three run-level numbers beyond per-case correctness. **Macro-F1** averages F1 over classes so that a six-ticket class counts as much as a sixty-ticket one. **Per-class recall** for the classes whose misses are costly (security incidents at Northwind) gets its own floor in the gate. **Calibration** (expected calibration error and Brier score; Chapter 6 owns calibration and Chapter 24 adds the Brier score) matters whenever confidence drives routing or escalation; if the classifier says 0.9 and is right 60% of the time, an escalation threshold at 0.7 is meaningless.
 
 These are properties of the run, not of a case, so `evalkit`'s per-case metric rules cannot express them. `taskevals.classification_aggregates` rebuilds the confusion matrix from the gold, predicted, and confidence values stored in each case's score detail, maps out-of-enum predictions to an `__invalid__` column so they count as wrong instead of crashing the matrix, and returns macro-F1, per-class recall and support, ECE, Brier, the most-confused pairs, and reliability bins. The release gate evaluates rules such as `macro_f1 >= 0.85` and `recall:security_report >= 0.65` against those aggregates.
 
@@ -181,7 +190,7 @@ For both designs, the conversation is the group key. Turns from one conversation
 
 ### Synthetic data: generate, validate, and measure the bias
 
-Before launch there is no traffic to sample, and even after launch rare slices have too few cases to measure. A model can generate cases quickly: give it a document and ask for questions an employee might ask that the document answers, with a short answer and a verbatim supporting quote. The pipeline in `taskevals.synthetic` makes one structured call per document through `complete_structured`, at a nonzero temperature because diversity is the point, and wraps the document in delimiters because source documents can contain injected instructions (Northwind's vendor newsletter from Chapters 11 and 13 does).
+This chapter owns synthetic evaluation data; Chapters 14 and 24 use it and point here. **Synthetic data** means evaluation cases written by a model instead of collected from users or written by experts. Before launch there is no traffic to sample, and even after launch rare slices have too few cases to measure. A model can generate cases quickly: give it a document and ask for questions an employee might ask that the document answers, with a short answer and a verbatim supporting quote. The pipeline in `taskevals.synthetic` makes one structured call per document through `complete_structured`, at a nonzero temperature because diversity is the point, and wraps the document in delimiters because source documents can contain injected instructions (Northwind's vendor newsletter from Chapters 11 and 13 does).
 
 Generated cases are drafts. The validation filters, in order:
 
@@ -194,6 +203,20 @@ Generated cases are drafts. The validation filters, in order:
 Each surviving case is tagged `origin:synthetic`, grouped by its source document so that sibling questions never straddle a dev/holdout split, and marked `review: pending` until a human has looked at a sample.
 
 The bias is measurable, and you should measure it rather than assert it. `bias_report` computes, for synthetic and reference questions alike, the share of each question's content words that appear in its source document. On Northwind's data, two synthetic questions that echo the PTO policy score an overlap of 1.0 against 0.74 for the 40 expert-written retrieval questions in the shared gold set. That gap is the mechanism by which synthetic sets flatter lexical retrieval (Chapter 12): the question carries the document's own words. Generators also cluster on explicit facts in tables and bold text, under-produce multi-document questions, and share blind spots with the system when one model family plays both roles. The mitigations are prompts that ask for employee wording, a different model family for generation than for the system under test, human-written seeds for hard slices, and above all reporting the synthetic slice separately so its score never stands in for real traffic.
+
+**Beyond retrieval questions.** Document-grounded questions are the easiest case because the source supplies the answer. Other task shapes need other generators, each with its own validation:
+
+- **Perturbations of real cases.** Take a labeled ticket or invoice and change one thing: reword it, swap the language, move the total to a different line, add a distracting second number, insert an injected instruction. The gold label is inherited or changed by rule, so validation is cheap, and the variants probe robustness on exactly the inputs you already understand. This is the best source for classification and extraction slices.
+- **Rare-class and edge-case generation.** Ask for tickets of a class that has six gold examples, seeded with those examples. A human must confirm the label on every one, because the generator's idea of "security incident" is the thing being tested.
+- **Adversarial cases.** Injection attempts, policy-boundary requests, and malformed inputs, generated from a catalog of attack patterns. Chapter 27 owns the red-team corpus; synthetic generation widens it, and every case keeps the `critical` tag so one failure blocks.
+- **Agent tasks.** A goal, the allowed tools, and end-state predicates, generated from the tool catalog and then run once against sandboxed tools. Keep a generated task only if a reference planner can complete it and the predicates are checkable; a task nobody can solve measures nothing.
+- **Simulated users** for multi-turn evaluation, described above, are synthetic data generated live.
+
+Diversity comes from structure, not from temperature. Enumerate the axes you care about (persona, tenant, intent, difficulty, language, document) and generate per cell, so the set covers the grid instead of piling up on the generator's favorite question.
+
+**When not to use it.** Synthetic cases do not replace a frozen holdout of real or expert-written cases, they do not estimate the production score, and they are a poor fit where the generator and the system share a model family and therefore share blind spots. Use them to find failures and fill slices, not to certify a release.
+
+**Lifecycle.** Record the generator model, prompt version, seed, and source document hash in each case's metadata, so a case can be traced and regenerated when its source changes. Review a random sample of every batch (for example 10 to 20 percent, illustrative) and the whole of any slice that gates a release. Reviewed cases can join the regression or golden datasets with their `origin:synthetic` tag intact; they never enter the holdout, and a generator never sees holdout cases as seeds.
 
 ### Evaluation in CI/CD
 
@@ -211,9 +234,9 @@ Both nonzero codes block the merge; the difference tells the on-call person whet
 
 **Baselines and pins.** The baseline runs are artifacts of the last release, committed or fetched from artifact storage, and they must have been produced on the same dataset hash as the candidate; `evalkit` refuses deltas across hashes. Pinning each suite's dataset hash in the gate configuration means that editing a frozen dataset fails the gate until someone deliberately updates the pin in a reviewed change. That is the mechanism that keeps the holdout from quietly turning into a dev set. Every suite also sets `require_baseline = true`. Without it, a baseline that failed to download (an expired artifact, a renamed file) makes every regression and slice rule skip silently, and the gate then checks only absolute floors: in this chapter's suites the regressed extractor's field-F1 regression and receipt-slice rules would simply not run. A missing baseline must block just as a missing run does; here it fails a `baseline present` check (exit 1), and `test_missing_baselines_block_instead_of_skipping_regression_rules` pins it. Both CI definitions take `gates.toml` and the baselines from the default branch rather than from the merge request under test, so a change cannot relax the gate or regenerate the baseline it is judged against.
 
-**Artifacts.** The pipeline uploads the whole `eval-out` folder on every run, pass or fail: summary, gate results, per-suite reports, and the Run JSON with per-case outputs and trace ids, so a reviewer reads the regressions in the browser instead of rerunning the job. Keep artifacts long enough to audit (90 days in the provided workflows) and store release artifacts permanently next to the versions they evaluated. Chapter 32 owns the broader CI/CD design; this chapter owns the evaluation job inside it.
+**Artifacts.** The pipeline uploads the whole `eval-out` folder on every run, pass or fail: summary, gate results, per-suite reports, and the Run JSON with per-case outputs and trace ids, so a reviewer reads the regressions in the browser instead of rerunning the job. Keep artifacts long enough to audit (the chapter's workflows keep them 90 days) and store release artifacts permanently next to the versions they evaluated. Chapter 32 owns the broader CI/CD design; this chapter owns the evaluation job inside it.
 
-**Safety suites in the same pipeline.** Quality suites are not the only gate. The adversarial cases of Chapter 24 (the `critical` injection tickets here) gate quality under attack, and Chapter 27's end-to-end red team gates the effect controls: `guardrails-measure --max-effect-bypass 0.0` belongs in the same job, after the eval suites (the provided workflows leave it out), and fails the pipeline if any attack scenario produces a harmful effect. Keep the two kinds of gate separate in the summary. A quality regression is negotiable with tolerances; a safety effect is not, and averaging the two would let a quality gain buy back a security hole.
+**Safety suites in the same pipeline.** Quality suites are not the only gate. The adversarial cases of Chapter 24 (the `critical` injection tickets here) gate quality under attack, and Chapter 27's end-to-end red team gates the effect controls: `guardrails-measure --max-effect-bypass 0.0` belongs in the same job, as a step after the eval suites, and fails the pipeline if any attack scenario produces a harmful effect. Keep the two kinds of gate separate in the summary. A quality regression is negotiable with tolerances; a safety effect is not, and averaging the two would let a quality gain buy back a security hole.
 
 ### Online evaluation: feedback, corrections, canaries
 
@@ -312,18 +335,16 @@ flowchart TB
 
 ## Implementation
 
-The code lives in `book/projects/examples/ch25/` and imports `aie_core` and `evalkit`; it reimplements neither. Every file shown is on disk. Long files are shown as excerpts with their public surface and critical functions, and say so.
+The code lives in `book/projects/examples/ch25/` and imports `aie_core`, `evalkit`, and `agentkit`; it reimplements none of them. The listings below are excerpts that carry the ideas: the approval assertion and the trajectory evaluator, the event-log export, evidence checking, the classification aggregates, the synthetic answerability filter, the canary rule, and the release gate. Every listing names its file; the full files, the remaining evaluators, and the tests are on disk.
 
 ```
 book/projects/examples/ch25/
   pyproject.toml  conftest.py  README.md
   taskevals/
-    __init__.py         public names
     prompts.py          PromptContractEvaluator, REPLY_ADDRESSES_REQUEST rubric, reply_judge
     rag.py              RagAnswerEvaluator, claim_support, judge_evaluators
     trajectory.py       Trajectory format, TrajectorySpec, assertions, TrajectoryEvaluator, pass_at_k, pass_all_k
-    replay.py           trajectory_from_events, northwind_projection, recorded_run_target,
-                        agentkit_replay_target, replay_fidelity_evaluator
+    replay.py           trajectory_from_events, agentkit_replay_target, replay_fidelity_evaluator
     extraction.py       weighted field P/R, critical fields, line items, evidence_status, ExtractionEvaluator
     classification.py   LabelEvaluator, classification_aggregates, evaluate_cascade
     summarization.py    FAITHFULNESS rubric, coverage, lexical faithfulness, compression, SummaryEvaluator
@@ -334,48 +355,16 @@ book/projects/examples/ch25/
     suites.py           classification, extraction, agent, tools suites; run_suite
     text_support.py     content words, sentences, numbers, identifiers
   ci/
-    run_suite.py  release_gate.py  gates.toml  pytest_evalplugin.py
-    baselines/{classification,extraction,agent,tools}.json
+    run_suite.py  release_gate.py  gates.toml  pytest_evalplugin.py  baselines/
     github/eval-gate.yml    gitlab/.gitlab-ci.yml
   data/
     agent_tasks.jsonl  tool_cases.jsonl  build_agent_runs.py
     agent_runs/recorded/AG-00{1..4}.jsonl  agent_runs/production/P-10{1..4}.jsonl   agentkit event logs
     trajectories/{recorded,production}/*.json                                    thin JSON exports
-  tests/                65 unit tests, 5 eval-marked tests
+  tests/                unit tests (offline) and eval-marked suite tests
 ```
 
-```toml
-# path: book/projects/examples/ch25/pyproject.toml
-[project]
-name = "aie-ch25-taskevals"
-version = "0.1.0"
-description = "Chapter 25: task-specific evaluators, replay-based agent evaluation, synthetic data, CI release gate, online evaluation"
-requires-python = ">=3.11"
-dependencies = [
-  "aie-core",
-  "evalkit",
-  "agentkit",
-  "pydantic>=2.6",
-  "numpy>=1.26",
-]
-
-[project.optional-dependencies]
-dev = ["pytest>=8", "pyyaml>=6"]
-
-[tool.uv.sources]
-aie-core = { path = "../../aie_core", editable = true }
-evalkit = { path = "../../evalkit", editable = true }
-agentkit = { path = "../../agentkit", editable = true }
-
-[tool.pytest.ini_options]
-testpaths = ["tests"]
-markers = [
-  "integration: needs a real LLM provider (skipped by default)",
-]
-addopts = "-m 'not integration'"
-```
-
-The suites run offline by default. When you replace a stand-in with a real model, the usual `aie_core` settings apply:
+`pyproject.toml` declares `aie-core`, `evalkit`, and `agentkit` as editable path dependencies plus `pydantic` and `numpy`, with `pytest` and `pyyaml` as dev extras. The suites run offline by default. When you replace a stand-in with a real model, the usual `aie_core` settings apply:
 
 | Variable | Used by | Meaning |
 |---|---|---|
@@ -441,16 +430,10 @@ The task specification lives in the case's `expected` field, so tasks are data a
 
 The intended tool catalog, `NORTHWIND_TOOLS`, copies the real tool contracts of Project 4 (the support assistant): the same argument names, required fields, enums, and patterns (`create_ticket` takes `subject`, `body`, `category`, `priority`; both reply tools take `ticket_id`, `to`, `subject`, `body`), and a test compares the two catalogs whenever Project 4 is installed. An evaluator that checks a different contract from the one the runtime enforces measures a system nobody ships. Note what is absent: no tool takes a `tenant` argument. The tenant comes from the authenticated request, the sandboxed `create_ticket` reports it in its result, and the projection takes it from there, so the end-state predicate `tenant: logistics` checks where the ticket really went rather than what the model claimed.
 
-The assertions and the evaluator, from `trajectory.py` (the models, the tool catalog, and `pass_at_k` are in the file on disk):
+Two of the assertions and the evaluator that composes them, from `trajectory.py`. The other assertions (allowed tools, loops and cycles, step efficiency, tool arguments), the models, the tool catalog, and `pass_at_k` are on disk:
 
 ```python
 # path: book/projects/examples/ch25/taskevals/trajectory.py (excerpt; full file on disk)
-def assert_allowed_tools(traj: Trajectory, allowed: Sequence[str]) -> AssertionResult:
-    bad = [s.tool for s in traj.tool_calls if s.tool not in allowed]
-    return AssertionResult(name="traj_allowed_tools", passed=not bad, value=0.0 if bad else 1.0,
-                           detail=f"disallowed: {sorted(set(map(str, bad)))}" if bad else "", safety=True)
-
-
 def assert_approval_before_side_effects(traj: Trajectory, tools: Mapping[str, ToolInfo]) -> AssertionResult:
     """Every executed call to an approval-gated tool has an earlier `approved` decision for that call."""
     violations: list[str] = []
@@ -476,36 +459,7 @@ def assert_approval_before_side_effects(traj: Trajectory, tools: Mapping[str, To
                            detail=f"executed without approval: {violations}" if violations else "", safety=True)
 
 
-def assert_no_loops(traj: Trajectory, max_identical: int = 2, max_cycle_repeats: int = 3) -> AssertionResult:
-    """No identical action more than `max_identical` times; no short cycle (A,B,A,B,...) repeated."""
-    actions = [f"{s.tool}:{_canonical(s.arguments)}" for s in traj.tool_calls]
-    counts = Counter(actions)
-    worst, n = counts.most_common(1)[0] if counts else ("", 0)
-    problems = []
-    if n > max_identical:
-        problems.append(f"{worst.split(':', 1)[0]} repeated {n}x with identical arguments")
-    for period in (2, 3):
-        for start in range(len(actions)):
-            window = actions[start:start + period]
-            if len(window) < period or len(set(window)) < period:
-                continue
-            reps = 1
-            pos = start + period
-            while actions[pos:pos + period] == window:
-                reps += 1
-                pos += period
-            if reps >= max_cycle_repeats:
-                problems.append(f"cycle of length {period} repeated {reps}x")
-                break
-    return AssertionResult(name="traj_no_loops", passed=not problems, value=0.0 if problems else 1.0,
-                           detail="; ".join(problems))
-
-
-def assert_step_efficiency(traj: Trajectory, reference_steps: int, max_steps: int) -> AssertionResult:
-    actual = len(traj.tool_calls)
-    value = 1.0 if actual == 0 and reference_steps == 0 else min(1.0, reference_steps / max(actual, 1))
-    return AssertionResult(name="traj_efficiency", passed=actual <= max_steps, value=value,
-                           detail=f"{actual} tool calls, reference {reference_steps}, budget {max_steps}")
+# ...
 
 
 def assert_task_completed(traj: Trajectory, spec: TrajectorySpec) -> AssertionResult:
@@ -513,51 +467,15 @@ def assert_task_completed(traj: Trajectory, spec: TrajectorySpec) -> AssertionRe
     missing = [p.model_dump() for p in spec.final_state_contains if not p.matches(traj.final_state)]
     present = [p.model_dump() for p in spec.final_state_forbids if p.matches(traj.final_state)]
     ok = not missing and not present and traj.stop_reason == "final_answer"
-    detail = []
-    if missing:
-        detail.append(f"missing state: {missing}")
-    if present:
-        detail.append(f"forbidden state present: {present}")
-    if traj.stop_reason != "final_answer":
-        detail.append(f"stopped: {traj.stop_reason}")
+    # ... detail lists missing state, forbidden state present, and a non-final stop reason
     return AssertionResult(name="traj_task_completed", passed=ok, value=1.0 if ok else 0.0, detail="; ".join(detail))
 
 
-def assert_tool_arguments(traj: Trajectory, tools: Mapping[str, ToolInfo],
-                          expected_args: Mapping[str, Mapping[str, Any]]) -> AssertionResult:
-    """Arguments validate against the tool schema, and required values match where the task fixes them."""
-    problems: list[str] = []
-    checked = 0
-    for call in traj.tool_calls:
-        info = tools.get(call.tool or "")
-        if info is None:
-            continue  # unknown tools are the allowed-tools assertion's business
-        checked += 1
-        ok, errors = json_schema_valid(call.arguments or {}, info.parameters)
-        if not ok:
-            problems.append(f"{call.tool}:{call.call_id} schema: {errors[:2]}")
-        for key, want in expected_args.get(call.tool or "", {}).items():
-            if (call.arguments or {}).get(key) != want:
-                problems.append(f"{call.tool}:{call.call_id} {key}={(call.arguments or {}).get(key)!r} want {want!r}")
-    value = 1.0 if checked == 0 else max(0.0, 1.0 - len(problems) / checked)
-    return AssertionResult(name="traj_tool_args", passed=not problems, value=value, detail="; ".join(problems))
+# ...
 
 
 class TrajectoryEvaluator:
-    """evalkit evaluator: the output is a Trajectory (or its dict), the spec is `case.expected`.
-
-    Emits one score per assertion plus two composites: `traj_safe` (no safety assertion failed)
-    and `traj_success` (task completed AND safe AND no loop). A task that ends correctly after an
-    unauthorized intermediate action is a failure, so success is never the completion check alone.
-    """
-
-    name = "trajectory"
-    version = "1"
-    metric_names = TRAJECTORY_METRICS
-
-    def __init__(self, tools: Mapping[str, ToolInfo] = NORTHWIND_TOOLS) -> None:
-        self.tools = tools
-
+    # ...
     def __call__(self, case: EvalCase, output: Any) -> list[Score]:
         traj = output if isinstance(output, Trajectory) else Trajectory.model_validate(output)
         spec = TrajectorySpec.model_validate(case.expected)
@@ -573,7 +491,7 @@ class TrajectoryEvaluator:
 
 ### Exporting agentkit logs and replaying them
 
-The export and the replay target, from `replay.py` (`northwind_projection`, `recorded_run_target`, `load_event_logs`, and `replay_fidelity_evaluator` are in the file on disk):
+The heart of the export is one pass over the events that keeps only what the assertions need: tool calls, human approvals (plus approvals carried over from the original recording during replay), results with their status, and end-state records projected from successful writes. The replay target on disk, `agentkit_replay_target`, is a short wrapper around this function: it runs `agentkit.replay(original, llm, system_prompt=...)` with the candidate planner and exports the replayed events with `carry_approvals_from=original`, so only recorded human approvals count. Usage accounting, `northwind_projection`, and `replay_fidelity_evaluator` are on disk too:
 
 ```python
 # path: book/projects/examples/ch25/taskevals/replay.py (excerpt; full file on disk)
@@ -583,30 +501,15 @@ REPLAY_MISS_MARKER = "replay miss"
 
 def trajectory_from_events(
     events: Sequence[Event],
-    *,
-    task_id: str | None = None,
-    projection: StateProjection = northwind_projection,
-    tools: Mapping[str, ToolInfo] = NORTHWIND_TOOLS,
+    # ...
     carry_approvals_from: Sequence[Event] | None = None,
 ) -> Trajectory:
-    goal = next((e for e in events if isinstance(e, GoalSet)), None)
-    if goal is None:
-        raise ValueError("event log has no GoalSet")
+    # ...
     carried = _approved_keys(carry_approvals_from) if carry_approvals_from is not None else set()
-    requests: dict[str, ToolCallRequested] = {}
-    steps = [Step(type="user_goal", content=goal.goal)]
-    state: dict[str, list[dict[str, Any]]] = {}
-    usage = TrajectoryUsage()
-    model = ""
-    stop_reason = "running"
+    # ...
     for e in events:
         if isinstance(e, ModelDecision):
-            usage.input_tokens += e.usage.input_tokens
-            usage.output_tokens += e.usage.output_tokens
-            usage.cost_usd += e.cost_usd
-            model = model or e.model
-            if e.kind == "tool_calls" and e.text:
-                steps.append(Step(type="model_decision", content=e.text))
+            # ... accumulate tokens, cost, and model name
         elif isinstance(e, ToolCallRequested):
             requests[e.request_id] = e
             steps.append(Step(type="tool_call", call_id=e.request_id, tool=e.tool, arguments=dict(e.arguments)))
@@ -627,75 +530,18 @@ def trajectory_from_events(
             req = requests.get(e.request_id)
             if e.ok and req is not None and (rec := projection(e.tool, dict(req.arguments), e.data)) is not None:
                 state.setdefault(rec[0], []).append(rec[1])
-        elif isinstance(e, FinalAnswer):
-            steps.append(Step(type="final_answer", content=e.text))
-        elif isinstance(e, Stopped):
-            stop_reason = "final_answer" if e.reason is TerminationReason.COMPLETED else e.reason.value
-    if stop_reason == "running" and any(s.type == "final_answer" for s in steps):
-        stop_reason = "final_answer"
-    return Trajectory(
-        trajectory_id=goal.run_id, task_id=task_id or goal.metadata.get("task_id", goal.run_id),
-        agent_version=str(goal.metadata.get("agent_version", "unknown")), model=model or "unknown",
-        goal=goal.goal, steps=steps, final_state=state, usage=usage,
-        latency_ms=sum(e.latency_ms for e in events if isinstance(e, (ModelDecision, ToolResult))),
-        stop_reason=stop_reason,
-    )
-
-
-def agentkit_replay_target(
-    llm: LLMClient,
-    recordings: Mapping[str, Sequence[Event]],
-    *,
-    system_prompt: str | None = None,
-    version: str = "planner",
-) -> Callable[[EvalCase], TargetResult]:
-    """Counterfactual replay of the case's recording with a new planner (`llm`, `system_prompt`)."""
-
-    def target(case: EvalCase) -> TargetResult:
-        original = recordings[case.input["recording"]]
-        report = replay(original, llm, system_prompt=system_prompt,
-                        run_id=f"{case.id}-replay")
-        assert report.result is not None
-        traj = trajectory_from_events(report.result.events, task_id=case.id, carry_approvals_from=original)
-        traj.agent_version = version
-        return TargetResult(
-            output=traj.model_dump(mode="json", exclude_none=True),
-            input_tokens=traj.usage.input_tokens, output_tokens=traj.usage.output_tokens,
-            cost_usd=traj.usage.cost_usd,
-            metadata={"replay_misses": len(report.misses), "first_divergence": report.first_divergence,
-                      "replay_summary": report.summary()},
-        )
-
-    target.__name__ = f"agentkit-replay[{version}]"
-    return target
+        # ... FinalAnswer, Stopped
+    # ...
 ```
 
 A denied call keeps its `ToolCallRequested` event, so the export shows the attempt and the allowed-tools assertion fails on it. A runtime that silently dropped denied calls would hide exactly the behavior the evaluation exists to see; agentkit's event log does not.
 
 ### Extraction
 
+The evaluator reuses Chapter 24's `field_prf` for the counting rules, reweights the per-field outcomes in `weighted_field_prf` (on disk), and checks evidence with a whole-token match so that a quote of `11,488.00` does not vouch for `1,488.00`:
+
 ```python
 # path: book/projects/examples/ch25/taskevals/extraction.py (excerpt; full file on disk)
-def weighted_field_prf(per_field: Mapping[str, str], weights: Mapping[str, float]) -> tuple[float, float, float]:
-    """Weighted P/R/F1 from evalkit's per-field outcomes (tp, fp, fn, fp+fn, tn)."""
-    tp = fp = fn = 0.0
-    for name, outcome in per_field.items():
-        w = weights.get(name, 1.0)
-        if outcome == "tp":
-            tp += w
-        elif outcome == "fp":
-            fp += w
-        elif outcome == "fn":
-            fn += w
-        elif outcome == "fp+fn":
-            fp += w
-            fn += w
-    p = tp / (tp + fp) if tp + fp else 1.0
-    r = tp / (tp + fn) if tp + fn else 1.0
-    f = 2 * p * r / (p + r) if p + r else 0.0
-    return p, r, f
-
-
 def mentions(text: str, value: Any) -> bool:
     """Whether `text` contains a rendering of `value` as a whole token: "1488.00" is not found
     inside "11,488.00", "INV-104" not inside "INV-1042", "0" not inside "2026-01-0077" or "0.0045"."""
@@ -714,45 +560,18 @@ def evidence_status(document: str, quote: str | None, gold_value: Any) -> str:
 
 
 class ExtractionEvaluator:
-    """evalkit evaluator for invoice extraction. `case.input["text"]` is the document,
-    `case.expected` is the gold record from shared-data/invoices.jsonl."""
-
-    name = "extraction"
-    version = "1"
-    metric_names = EXTRACTION_METRICS
-
-    def __init__(self, weights: Mapping[str, float] = FIELD_WEIGHTS,
-                 critical: Sequence[str] = CRITICAL_FIELDS, evidence_threshold: float = 0.9) -> None:
-        self.weights = dict(weights)
-        self.critical = tuple(critical)
-        self.evidence_threshold = evidence_threshold
-
+    # ...
     def __call__(self, case: EvalCase, output: Any) -> list[Score]:
-        gold = {k: case.expected.get(k) for k in self.weights}
-        pred_fields = output.get("fields", {})
-        pred = {k: pred_fields.get(k) for k in self.weights}
+        # ...
         fs = field_prf(pred, gold, fields=list(self.weights), numeric_tol=NUMERIC_TOL)
         wp, wr, wf = weighted_field_prf(fs.per_field, self.weights)
         bad_critical = [f for f in self.critical if fs.per_field.get(f) not in ("tp", "tn")]
-        _, li_recall = line_item_prf(output.get("line_items", []), case.expected.get("line_items", []))
-
+        # ...
         statuses = {
             f: evidence_status(case.input["text"], output.get("evidence", {}).get(f), gold[f])
             for f in self.weights if gold[f] not in (None, "") and fs.per_field.get(f) == "tp"
         }
-        ev_rate = sum(1 for s in statuses.values() if s == "correct") / len(statuses) if statuses else 1.0
-        ev_bad = {f: s for f, s in statuses.items() if s != "correct"}
-        return [
-            Score(name="field_precision", value=wp, passed=None),
-            Score(name="field_recall", value=wr, passed=None),
-            Score(name="field_f1_weighted", value=wf, passed=wf >= 0.9,
-                  detail={f: o for f, o in fs.per_field.items() if o not in ("tp", "tn")} or None),
-            Score(name="critical_fields_exact", value=0.0 if bad_critical else 1.0, passed=not bad_critical,
-                  detail=bad_critical or None),
-            Score(name="line_item_recall", value=li_recall, passed=li_recall >= 1.0),
-            Score(name="evidence_correct", value=ev_rate, passed=ev_rate >= self.evidence_threshold,
-                  detail=ev_bad or None),
-        ]
+        # ... six Scores: weighted P/R/F1, critical_fields_exact, line_item_recall, evidence_correct
 ```
 
 Evidence is scored only for fields whose value was correct. A wrong value's evidence is already covered by the field failure, and scoring it again would double-count one error.
@@ -772,16 +591,12 @@ def classification_aggregates(run: Run, labels: Sequence[str], *, n_bins: int = 
     correct = [g == p for g, p in zip(gold, pred)]
     conf = [min(1.0, max(0.0, float(d["confidence"]))) for d in rows]
     return ClassificationAggregates(
-        n=len(rows),
-        accuracy=cm.accuracy,
+        # ...
         macro_f1=cm.macro(labels).f1,
         per_class_recall={lab: cm.per_label(lab).recall for lab in labels if cm.support(lab)},
-        per_class_support={lab: cm.support(lab) for lab in labels if cm.support(lab)},
+        # ...
         ece=expected_calibration_error(correct, conf, n_bins=n_bins),
-        brier=brier_score(correct, conf),
-        most_confused=[(str(t), str(p), c) for t, p, c in cm.most_confused(5)],
-        reliability=[{"lower": b.lower, "upper": b.upper, "count": b.count, "confidence": b.mean_confidence,
-                      "accuracy": b.observed_rate} for b in calibration_bins(correct, conf, n_bins)],
+        # ... Brier score, most-confused pairs, reliability bins
     )
 ```
 
@@ -802,16 +617,6 @@ def answerable(item: SyntheticItem, source: str) -> tuple[bool, str]:
     if aw and not ans_numbers and len(aw & content_words(item.answer_quote)) / len(aw) < 0.5:
         return False, "answer_not_supported_by_quote"
     return True, ""
-
-
-def difficulty_tag(item: SyntheticItem) -> str:
-    """Heuristic: questions that copy the quote's words are easy for lexical retrieval."""
-    ov = question_overlap(item.question, item.answer_quote)
-    if ov >= 0.6:
-        return "difficulty:easy-lexical"
-    if ov >= 0.3:
-        return "difficulty:medium"
-    return "difficulty:hard-paraphrase"
 ```
 
 `validate_candidates` applies the filters in the order described earlier, records every rejection under its reason, and returns `EvalCase`s with `origin:synthetic`, a difficulty tag, the source document as group key, and `review: pending`.
@@ -821,26 +626,10 @@ def difficulty_tag(item: SyntheticItem) -> str:
 ```python
 # path: book/projects/examples/ch25/taskevals/online.py (excerpt; full file on disk)
 class CanaryMonitor:
-    """Sequential canary rule with a fixed number of planned looks.
-
-    Looking at a running comparison many times with a fixed 5% test inflates the false-alarm
-    rate far above 5%. This rule pays for the looks up front: with K planned looks, each look
-    uses alpha/K (Bonferroni), which is conservative but simple and correct.
-
-    - Any critical event in the canary: rollback immediately, no statistics needed.
-    - Before `min_n` per arm: continue.
-    - At every look: rollback if the canary's failure rate is significantly higher (one-sided).
-    - At the final look: promote only if non-inferiority holds, that is the upper confidence bound
-      on (canary - control) is below `margin`; otherwise hold for a human decision.
-    """
+    # ... docstring: the four outcomes described in Core concepts
 
     def __init__(self, *, looks: int = 5, alpha: float = 0.05, margin: float = 0.01, min_n: int = 200) -> None:
-        if looks < 1:
-            raise ValueError("looks must be >= 1")
-        self.looks = looks
-        self.alpha = alpha
-        self.margin = margin
-        self.min_n = min_n
+        # ...
         self.z_crit = NormalDist().inv_cdf(1 - alpha / looks)
         self.look = 0
 
@@ -882,18 +671,7 @@ AGGREGATORS: dict[str, Callable[[Run], Callable[[str], float]]] = {
 }
 
 
-class AggregateRule(BaseModel):
-    metric: str
-    min: float | None = None
-    max: float | None = None
-
-
-class SuiteGate(BaseModel):
-    name: str
-    run: str | None = None  # file name under --runs; default <name>.json
-    aggregator: str | None = None
-    gate: GateConfig = Field(default_factory=GateConfig)
-    aggregates: list[AggregateRule] = Field(default_factory=list)
+# ... AggregateRule, SuiteGate, and GateFile: pydantic models of gates.toml
 
 
 def evaluate_suite(sg: SuiteGate, runs: Path, baselines: Path | None, reports: Path) -> SuiteVerdict:
@@ -919,43 +697,20 @@ def evaluate_suite(sg: SuiteGate, runs: Path, baselines: Path | None, reports: P
         except (ValueError, AttributeError, KeyError) as exc:
             return SuiteVerdict(suite=sg.name, status="error", message=f"aggregates failed: {type(exc).__name__}: {exc}")
     result = result.model_copy(update={"checks": checks, "passed": all(c.passed for c in checks)})
-    reports.mkdir(parents=True, exist_ok=True)
-    (reports / f"{sg.name}.md").write_text(
-        render_report(candidate, baseline=baseline, gate=result, title=f"Suite {sg.name}"), encoding="utf-8")
+    # ... write the full evalkit report for this suite to reports/<suite>.md
     return SuiteVerdict(suite=sg.name, status="pass" if result.passed else "fail", checks=checks)
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description="Evaluate the release gate over stored evalkit runs.")
-    ap.add_argument("--config", type=Path, required=True)
-    ap.add_argument("--runs", type=Path, required=True)
-    ap.add_argument("--baselines", type=Path, default=None)
-    ap.add_argument("--out", type=Path, default=Path("eval-out"))
-    args = ap.parse_args(argv)
-    try:
-        with args.config.open("rb") as f:
-            cfg = GateFile.model_validate(tomllib.load(f))
-    except (OSError, tomllib.TOMLDecodeError, ValidationError) as exc:
-        print(f"release gate: bad config {args.config}: {exc}", file=sys.stderr)
-        return EXIT_ERROR
-
+    # ... parse arguments; an unreadable or invalid config returns EXIT_ERROR
     verdicts = [evaluate_suite(sg, args.runs, args.baselines, args.out / "reports") for sg in cfg.suites]
-    context = {k: v for k, v in {"commit": os.environ.get("CI_COMMIT_SHA") or os.environ.get("GITHUB_SHA", ""),
-                                  "pipeline": os.environ.get("CI_PIPELINE_ID") or os.environ.get("GITHUB_RUN_ID", "")}.items() if v}
-    summary = render_summary(cfg.name, verdicts, context)
-    args.out.mkdir(parents=True, exist_ok=True)
-    (args.out / "summary.md").write_text(summary, encoding="utf-8")
-    (args.out / "gate.json").write_text(json.dumps([v.model_dump() for v in verdicts], indent=2), encoding="utf-8")
-    if step_summary := os.environ.get("GITHUB_STEP_SUMMARY"):
-        with open(step_summary, "a", encoding="utf-8") as f:
-            f.write(summary)
-    print(summary)
+    # ... write summary.md and gate.json, append the summary to GITHUB_STEP_SUMMARY when set
     if any(v.status == "error" for v in verdicts):
         return EXIT_ERROR
     return EXIT_PASS if all(v.status == "pass" for v in verdicts) else EXIT_FAIL
 ```
 
-The gate configuration for two of the four suites (the extraction and tools sections follow the same pattern and are in the file):
+The gate configuration for the classification suite, and the two rules that make the agent suite safe to trust (the extraction and tools sections, and the rest of the agent section, are on disk):
 
 ```toml
 # path: book/projects/examples/ch25/ci/gates.toml (excerpt; full file on disk)
@@ -968,14 +723,8 @@ aggregator = "classification"
 [suites.gate]
 pinned_dataset_hash = "a126152c63ff"
 min_cases = 60
-max_error_rate = 0.0
-max_evaluator_errors = 0
 require_baseline = true              # a lost baseline must block, not skip regression rules
-max_cost_per_case_usd = 0.001        # illustrative budget
-
-[[suites.gate.metrics]]
-metric = "label_valid"
-must_pass_all = true                 # never a label outside the enum
+# ... error-rate limits and a per-case cost budget
 
 [[suites.gate.metrics]]
 metric = "label_correct"
@@ -1000,13 +749,7 @@ max = 0.15                           # confidence drives escalation, so it must 
 
 [[suites]]
 name = "agent"
-
-[suites.gate]
-pinned_dataset_hash = "b609f01100c1"
-min_cases = 4
-max_error_rate = 0.0
-max_evaluator_errors = 0
-require_baseline = true              # a lost baseline must block, not skip regression rules
+# ... pinned hash, min_cases, error limits, require_baseline as above
 
 [[suites.gate.metrics]]
 metric = "traj_safe"
@@ -1015,14 +758,6 @@ must_pass_all = true                 # allowed tools, approvals: block regardles
 [[suites.gate.metrics]]
 metric = "replay_fidelity"
 min_mean = 0.9                       # below this the replay result says little
-
-[[suites.gate.metrics]]
-metric = "traj_efficiency"
-max_regression = 0.10
-
-[[suites.gate.critical]]
-tag = "critical"
-metric = "traj_success"
 ```
 
 ### The pytest plugin
@@ -1032,12 +767,7 @@ metric = "traj_success"
 LEVELS = {"none": set(), "fast": {"eval_fast"}, "full": {"eval_fast", "eval_full"}}
 
 
-def pytest_addoption(parser: pytest.Parser) -> None:
-    group = parser.getgroup("eval", "AI evaluation suites")
-    group.addoption("--eval-suite", choices=sorted(LEVELS), default="none", help="which eval tests to run")
-    group.addoption("--eval-system", default=os.environ.get("EVAL_SYSTEM", "candidate"),
-                    help="system under evaluation (stand-in name)")
-    group.addoption("--eval-out", default=None, help="directory for Run JSON artifacts")
+# ... pytest_addoption: --eval-suite {none,fast,full}, --eval-system, --eval-out
 
 
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
@@ -1048,7 +778,7 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
                 item.add_marker(pytest.mark.skip(reason=f"{marker} not selected (use --eval-suite)"))
 ```
 
-The project's `conftest.py` puts `ci/` on the path and declares `pytest_plugins = ["pytest_evalplugin"]`. The eval tests themselves are four lines each:
+The project's `conftest.py` puts `ci/` on the path and declares `pytest_plugins = ["pytest_evalplugin"]`. The eval tests themselves are short, and assert harness health, never quality:
 
 ```python
 # path: book/projects/examples/ch25/tests/test_eval_suites.py (excerpt; full file on disk)
@@ -1064,82 +794,10 @@ def test_fast_suite_runs_cleanly(suite, eval_system, record_run) -> None:
 
 ### The CI definitions
 
-The same evaluation job for two common CI systems, GitHub Actions and then GitLab CI:
+The repository carries the same evaluation job for two common CI systems: `ci/github/eval-gate.yml` for GitHub Actions and `ci/gitlab/.gitlab-ci.yml` for GitLab CI. The GitHub version installs the packages, runs the unit tests as one job, and runs the eval suite and the gate as a second. The eval step runs `pytest --eval-suite fast` on merge requests and `full` on the nightly schedule, with provider keys only in the nightly job. The part worth reading is the tail of the gate job: where the trusted configuration comes from, and the upload that runs whether the gate passed or not.
 
 ```yaml
-# path: book/projects/examples/ch25/ci/github/eval-gate.yml
-# Copy to .github/workflows/eval-gate.yml at the repository root.
-# Merge requests: unit tests, then the fast eval suite, then the release gate.
-# Nightly: the full suite (repeated trials, judges); the gate checks the suites listed in gates.toml.
-# Gate thresholds and baselines always come from the default branch, never from the PR under test.
-name: eval-gate
-
-on:
-  pull_request:
-    paths:
-      - "book/projects/**"
-  schedule:
-    - cron: "0 2 * * *"
-  workflow_dispatch: {}
-
-concurrency:
-  group: eval-gate-${{ github.ref }}
-  cancel-in-progress: true
-
-permissions:
-  contents: read
-
-env:
-  PROJECT_DIR: book/projects/examples/ch25
-  LLM_PROVIDER: fake            # the fast suite uses stand-in models; nightly may set a real provider
-  EVAL_SYSTEM: candidate
-
-jobs:
-  unit-tests:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-          cache: pip
-      - name: Install
-        run: |
-          pip install -e book/projects/aie_core -e book/projects/evalkit -e book/projects/agentkit
-          pip install "pytest>=8" "pyyaml>=6" "numpy>=1.26"
-      - name: Unit tests (eval suites skipped)
-        working-directory: ${{ env.PROJECT_DIR }}
-        run: python -m pytest -q --junitxml=junit.xml
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: junit
-          path: ${{ env.PROJECT_DIR }}/junit.xml
-
-  eval-gate:
-    needs: unit-tests
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-          cache: pip
-      - name: Install
-        run: |
-          pip install -e book/projects/aie_core -e book/projects/evalkit -e book/projects/agentkit
-          pip install "pytest>=8" "pyyaml>=6" "numpy>=1.26"
-      - name: Run eval suite
-        working-directory: ${{ env.PROJECT_DIR }}
-        env:
-          SUITE: ${{ github.event_name == 'schedule' && 'full' || 'fast' }}
-          # Real-provider keys only for the nightly job, from repository secrets:
-          # OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-        run: |
-          # --eval-suite fast on merge requests; full on the nightly schedule
-          python -m pytest -q --eval-suite "$SUITE" --eval-out eval-out/runs -m "eval_fast or eval_full"
+# path: book/projects/examples/ch25/ci/github/eval-gate.yml (excerpt; full file on disk)
       - name: Trusted gate config and baselines
         # A PR could otherwise relax thresholds or regenerate baselines in the same diff it is judged on.
         # The gate config must exist on the default branch first; until it does, this step fails closed.
@@ -1165,85 +823,13 @@ jobs:
           retention-days: 90
 ```
 
-```yaml
-# path: book/projects/examples/ch25/ci/gitlab/.gitlab-ci.yml
-# Include from the root .gitlab-ci.yml:   include: { local: book/projects/examples/ch25/ci/gitlab/.gitlab-ci.yml }
-# Merge request pipelines run unit tests, the fast eval suite, and the gate; scheduled pipelines
-# run the full suite. The report is attached to every pipeline, pass or fail. Gate thresholds and
-# baselines come from the default branch, never from the merge request under test.
-stages:
-  - test
-  - eval
-
-variables:
-  PROJECT_DIR: book/projects/examples/ch25
-  PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
-  LLM_PROVIDER: fake
-  EVAL_SYSTEM: candidate
-
-default:
-  image: python:3.12-slim
-  cache:
-    key: pip-$CI_JOB_NAME
-    paths: [.cache/pip]
-  before_script:
-    - pip install -e book/projects/aie_core -e book/projects/evalkit -e book/projects/agentkit
-    - pip install "pytest>=8" "pyyaml>=6" "numpy>=1.26"
-
-workflow:
-  rules:
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
-    - if: $CI_PIPELINE_SOURCE == "schedule"
-    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
-
-unit-tests:
-  stage: test
-  script:
-    - cd "$PROJECT_DIR"
-    - python -m pytest -q --junitxml=junit.xml
-  artifacts:
-    when: always
-    reports:
-      junit: $PROJECT_DIR/junit.xml
-
-eval-gate:
-  stage: eval
-  needs: [unit-tests]
-  timeout: 30m
-  script:
-    - cd "$PROJECT_DIR"
-    - SUITE=fast; if [ "$CI_PIPELINE_SOURCE" = "schedule" ]; then SUITE=full; fi
-    # --eval-suite fast on merge requests; full on schedules
-    - python -m pytest -q --eval-suite "$SUITE" --eval-out eval-out/runs -m "eval_fast or eval_full"
-    # trusted gate config and baselines: a merge request must not relax the gate it is judged by
-    # (the config must exist on the default branch first; until it does, the job fails closed)
-    - apt-get update -qq && apt-get install -y -qq git >/dev/null
-    - git fetch --depth=1 origin "$CI_DEFAULT_BRANCH"
-    - mkdir -p trusted/baselines && git show FETCH_HEAD:./ci/gates.toml > trusted/gates.toml
-    - for f in $(git ls-tree --name-only FETCH_HEAD ci/baselines/); do git show "FETCH_HEAD:./$f" > "trusted/baselines/$(basename "$f")"; done
-    - python ci/release_gate.py --config trusted/gates.toml --runs eval-out/runs --baselines trusted/baselines --out eval-out
-  artifacts:
-    when: always
-    expire_in: 90 days
-    expose_as: eval report
-    paths:
-      - $PROJECT_DIR/eval-out/
-```
-
 The two definitions are deliberately the same shape: install, unit tests, eval suite, gate, artifact. The gate script is the only place where pass or fail is decided, so the pipeline file contains no thresholds and the same gate runs locally, in GitHub Actions, in GitLab CI, or in any other runner that can execute Python and keep a folder.
 
 ### Stand-ins and tests
 
 The four suites need systems to evaluate. `standins.py` provides deterministic `FakeLLM`-based stand-ins, each with baseline, candidate, and regressed behaviors that mirror realistic changes (the walkthrough below describes them as it uses them). They exercise the real code paths (`CompletionRequest`, `complete_structured`, tool calls), and replacing any of them with `aie_core.make_llm_client()` evaluates a real model on the same suites.
 
-```
-$ python -m pytest -q
-.....sssss............................................................   [100%]
-65 passed, 5 skipped in 1.45s
-$ python -m pytest -q --eval-suite full -m "eval_fast or eval_full"
-.....                                                                    [100%]
-5 passed, 60 deselected in 0.47s
-```
+A plain `python -m pytest -q` runs the unit tests offline in a few seconds and skips the eval-marked tests; `python -m pytest -q --eval-suite full -m "eval_fast or eval_full"` runs only the suites.
 
 ## Code walkthrough
 
@@ -1301,17 +887,14 @@ Two details deserve attention. The extraction regression check fires on the poin
 
 ## Common mistakes
 
-- **Grading agents on the final answer.** It misses unauthorized calls, missing approvals, loops, and lucky recoveries. Evaluate the trajectory and the end state, and define success to require safety.
-- **Asserting task completion from the model's text.** "I have created the ticket" is a claim. Check the ticket.
-- **Replaying without measuring divergence.** A replay where half the calls were unrecorded says little about the planner; report fidelity and gate on it.
+These are design mistakes made before anything runs. Mistakes that surface as a symptom in production or CI (replay divergence, fooled evidence checks, biased synthetic slices, gates that pass on missing inputs, canary peeking) are under Failure modes with their telemetry.
+
+- **Grading agents on the final answer or its text.** It misses unauthorized calls, missing approvals, loops, and lucky recoveries, and "I have created the ticket" is a claim, not a ticket. Evaluate the trajectory and the end state, and define success to require safety.
 - **Unweighted field accuracy for extraction.** A 98% average can hide every error on the total. Weight fields, and require critical fields on every document.
-- **Accepting evidence quotes without checking them.** A fabricated or wrong-line quote makes a wrong value look verified. Check that the quote exists and supports the value.
 - **Accuracy as the classification headline.** Use macro-F1 and per-class recall on costly classes; measure calibration when confidence drives decisions.
 - **Gating summaries on one dimension.** Faithfulness alone approves copying the source; compression alone approves empty summaries.
-- **Trusting synthetic data because it validated.** Validation removes broken cases; it does not remove the generator's bias. Report synthetic cases as their own slice.
 - **Thresholds in assert statements.** They drift, get loosened to make builds green, and cannot be reviewed as a set. Put them in one gate file with an owner.
-- **A gate that passes when the eval job failed.** Missing runs, missing baselines, evaluator errors, and dataset hash mismatches must block.
-- **Peeking at a canary with a fixed-level test.** Plan the looks or use a sequential method built for continuous monitoring.
+- **Gate config and baselines read from the branch under test.** A change can then relax the bar it is judged against. Read both from the default branch.
 
 ## Failure modes
 
@@ -1359,7 +942,24 @@ Test the gate as a program. The tests run the real `run_suite.py` and `release_g
 
 Test the online statistics by simulation. The A/A simulation asserts that naive peeking exceeds 10% false alarms and that the planned-looks rule stays at or below 6%; deterministic tests cover the critical-event rollback, the minimum-sample rule, promotion only at the final look, and the hold outcome. Finally, meta-evaluate the whole system the way Chapter 24 recommends: each quarter, compare offline verdicts with canary outcomes and correction rates for the same releases. Disagreement there outranks any single gate result.
 
+## Before you ship
+
+- [ ] The agent suite gates `traj_safe` as must-pass-all and `traj_success` on every `critical` task, so an unsafe success fails.
+- [ ] The intended tool catalog used by the evaluator is tested against the runtime's tool contracts, and every approval-gated tool is marked `requires_approval`.
+- [ ] Replay-based results are gated on mean `replay_fidelity` (0.9 in this chapter), and low-fidelity cases rerun against sandboxed tools.
+- [ ] Extraction requires critical fields exact on every case, the field weights are signed off by the business owner, and evidence checks test the label as well as the value where values repeat.
+- [ ] Classification gates macro-F1, recall floors on the costly classes, and an ECE ceiling as aggregate rules in the gate file.
+- [ ] Synthetic cases carry `origin:synthetic` and generator lineage, are reported as their own slice, have a reviewed sample, and never enter the holdout.
+- [ ] Every suite in `gates.toml` sets `pinned_dataset_hash`, `min_cases`, `require_baseline = true`, and zero tolerated evaluator errors.
+- [ ] Tests pin that the gate exits 2 for a missing run or invalid config and 1 for an empty baselines folder or a hash mismatch.
+- [ ] CI reads `gates.toml` and the baselines from the default branch, only the release job writes baselines, and fork pipelines receive no provider secrets.
+- [ ] The eval artifact folder is uploaded on pass and fail and retained long enough to audit, and the red-team effect gate runs in the same pipeline with its own line in the summary.
+- [ ] Feedback events carry trace ids, traces carry prompt, model, index, and agent versions, and the orphan-event rate has an alert.
+- [ ] The canary's number of looks, alpha, non-inferiority margin, and minimum per-arm sample are fixed before rollout, and any critical event rolls back immediately.
+
 ## Exercises
+
+**Start here:** K1, K2, E1, P2, D1 (about 3 hours). The rest go deeper.
 
 ### Knowledge questions
 
@@ -1387,13 +987,15 @@ Test the online statistics by simulation. The A/A simulation asserts that naive 
 
 ### Practical exercises
 
-**P1.** Add a live-sandbox mode to the agent suite: run the candidate planner in a real `agentkit.AgentRuntime` over scripted, deterministic `FunctionTool`s (including a degraded service and a tool that raises a transient error once), selected per case when replay fidelity on that case falls below the gate threshold. Export the resulting event log with `trajectory_from_events`, and report which mode each case used in the run metadata.
+**P1.** (about 3 hours) Add a live-sandbox mode to the agent suite: run the candidate planner in a real `agentkit.AgentRuntime` over scripted, deterministic `FunctionTool`s (including a degraded service and a tool that raises a transient error once), selected per case when replay fidelity on that case falls below the gate threshold. Export the resulting event log with `trajectory_from_events`, and report which mode each case used in the run metadata.
 
-**P2.** Extend `evidence_status` to verify the quote's label as well as its value (for example, a total's quote must contain "total" and must not contain "subtotal"), and add test cases from the untaxed statements that the current check passes incorrectly.
+**P2.** (about 60 min) Extend `evidence_status` to verify the quote's label as well as its value (for example, a total's quote must contain "total" and must not contain "subtotal"), and add test cases from the untaxed statements that the current check passes incorrectly.
 
-**P3.** Add a `summarization` suite to `suites.py` over the incident reports in `shared-data/docs/` (the two incident postmortems, `incident-2025-11-pos-outage.md` and `incident-2026-02-tracking-latency.md`), with key facts written by hand, a stand-in summarizer with baseline and regressed versions, and a gate section that requires coverage, faithfulness, qualifiers, and compression together.
+**P3.** (about 3 hours) Add a `summarization` suite to `suites.py` over the incident reports in `shared-data/docs/` (the two incident postmortems, `incident-2025-11-pos-outage.md` and `incident-2026-02-tracking-latency.md`), with key facts written by hand, a stand-in summarizer with baseline and regressed versions, and a gate section that requires coverage, faithfulness, qualifiers, and compression together.
 
-**P4.** Implement a nightly job that runs the classification suite three times with a nondeterministic stand-in (seeded noise on confidence and occasional label flips), reports pass^3 and the flaky cases, and fails the gate when the flaky rate exceeds a configured limit. Add the rule to `gates.toml` through a new aggregate.
+**P4.** (about 2 hours) Implement a nightly job that runs the classification suite three times with a nondeterministic stand-in (seeded noise on confidence and occasional label flips), reports pass^3 and the flaky cases, and fails the gate when the flaky rate exceeds a configured limit. Add the rule to `gates.toml` through a new aggregate.
+
+**P5.** (about 2 hours) Write a perturbation generator for the extraction suite: from each gold invoice, derive variants that move the total to a different line, add a distracting second amount, and reword the field labels, with the gold record inherited or adjusted by rule. Add the variants as an `origin:synthetic` slice with a slice rule in `gates.toml`, and report how the baseline and candidate extractors do on it compared with the original invoices.
 
 ### Debugging exercises
 
@@ -1415,3 +1017,11 @@ Test the online statistics by simulation. The A/A simulation asserts that naive 
 - Synthetic data is a draft: filter for answerability and duplicates, tag difficulty and origin, measure its lexical bias, and report it as its own slice.
 - In CI, pytest markers select fast and full suites, the tests write Run JSON, and one reviewed gate file decides; missing runs, missing baselines, evaluator errors, and hash mismatches block.
 - Online evaluation needs trace ids in feedback and versions in traces; corrections become regression cases, and canaries need planned looks or a method built for continuous monitoring.
+
+## Further reading
+
+- *Trustworthy Online Controlled Experiments* (Kohavi, Tang, and Xu, 2020): the practical background for canaries, guardrail metrics, and why peeking inflates false alarms.
+- *RAGAS: Automated Evaluation of Retrieval Augmented Generation* (Es et al., 2024): reference-free faithfulness and relevance metrics, and an early example of synthetic test-set generation for RAG.
+- *FActScore: Fine-grained Atomic Evaluation of Factual Precision in Long Form Text Generation* (Min et al., 2023): the claim-by-claim approach to faithfulness that this chapter's lexical check approximates.
+- *AgentDojo: A Dynamic Environment to Evaluate Prompt Injection Attacks and Defenses for LLM Agents* (Debenedetti et al., 2024): agent evaluation by task success and security together over tool-using environments.
+- *SWE-bench: Can Language Models Resolve Real-World GitHub Issues?* (Jimenez et al., 2024): execution-based evaluation of an agent's end state, the same principle as checking the ticket rather than the claim.

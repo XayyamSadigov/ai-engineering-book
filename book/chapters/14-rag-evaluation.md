@@ -6,7 +6,7 @@ This chapter measures a retrieval-augmented generation system the way you would 
 - Start a RAG evaluation on day one with 30 questions, a leak check, and citation validity, and grow it into a full stage-by-stage suite.
 - Build a gold set that encodes which evidence each question needs, who is asking, and which documents that person must never see.
 - Compute retrieval metrics (hit@k, recall@k, precision@k, MRR, graded nDCG) at the right granularity and k, and keep permission leaks out of every average.
-- Score answers for faithfulness, rubric coverage, relevance, citations, and abstention, using LLM judges where needed and code checks wherever possible.
+- Score answers for groundedness, rubric coverage, relevance, citations, and abstention, using LLM judges where needed and code checks wherever possible.
 - Diagnose every failing case to the first pipeline stage that lost the evidence, and turn the stage table into a work queue.
 - Compare two RAG configurations with paired deltas and a release gate that refuses a candidate that retrieves better but leaks documents.
 
@@ -31,7 +31,7 @@ For RAG, the model has a sharper corollary: **evaluate the evidence path before 
 That gives three layers of measurement, each answering a question the others cannot:
 
 1. **Retrieval quality**: did the required evidence come back, and how high? Deterministic, cheap, computed against document labels.
-2. **Answer quality**: given the evidence that was packed, is the answer faithful, relevant, complete, correctly cited, and does it abstain when it should? Partly deterministic, partly judged.
+2. **Answer quality**: given the evidence that was packed, is the answer grounded, relevant, complete, correctly cited, and does it abstain when it should? Partly deterministic, partly judged.
 3. **Attribution**: for each failing case, which stage lost the evidence? Deterministic, computed from the per-stage trace.
 
 A fourth check sits outside all three and is never averaged into them: **did anything cross a permission boundary?** A leak is not a quality defect with a weight. It is a release blocker.
@@ -49,7 +49,7 @@ flowchart LR
     subgraph Measurement
         M1["recall@k, hit@k, MRR, nDCG"]
         M2["context relevance, evidence packed"]
-        M3["faithfulness, relevance, rubric coverage"]
+        M3["groundedness, relevance, rubric coverage"]
         M4["citation P/R, abstention correctness"]
         M5["leak check: forbidden docs, ACL"]
         M6["stage isolation: first break"]
@@ -87,7 +87,7 @@ Grow the suite only when a question you need answered cannot be answered with wh
 | When this happens | Add | Section |
 |---|---|---|
 | You change chunking, retrievers, or reranking | recall at first-stage and final k, MRR, nDCG; tags and slices | Retrieval metrics |
-| Hit rate is fine but answers are wrong | faithfulness and rubric coverage judges, calibrated on about 30 human labels | Answer metrics, Judging |
+| Hit rate is fine but answers are wrong | groundedness and rubric coverage judges, calibrated on about 30 human labels | Answer metrics, Judging |
 | Failing cases pile up | automated stage isolation from the retrieval trace | Stage isolation |
 | You compare two configurations | paired deltas, 100+ cases, a CI gate | Slices and comparisons |
 | You have production traffic | sampled real questions with labeled evidence, replacing synthetic ones | Production considerations |
@@ -188,17 +188,17 @@ It exists because recall and evidence sufficiency are blind to noise. A configur
 
 With retrieval measured, the answer is evaluated given the evidence that was actually packed. Five dimensions, each one a separate score, each one answering a different user-facing question.
 
-**Faithfulness (groundedness).** Is every factual claim in the answer supported by the packed evidence? This is the hallucination metric for RAG. The implementation decomposes it: a first judge call extracts atomic claims from the answer ("Up to 10 PTO days carry over", "Carried-over days expire on 31 March"); a second call checks each claim against the evidence, labeling it supported, unsupported, or contradicted, with the ids of the passages it relied on. Faithfulness is the supported fraction. The decomposition costs one extra call and buys three things:
+**Groundedness.** Is every factual claim in the answer supported by the packed evidence? This is the hallucination metric for RAG. Chapter 24 defines the term and separates it from faithfulness (no distortion of the source). The `faithfulness` score in ragkit, produced by `FaithfulnessJudge`, follows the RAGAS naming but measures what Chapter 24 calls groundedness. The implementation decomposes it: a first judge call extracts atomic claims from the answer ("Up to 10 PTO days carry over", "Carried-over days expire on 31 March"); a second call checks each claim against the evidence, labeling it supported, unsupported, or contradicted, with the ids of the passages it relied on. The `faithfulness` score is the supported fraction. A second score, `contradiction_free`, fails when any claim is contradicted, which covers the contradiction part of faithfulness in Chapter 24's sense but not dropped qualifiers. The decomposition costs one extra call and buys three things:
 
 - a score that degrades proportionally (one invented number in a five-claim answer is 0.8, not a vague "2 out of 3");
 - a list of the unsupported claims, which is what a human reviewer and a developer actually need;
 - a cross-check code can run: a claim the judge marks "supported" by an evidence id that was never shown to the generator is downgraded to unsupported, which catches a judge that relies on its own knowledge.
 
-Faithfulness is not correctness. An answer that faithfully quotes the outdated HR FAQ ("you can carry over 5 days") is perfectly grounded and wrong. That is why faithfulness is never the only answer metric.
+Groundedness is not correctness. An answer that quotes the outdated HR FAQ ("you can carry over 5 days") is perfectly grounded and wrong. That is why groundedness is never the only answer metric.
 
-**Rubric coverage (correctness).** What fraction of the gold rubric's required facts does the answer state? One judge call lists, per rubric item, whether the answer covers it and quotes the covering text; code then rejects any "covered" verdict whose quote is missing or not actually in the answer. Coverage below 1.0 means an incomplete or wrong answer. Coverage at 1.0 with faithfulness below 1.0 means a complete answer with extra invented content.
+**Rubric coverage (correctness).** What fraction of the gold rubric's required facts does the answer state? One judge call lists, per rubric item, whether the answer covers it and quotes the covering text; code then rejects any "covered" verdict whose quote is missing or not actually in the answer. Coverage below 1.0 means an incomplete or wrong answer. Coverage at 1.0 with groundedness below 1.0 means a complete answer with extra invented content.
 
-**Answer relevance.** Does the answer address the question asked? It catches answers that are faithful and complete about the wrong thing, which happens when a query rewrite drifts (Chapter 12) or when the generator answers the question the evidence happens to support. evalkit's built-in `RELEVANCE` rubric (0 to 2) is used unchanged.
+**Answer relevance.** Does the answer address the question asked? It catches answers that are grounded and complete about the wrong thing, which happens when a query rewrite drifts (Chapter 12) or when the generator answers the question the evidence happens to support. evalkit's built-in `RELEVANCE` rubric (0 to 2) is used unchanged.
 
 **Citation precision and recall.** Deterministic, computed at the document level. Precision is the fraction of cited documents that are relevant (required or acceptable). Recall is the fraction of required documents the answer cites. A separate validity check requires every cited chunk id to be one that was packed, which catches citations the model invented or copied from the evidence text. Citation metrics are scored only for answered, answerable cases.
 
@@ -211,7 +211,7 @@ Faithfulness is not correctness. An answer that faithfully quotes the outdated H
 
 A false answer on a forbidden-document case is a security or hallucination incident. A false abstain on an answerable case is an annoyed employee and a support ticket. Report both counts, not just a combined accuracy, and decide the acceptable ratio from the domain's costs: Chapter 13 tunes the abstention threshold, this chapter measures where it landed.
 
-Abstentions are excluded from faithfulness, coverage, and relevance averages (the evaluators return no score for them), so those averages describe answered cases only. That is deliberate and must be stated in the report; otherwise a system that abstains on every hard question can post a perfect faithfulness score.
+Abstentions are excluded from groundedness, coverage, and relevance averages (the evaluators return no score for them), so those averages describe answered cases only. That is deliberate and must be stated in the report; otherwise a system that abstains on every hard question can post a perfect groundedness score.
 
 ### Judging RAG answers reliably
 
@@ -223,9 +223,9 @@ Chapter 24 formalizes the judge contract that this chapter relies on: one dimens
 
 **Long evidence.** Judges, like generators, attend unevenly over long inputs. Judge against the packed evidence (what the generator saw), not the whole retrieved list, and keep packing budgets realistic.
 
-**Holistic versus decomposed.** A single-call "groundedness 0 to 3" judge is cheaper and is available as `holistic_groundedness_judge`. Use it as the baseline when you calibrate the claim-level judge, not as a substitute. If both agree with humans equally on your data, keep the cheaper one; on most RAG data the decomposed judge has the lower false pass rate (the share of answers humans fail that the judge passes), because a fluent answer with one invented number fools a holistic judge more easily than a per-claim check.
+**Holistic versus decomposed.** A single-call "groundedness 0 to 3" rubric judge is cheaper and is available as `holistic_groundedness_judge`. Chapter 24's "Which groundedness evaluator when" compares it with the claim-level judge and with Chapter 25's free lexical check, which suits CI smoke tests and production monitoring. Use it as the baseline when you calibrate the claim-level judge, not as a substitute. If both agree with humans equally on your data, keep the cheaper one; on most RAG data the decomposed judge has the lower false pass rate (the share of answers humans fail that the judge passes), because a fluent answer with one invented number fools a holistic judge more easily than a per-claim check.
 
-Calibration follows Chapter 24's procedure with RAG-specific sampling: stratify the human-labeled sample by abstention outcome, by tag (multi-hop and conflicting-versions cases are where judges disagree most), and by stage-isolation label. Report agreement on the pass/fail decision the gate uses (faithfulness equal to 1.0), and the false pass rate above all. A faithfulness judge that passes a third of the answers humans fail will let hallucination regressions through any gate built on it.
+Calibration follows Chapter 24's procedure with RAG-specific sampling: stratify the human-labeled sample by abstention outcome, by tag (multi-hop and conflicting-versions cases are where judges disagree most), and by stage-isolation label. Report agreement on the pass/fail decision the gate uses (a `faithfulness` score equal to 1.0), and the false pass rate above all. A groundedness judge that passes a third of the answers humans fail will let hallucination regressions through any gate built on it.
 
 ### Stage isolation
 
@@ -289,7 +289,7 @@ One evaluation run, from gold file to report, proceeds in six steps.
 1. **Load and convert the gold set.** Each JSONL row becomes an evalkit `EvalCase`: the input holds the question and the principal; `expected` holds required, acceptable, and forbidden document ids and the abstention flag; the rubric and tags are copied; `anchor_doc` in metadata lets the dataset split by document so that paraphrases about one policy never straddle dev and holdout.
 2. **Run the system as each principal.** The target adapter calls the RAG system with the case's question and principal and returns a `RagOutput`: answer, abstention flag, cited chunk ids, packed chunks, and the full `RetrievalResult` with its trace. evalkit's runner handles concurrency, latency, errors, and lineage.
 3. **Score deterministically.** The retrieval evaluator emits `no_permission_leak` for every case and, for answerable cases only, hit@k, recall@k, precision@k, MRR, nDCG@10, context relevance, and evidence-packed. The answer evaluator emits abstention correctness and, for answered answerable cases, citation precision, recall, and validity.
-4. **Judge (optional).** Faithfulness, rubric coverage, and answer relevance judges score answered cases. They can run later on stored outputs with `score_run`, so expensive judging never forces regeneration.
+4. **Judge (optional).** Groundedness, rubric coverage, and answer relevance judges score answered cases. They can run later on stored outputs with `score_run`, so expensive judging never forces regeneration.
 5. **Isolate stages.** For each case, `diagnose_run` reads the stored output and the judge scores and assigns one label.
 6. **Gate and report.** evalkit's gate applies the rules (no leaks on any case, no recall regression beyond tolerance, every forbidden-doc case leak-free); the report leads with the verdict and leaks, then metrics with intervals or paired deltas, abstention outcomes, the stage table with label changes against the baseline, slices, and per-case regressions.
 
@@ -332,7 +332,7 @@ flowchart TB
     subgraph ragkit_eval["ragkit.eval"]
         D["rag_dataset: gold conversion, RagOutput, synthetic"]
         M["rag_metrics: ranking, leaks, citations, abstention"]
-        J["rag_judges: faithfulness, coverage, relevance"]
+        J["rag_judges: groundedness, coverage, relevance"]
         S["stage_isolation: diagnose, diagnose_run"]
         R["rag_report: Markdown"]
         X["run_rag_eval: CLI, configs, gate"]
@@ -539,7 +539,7 @@ def retrieval_scores(case: EvalCase, output: RagOutput, *, ks: Sequence[int] = D
 
 Three things in this excerpt are decisions, not arithmetic. `recall_at_k` raises on an empty required set instead of returning 1.0, so an inverted case can never be averaged into recall by accident. `precision_at_k` divides by k, as discussed above. And `retrieval_scores` emits the leak score first, for every case, and returns before any ranking metric on inverted cases. The rest of `retrieval_scores` (on disk) adds hit, recall, and precision at each k, MRR, nDCG@10, context relevance, and evidence-packed. `answer_scores` adds abstention correctness and, for answered answerable cases, citation precision, recall, and validity. `acl_violations` applies the same `visible(chunk, principal)` rule the retriever uses, and `_trace_violations` reads Chapter 12's `trace["acl_violations"]`.
 
-### The faithfulness judge
+### The groundedness judge
 
 The verification half of the two-call claim flow, with the evidence-id cross-check at the end.
 
@@ -577,7 +577,7 @@ VERIFY_SYSTEM = (
             return []
 ```
 
-`extract_claims` (on disk) is the first call; the request built in `verify` wraps the evidence with `render_evidence`, which neutralizes closing delimiter tags in any letter case. The early return in `__call__` is how abstentions stay out of the faithfulness average. `RubricCoverageJudge` follows the same pattern (one call, one verdict per rubric item, a quote that code checks against the answer). `ContextRelevanceJudge` labels each packed passage relevant or not, for data without gold labels. `answer_relevance_judge` and `holistic_groundedness_judge` wrap evalkit's `RELEVANCE` and `GROUNDEDNESS` rubrics and skip abstentions.
+`extract_claims` (on disk) is the first call; the request built in `verify` wraps the evidence with `render_evidence`, which neutralizes closing delimiter tags in any letter case. The early return in `__call__` is how abstentions stay out of the groundedness average. `RubricCoverageJudge` follows the same pattern (one call, one verdict per rubric item, a quote that code checks against the answer). `ContextRelevanceJudge` labels each packed passage relevant or not, for data without gold labels. `answer_relevance_judge` and `holistic_groundedness_judge` wrap evalkit's `RELEVANCE` and `GROUNDEDNESS` rubrics and skip abstentions.
 
 ### Stage isolation
 
@@ -627,7 +627,7 @@ The decision tree from the diagram above, in code: permission first, then absten
 
 The `None` values matter: a stage that the trace does not record is "unknown", not "lost", so a retriever without a reranker is never blamed for a rerank drop. When no required document was lost, the rest of `diagnose` (on disk) checks for evidence packed only as truncated blocks (`truncated-in-packing`), then for an abstention or a failed judge verdict (`generation-ignored-evidence`), then for invalid or missing citations (`citation-error`).
 
-`stage_lists` reads four trace layouts: (1) Chapter 12's ordered `stages` list, whose entries have a `kind` of `retrieve`, `fusion`, or `rerank` and their `candidate_ids` (transform stages carry no ids and are skipped); (2) the flat traces of Chapter 12's single retrievers (`stage` plus `candidate_ids`); (3) the traces of its hybrid retriever (per-retriever sub-traces plus `fused_ids`); and (4) a generic flat form (`trace["bm25_ids"]`) for other retrievers. `diagnose_run` applies `diagnose` to a stored run, with `default_answer_ok` treating an answer as acceptable when faithfulness and rubric coverage, if measured, are both 1.0.
+`stage_lists` reads four trace layouts: (1) Chapter 12's ordered `stages` list, whose entries have a `kind` of `retrieve`, `fusion`, or `rerank` and their `candidate_ids` (transform stages carry no ids and are skipped); (2) the flat traces of Chapter 12's single retrievers (`stage` plus `candidate_ids`); (3) the traces of its hybrid retriever (per-retriever sub-traces plus `fused_ids`); and (4) a generic flat form (`trace["bm25_ids"]`) for other retrievers. `diagnose_run` applies `diagnose` to a stored run, with `default_answer_ok` treating an answer as acceptable when the `faithfulness` (groundedness) and `rubric_coverage` scores, if measured, are both 1.0.
 
 ### Wiring, gate, and comparison
 
@@ -730,7 +730,7 @@ Eighteen of forty cases retrieved chunks their principal may not see: retail que
 - **Scoring forbidden-doc cases with recall.** This rewards the leak the case exists to catch. Invert them.
 - **Reporting only final-list metrics after adding a reranker.** You lose the ability to tell coverage problems from ordering problems.
 - **Merging synthetic questions into the gold average.** Their lexical bias inflates the score and their answerability bias erases the abstention slice.
-- **Averaging faithfulness over abstentions.** A system that abstains on everything hard posts perfect faithfulness.
+- **Averaging groundedness over abstentions.** A system that abstains on everything hard posts perfect groundedness.
 
 ## Failure modes
 
@@ -742,9 +742,9 @@ These are failures of the evaluation itself: ways the measurement lies.
 
 **Missing or wrong stage trace.** A retriever that does not record candidate ids makes every loss look like `not-retrieved`; a trace that records ids after ACL filtering under a pre-filter name misattributes permission drops. It shows up as an implausible stage distribution (no fusion or rerank losses ever). Test it with unit tests that feed a known trace and assert the label, as `test_rag_eval_stage_isolation.py` does, and with a canary case whose required document is deliberately pushed out by the reranker.
 
-**Lenient faithfulness judge.** The judge passes answers with invented numbers, often because it checks topical similarity rather than claim support. It shows up as a high judge pass rate with a rising false pass rate in human spot checks. The evidence-id cross-check and periodic calibration on stratified samples are the defenses.
+**Lenient groundedness judge.** The judge passes answers with invented numbers, often because it checks topical similarity rather than claim support. It shows up as a high judge pass rate with a rising false pass rate in human spot checks. The evidence-id cross-check and periodic calibration on stratified samples are the defenses.
 
-**Judge injected through evidence.** A retrieved passage tells the judge to pass the answer. It shows up as faithfulness of 1.0 on cases whose packed evidence contains instruction-like text. Keep an injected-evidence case in the judge's own tests and alert when judged scores correlate with Chapter 13's flagged-span markers.
+**Judge injected through evidence.** A retrieved passage tells the judge to pass the answer. It shows up as a `faithfulness` score of 1.0 on cases whose packed evidence contains instruction-like text. Keep an injected-evidence case in the judge's own tests and alert when judged scores correlate with Chapter 13's flagged-span markers.
 
 ## Tradeoffs
 
@@ -752,7 +752,7 @@ These are failures of the evaluation itself: ways the measurement lies.
 
 **Curated gold set versus sampled traffic.** A curated set is stable, labeled, and reproducible, so it can gate releases, but it drifts away from what users actually ask. Sampled production questions have the real distribution and phrasing, but they need evidence labels and redaction, and they change between runs. Gate on the curated set, refresh it from sampled traffic and user-reported failures, and report the sampled set as its own slice. (Claim-level versus holistic judging is covered under Judging RAG answers reliably.)
 
-**Strict versus lenient pass criteria.** Requiring faithfulness of exactly 1.0 makes the gate sensitive to judge noise; a threshold such as 0.8 tolerates noise and lets minor fabrications through. Prefer the strict criterion for regulated content (HR policy, security) and a threshold with human review of the failures elsewhere.
+**Strict versus lenient pass criteria.** Requiring a `faithfulness` score of exactly 1.0 makes the gate sensitive to judge noise; a threshold such as 0.8 tolerates noise and lets minor fabrications through. Prefer the strict criterion for regulated content (HR policy, security) and a threshold with human review of the failures elsewhere.
 
 **Single gate versus slice gates.** Gating only on aggregates is stable and misses slice regressions; gating every slice catches them and produces false alarms on small slices. Gate aggregates, gate large slices with a tolerance, report small slices, and gate critical tags (forbidden-doc) on every case.
 
@@ -763,7 +763,7 @@ The evaluator is code that decides releases, so it is tested like code. All test
 - **Metric tests** check each formula against hand-computed values: the two-chunk worked example from the gold-case section (recall@5 of 0.5 and precision@5 of 0.2 for one of two relevant documents at rank 2), nDCG with graded relevance computed by hand, duplicates earning no gain, precision dividing by k, recall raising an error on an empty required set.
 - **Leak tests** check that a forbidden document in the retrieved list is a leak even when it was not packed, and that ACL violations are detected for cross-tenant and wrong-group chunks with no gold label at all.
 - **Dataset tests** check that the gold file converts row for row, that forbidden-doc rows are inverted, that an explicit `forbidden_doc_ids` field expresses "answer, but never touch this neighbor" (the corrected RQ-037), that a split by anchor document has no group leakage, and that the synthetic filters drop ungrounded, unanswerable, duplicate, and gold-leaking questions and tag difficulty, all with a scripted `FakeLLM`.
-- **Judge tests** use `FakeLLM` handlers to check the two-step faithfulness flow, the downgrade of support claimed from unshown evidence, a verdict-count mismatch raising instead of scoring, malformed output raising after repair attempts, abstentions skipped without any model call, evidence that cannot close any judge delimiter in any letter case, and the rubric-coverage quote check (a covered verdict whose quote is missing or not in the answer is rejected).
+- **Judge tests** use `FakeLLM` handlers to check the two-step groundedness flow, the downgrade of support claimed from unshown evidence, a verdict-count mismatch raising instead of scoring, malformed output raising after repair attempts, abstentions skipped without any model call, evidence that cannot close any judge delimiter in any letter case, and the rubric-coverage quote check (a covered verdict whose quote is missing or not in the answer is rejected).
 - **Stage-isolation tests** construct one case per label from a fake trace, including the earliest-loss rule with two required documents, the trace layouts, and Chapter 12's optional `diversify` stage read as part of the precision stage (Chapter 12's pipeline format and the flat form).
 - **Integration tests on real Chapter 12 traces** build a `RetrievalPipeline` (BM25 and dense retrieval over the shared corpus, with vocabulary-mode fake embeddings and the lexical reranker) and a bare `BM25Index`. They check that each label (`ok`, `not-retrieved`, `dropped-by-fusion`, `dropped-by-rerank`, `truncated-in-packing`, `not-in-corpus`, `permission`) comes out right on the traces those components actually write. Each test first asserts its premise with Chapter 12's `stage_candidates`, so a ranking change reports which premise broke. A retriever that ignores its pre-filter must surface as a permission failure. Over the whole gold set, `diagnose_run`'s retrieval-stage labels must agree with an independent oracle under two funnel configurations.
 - **End-to-end tests** run a fake retriever and generator through evalkit, check stage shifts and paired deltas between two configurations, check that a leaky configuration fails the gate and the report lists the leaked documents, check that a crashed system call is reported as an unchecked case that blocks the gate rather than as "no leak" (whether evalkit scores it 0 or None) and is labeled `unchecked` by `diagnose_run`, check that judge scores feed stage isolation, and run the real offline comparison and the CLI on the shared corpus.
@@ -779,8 +779,8 @@ For the judges' real behavior, tests are not enough: calibrate against human lab
 - [ ] The gold set's fingerprint is pinned in the gate configuration, and every run records the index version, chunker fingerprint, retriever settings, packing budget, prompt version, and model.
 - [ ] Recall at first-stage depth and the final-list metrics (hit@1, MRR, recall@k at the packed k) are both reported, with k fixed across compared runs.
 - [ ] Citation validity (every cited chunk id was packed) is a code check gated on every answered case.
-- [ ] False answers and false abstains are reported as separate counts, and faithfulness and coverage averages state that they cover answered cases only.
-- [ ] The faithfulness judge has been calibrated against human labels (Chapter 24), with its false pass rate recorded per hard slice, and its test set includes an injected-evidence passage.
+- [ ] False answers and false abstains are reported as separate counts, and groundedness and coverage averages state that they cover answered cases only.
+- [ ] The groundedness judge has been calibrated against human labels (Chapter 24), with its false pass rate recorded per hard slice, and its test set includes an injected-evidence passage.
 - [ ] The retrieval trace records per-stage candidate ids, and a unit test with a known trace asserts each stage-isolation label.
 - [ ] Deterministic metrics run in CI on every change to ingestion, chunking, retrieval, or packing; judges run nightly and on release candidates with results cached by judge version and content hash.
 - [ ] Synthetic and production-sampled questions are separate named datasets and slices, never merged into the gold averages.
@@ -795,7 +795,7 @@ For the judges' real behavior, tests are not enough: calibrate against human lab
 
 **K2.** Why are forbidden-document cases excluded from recall averages, and what two checks replace recall for them?
 
-**K3.** Explain the difference between faithfulness and correctness for a RAG answer, and give a Northwind example that scores high on one and low on the other.
+**K3.** Explain the difference between groundedness and correctness for a RAG answer, and give a Northwind example that scores high on one and low on the other.
 
 **K4.** Name the five parts of a day-one RAG evaluation and, for each, a failure it catches that an end-to-end "answer quality" score from an LLM judge would miss.
 
@@ -807,11 +807,11 @@ For the judges' real behavior, tests are not enough: calibrate against human lab
 
 **E1.** Northwind is adding 2,000 scanned PDF invoices and contracts to the corpus. Design the additions to the gold set (labels, tags, permission contexts, abstention cases) and say which granularity of label you would use and why.
 
-**E2.** A team proposes a single "RAG score" = 0.4 × recall@5 + 0.4 × faithfulness + 0.2 × citation precision for the release dashboard. Write the response: what the score hides, and what you would put on the dashboard and in the gate instead.
+**E2.** A team proposes a single "RAG score" = 0.4 × recall@5 + 0.4 × groundedness + 0.2 × citation precision for the release dashboard. Write the response: what the score hides, and what you would put on the dashboard and in the gate instead.
 
 **E3.** Design the evaluation for adding a cross-encoder reranker: which metrics you compute on which lists, the k values, the slices, the latency budget, and the gate rules that would block it.
 
-**E4.** Your faithfulness judge's calibration shows a false pass rate of 8 percent overall and 30 percent on `conflicting-versions` cases. Decide how the gate should use the judge, and what you would change in the judge or the dataset.
+**E4.** Your groundedness judge's calibration shows a false pass rate of 8 percent overall and 30 percent on `conflicting-versions` cases. Decide how the gate should use the judge, and what you would change in the judge or the dataset.
 
 ### Practical exercises
 
@@ -827,7 +827,7 @@ For the judges' real behavior, tests are not enough: calibrate against human lab
 
 **D1.** After a retriever refactor, the stage table shows 0 `dropped-by-fusion` and 0 `dropped-by-rerank` cases for a week, while `not-retrieved` doubled. Recall@50 on first-stage lists is unchanged. Diagnose the likely cause and name the trace fields you would inspect.
 
-**D2.** Faithfulness rose from 0.86 to 0.97 after a prompt change, rubric coverage stayed flat, and the abstention table shows false abstains rising from 4 to 15. Explain what happened and how the report should have made it obvious.
+**D2.** Groundedness rose from 0.86 to 0.97 after a prompt change, rubric coverage stayed flat, and the abstention table shows false abstains rising from 4 to 15. Explain what happened and how the report should have made it obvious.
 
 **D3.** A candidate configuration passes the gate. In production, a retail store manager receives an answer citing a logistics incident report. The evaluation run shows `no_permission_leak` at 1.0 on all cases. List the ways the evaluation could have missed the leak, most likely first, and the change to the evaluation that would catch each.
 
@@ -837,7 +837,7 @@ For the judges' real behavior, tests are not enough: calibrate against human lab
 - A gold case encodes required and acceptable evidence, a rubric of required facts, the principal who asks, and slice tags; forbidden-document cases are inverted so that a leak can never earn credit.
 - Retrieval metrics are cheap and deterministic: hit and recall for coverage, MRR and graded nDCG for ordering, precision and context relevance for noise; keep first-stage metrics when you add a reranker.
 - Permission leaks are checked against both gold labels and the ACL rule on every case, counted separately, and block the release regardless of quality.
-- Answer quality is several independent dimensions: claim-level faithfulness, rubric coverage, relevance, citation precision and recall, and abstention correctness with false answers and false abstains reported separately.
+- Answer quality is several independent dimensions: claim-level groundedness, rubric coverage, relevance, citation precision and recall, and abstention correctness with false answers and false abstains reported separately.
 - Judges for RAG must use only the evidence, treat evidence as untrusted data, be cross-checked by code where possible, and be calibrated with attention to the false pass rate on hard slices.
 - Stage isolation turns failing cases into a work queue: one label per case, earliest loss wins, each label mapped to the chapter and component that owns the fix.
 - Synthetic questions add coverage and carry lexical, single-chunk, and answerability bias (Chapter 25); keep them as a separate slice and replace them with production samples over time.
@@ -847,7 +847,7 @@ For the judges' real behavior, tests are not enough: calibrate against human lab
 ## Further reading
 
 - *Cumulated Gain-Based Evaluation of IR Techniques* (Järvelin and Kekäläinen, 2002): the original definition of (n)DCG and graded relevance, the basis of this chapter's required-versus-acceptable grading.
-- *RAGAS: Automated Evaluation of Retrieval Augmented Generation* (Es et al., 2024): a reference-free framing of faithfulness, answer relevance, and context relevance; useful for comparing its metric definitions with the label-based ones here.
-- *FActScore: Fine-grained Atomic Evaluation of Factual Precision in Long Form Text Generation* (Min et al., 2023): the claim-decomposition approach behind the two-call faithfulness judge.
+- *RAGAS: Automated Evaluation of Retrieval Augmented Generation* (Es et al., 2024): a reference-free framing of faithfulness (what this book calls groundedness), answer relevance, and context relevance; useful for comparing its metric definitions with the label-based ones here.
+- *FActScore: Fine-grained Atomic Evaluation of Factual Precision in Long Form Text Generation* (Min et al., 2023): the claim-decomposition approach behind the two-call groundedness judge.
 - *Judging LLM-as-a-Judge with MT-Bench and Chatbot Arena* (Zheng et al., 2023): the biases and agreement rates of LLM judges, background for calibrating the RAG judges (Chapter 24 owns the method).
 - *Bootstrap Methods: Another Look at the Jackknife* (Efron, 1979): the resampling idea behind the paired confidence intervals used to compare configurations.

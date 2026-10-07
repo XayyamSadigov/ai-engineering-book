@@ -115,11 +115,27 @@ Teams lose weeks arguing past each other because the same word means different t
 
 **Correctness** is agreement with a known right answer: a reference answer, a label, a gold field value, an expected database state. It requires ground truth. When ground truth is a value (a label, a number, an id), correctness is deterministic; when it is a reference paragraph, it needs semantic comparison.
 
-**Groundedness** is whether every material claim in the output is supported by the evidence the system was given (retrieved passages, tool results). It needs the evidence, not a reference answer, so it can be measured on production traffic where no reference exists. An answer can be grounded and wrong (the retrieved policy was outdated) or correct and ungrounded (the model knew the answer from pretraining but the evidence did not say it), and both matter: the second is the one that turns into a hallucination on the next question.
+**Groundedness** is whether every material claim in the output is supported by the evidence the system was given (retrieved passages, tool results). A claim is **supported** when the evidence states it or directly implies it; it is unsupported when the evidence is silent, and contradicted when the evidence says something incompatible. Groundedness needs the evidence, not a reference answer, so it can be measured on production traffic where no reference exists. An answer can be grounded and wrong (the retrieved policy was outdated) or correct and ungrounded (the model knew the answer from pretraining but the evidence did not say it), and both matter: the second is the one that turns into a hallucination on the next question.
 
-**Faithfulness** is the closely related property that the output does not distort its source: no contradictions, no dropped qualifiers ("except for contractors"), no changed numbers. Some literature uses faithfulness and groundedness interchangeably. In this book groundedness asks "is each claim supported?" and faithfulness asks "is the source represented accurately, including what it says not to do?"; summarization evaluation leans on faithfulness, RAG answers on groundedness.
+**Faithfulness** is whether the output represents its source accurately: no contradictions, no changed numbers or names, no dropped qualifiers ("except for contractors"). Groundedness catches what the output added; faithfulness catches what it distorted. The two can come apart. "Up to 10 PTO days carry over" is supported by a policy that says "up to 10 days carry over with manager approval", yet it is unfaithful, because it drops the condition. A contradicted claim fails both.
+
+Much of the literature, and several evaluation libraries, use the two words interchangeably, usually to mean groundedness. This book keeps them apart. RAG answers are evaluated mainly for groundedness, summaries mainly for faithfulness, and a summary judge usually checks both, since the source is also the evidence.
 
 **Relevance** comes in two forms. Answer relevance is whether the output addresses the question actually asked. Context relevance is whether the retrieved passages bear on the question (Chapter 14). A perfectly grounded answer about expense policy is irrelevant to a PTO question.
+
+**Citation validity, precision, and recall** check the citations themselves, not the claims. Validity requires every cited id to be one the system actually showed the generator. Precision is the share of cited sources that are relevant to the question; recall is the share of required sources that the answer cites (Chapter 14 computes both at the document level). A valid, precise citation does not make the claim beside it grounded; that still takes a groundedness check. "Attribution" in this book means something else: tracing a failure to the pipeline stage that caused it (Chapter 14) or a feedback event to the trace that produced it (Chapter 25).
+
+The answer-quality terms side by side:
+
+| Term | Question it answers | Unit of judgment | Typical evaluator |
+|---|---|---|---|
+| Correctness | Does the output match the known right answer? | answer or field, against a reference | exact match in code; judge against reference text |
+| Groundedness | Is every material claim supported by the evidence given? | claim, against the evidence | lexical support check, claim-level judge, or rubric judge (see "Which groundedness evaluator when") |
+| Faithfulness | Does the output represent its source without distortion? | statement, against the source | rubric judge; code for numbers, ids, and known qualifiers |
+| Answer relevance | Does the output address the question asked? | whole answer, against the question | rubric judge; word overlap as a cheap floor |
+| Context relevance | Do the retrieved passages bear on the question? | passage, against the question | gold labels in code; judge without labels (Ch 14) |
+| Citation validity | Was every cited id actually shown to the generator? | citation | code |
+| Citation precision and recall | Are cited sources relevant, and are required sources cited? | cited source set, against gold sources | code |
 
 **Task completion** is whether the user's goal was reached, judged on the end state rather than the text: the ticket exists with the right fields, the reply was approved and sent, the incident summary contains the root cause. For agents it is the primary outcome metric.
 
@@ -233,6 +249,20 @@ Judges have known biases, and each has a test:
 Three design choices sit around the prompt. **Reference-based or reference-free.** A judge given a reference answer measures correctness against it and is only as good as the reference; a judge given only the evidence measures groundedness and can run on production traffic where no reference exists. Decide per dimension and never mix the two in one rubric. **Which model judges.** The judge does not have to be the largest model, but it has to be strong enough on the dimension: calibrate a cheaper judge first and promote it only if its false pass rate (defined below) matches the expensive one on the calibration sample. A judge from a different model family than the system under test reduces correlated failures. **One judge or a panel.** Two or three judges from different families with a majority vote reduce variance and self-preference, at a multiple of the cost; reserve panels for release gates and calibration disputes, and keep a single calibrated judge for nightly runs.
 
 The judge's version is part of the run's lineage: rubric version, judge prompt version, and judge model. Change any of them and old scores are no longer comparable with new ones. Whenever a deterministic metric exists for a property, use it instead. JSON validity, citation ids, tool side effects, SQL results, and permission checks should never be delegated to a judge.
+
+### Which groundedness evaluator when
+
+The book builds three evaluators for groundedness. They measure the same property at different cost and accuracy, so a mature suite usually runs more than one.
+
+| Evaluator | Where it is built | Cost | Catches | Misses | Use it for |
+|---|---|---|---|---|---|
+| Lexical support check | Chapter 25 (`RagAnswerEvaluator`) | free, deterministic, milliseconds | invented numbers, dates, and ids; sentences with no word overlap with any passage | a paraphrase that reverses meaning; it also fails some legitimate paraphrases | CI smoke tests on every commit, and scoring every production trace |
+| Claim-level extraction judge | Chapter 14 (ragkit's `FaithfulnessJudge`) | two model calls per answer | each unsupported or contradicted claim, by name, with a score that falls in proportion to the damage | claims the extraction step drops or merges | RAG answers where per-claim support matters: release gates, regulated content, debugging |
+| Rubric judge | this chapter (evalkit's `GROUNDEDNESS` rubric) | one model call per answer | answers that are broadly unsupported; gives one holistic 0 to 3 grade | a single invented detail in an otherwise fluent answer, more often than the claim-level judge | holistic grading, nightly trend lines, and the baseline when calibrating a claim-level judge |
+
+Run them as layers. The lexical check filters every commit and every trace for free. A calibrated judge runs nightly, on release candidates, and on a production sample. When a lexical verdict and a judge verdict disagree on a case, send it to a human: either the lexical rule misfired on a paraphrase, or the judge was fooled by a fluent unsupported claim.
+
+Choose between the two judges by calibration, not by default. If the cheaper rubric judge agrees with humans as well as the claim-level judge on your data, keep the rubric judge. On most RAG data the claim-level judge has the lower false pass rate, because a per-claim check is harder to fool with one invented number. Faithfulness has no lexical equivalent beyond code checks for numbers, ids, and known qualifiers, so it is usually a rubric judge.
 
 ### Pairwise comparison
 

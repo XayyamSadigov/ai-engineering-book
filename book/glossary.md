@@ -76,6 +76,10 @@ Every project imports it instead of reinventing clients and retries. (Ch 3)
 servers), with everything else denied. Allowlists are the dependable form of output and tool control;
 denylists of bad patterns are easy to bypass. (Ch 16, 26, 27)
 
+**Answer relevance**: Whether an answer addresses the question actually asked, regardless of whether
+it is grounded or correct. A grounded answer about expense policy is irrelevant to a PTO question. Judged
+with a rubric; word overlap with the question is a cheap floor. (Ch 14, 24, 25)
+
 **Anti-corruption layer**: A translation layer that keeps a provider's or framework's types from leaking
 into domain code. It is what makes switching model vendors or frameworks a contained change. (Ch 32)
 
@@ -196,9 +200,14 @@ a recall and precision trade-off to evaluate, not a constant to copy. (Ch 11)
 fails fast for a cool-down period, then probes with trial requests. It prevents retry storms and gives
 the dependency room to recover. (Ch 29)
 
-**Citation precision and recall**: Precision is the share of citations that actually support their
-claims; recall is the share of claims that carry a supporting citation. Together they measure whether
-citations can be trusted. (Ch 14)
+**Citation precision and recall**: Deterministic citation metrics computed against gold sources.
+Precision is the share of cited sources that are relevant to the question; recall is the share of
+required sources the answer cites. They check the citations, not the claims: whether a claim is
+supported is groundedness. See also citation validity. (Ch 14, 24)
+
+**Citation validity**: The code check that every cited id is one the system actually showed the
+generator, plus, where a case names required sources, that they are cited. It catches invented or copied
+citation ids and is gated on every answered case. (Ch 14, 24, 25)
 
 **Citation validation**: Checking after generation that every cited identifier exists in the packed
 evidence and that the cited span supports the claim. It catches hallucinated and misattributed
@@ -269,6 +278,11 @@ document before indexing it, so terse chunks become findable by both lexical and
 **Continuous batching**: A serving technique that adds and removes sequences from the running batch at
 every decode step instead of waiting for a whole batch to finish. It is the main reason modern engines
 achieve high throughput. (Ch 34)
+
+**Correctness**: Agreement with a known right answer: a label, a gold field value, a reference
+answer, or an expected end state. It needs ground truth, unlike groundedness. Deterministic when the
+truth is a value; judged against a reference when it is text. Chapter 14 measures it for RAG as rubric
+coverage. (Ch 14, 24)
 
 **Cosine similarity**: The cosine of the angle between two vectors, ignoring their length. The default
 similarity for text embeddings; on normalized vectors it equals the dot product. (Ch 8)
@@ -411,8 +425,12 @@ rare classes count as much as common ones. (Ch 24, 25, 33)
 out. Fail-closed blocks the action and is the default for checks that protect permissions, money, or
 data; fail-open lets it proceed and suits only low-risk checks where availability matters more. (Ch 27)
 
-**Faithfulness**: Whether every claim in an answer is supported by the provided context. A faithful
-answer can still be wrong if the context was wrong; that is a retrieval failure. (Ch 14, 25)
+**Faithfulness**: Whether an output represents its source accurately: no contradictions, no changed
+numbers or names, no dropped qualifiers. Distinct from groundedness, which asks whether each claim is
+supported; an answer can be supported claim by claim and still drop a condition the source states. Many
+libraries use the word for groundedness: ragkit's `faithfulness` score and Chapter 25's
+`rag_faithfulness` both measure groundedness. Summaries are evaluated mainly for faithfulness.
+(Ch 24, 25)
 
 **FakeLLM and FakeEmbeddings**: The scripted `aie_core` model client that returns predefined responses
 and records requests, and its deterministic embedding counterpart based on hashing or a provided
@@ -460,9 +478,13 @@ communities, aimed at questions that span many documents. Expensive to build and
 **Greedy decoding**: Always picking the most probable next token. Deterministic in principle, though
 provider infrastructure can still introduce variation. (Ch 2)
 
-**Groundedness**: The degree to which an answer's claims are supported by cited evidence. The book's
-grounded answer contract tells the generator to use only packed evidence, cite it, treat it as data, and
-abstain when it is insufficient. Used interchangeably with faithfulness in many rubrics. (Ch 13, 24)
+**Groundedness**: Whether every material claim in an output is supported (stated or directly
+implied) by the evidence the system was given. It needs no reference answer, so it can run on
+production traffic; a grounded answer can still be wrong if the evidence was outdated. Measured by a
+lexical support check (Ch 25), a claim-level judge (Ch 14, reported as `faithfulness`), or a rubric
+judge (Ch 24); Chapter 24 compares them. The book's grounded answer contract tells the generator to use
+only packed evidence, cite it, treat it as data, and abstain when it is insufficient. Many sources call
+this faithfulness; this book keeps the two apart. (Ch 13, 14, 24, 25)
 
 **Grouped-query attention (GQA)**: An attention variant in which several query heads share one key and
 value head, shrinking the KV cache and speeding decode. (Ch 2, 34)
@@ -600,8 +622,8 @@ system. Used for capacity planning: it tells you how many concurrent sequences a
 **LlamaIndex**: A framework focused on data ingestion, indices, and query engines for RAG. (Ch 23)
 
 **LLM-as-judge**: Using a model with a rubric to score outputs on qualities code cannot check, such as
-faithfulness or helpfulness. Useful only after calibration against human labels and with known biases
-controlled. (Ch 14, 24)
+groundedness, faithfulness, or answer relevance. Useful only after calibration against human labels and
+with known biases controlled. (Ch 14, 24)
 
 **LLMClient**: The `aie_core` protocol with synchronous, asynchronous, and streaming completion methods
 that all provider adapters implement. (Ch 3)

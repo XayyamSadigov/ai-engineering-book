@@ -17,7 +17,9 @@ Each needs its own metric, because an aggregate quality score moves little when 
 - **Groundedness** is whether every material claim is supported by the evidence the system was given.
 - **Faithfulness** is whether the output represents its source without distortion: no contradictions, no dropped qualifiers, no changed numbers.
 
-An answer is grounded but incorrect when it faithfully repeats a retrieved policy that is outdated. For example, it quotes last year's 10-day carryover from a stale document still in the index. An answer is correct but ungrounded when it states the right 5-day carryover while the retrieved passages never mention carryover at all, so the model answered from pretraining or a lucky guess. The second case is dangerous because the same behavior produces hallucinations on questions where the model's prior is wrong.
+Groundedness catches what the output added; faithfulness catches what it distorted. An answer that says "up to 10 days carry over" when the policy adds "with manager approval" is supported but unfaithful.
+
+An answer is grounded but incorrect when it accurately repeats a retrieved policy that is outdated. For example, it quotes last year's 10-day carryover from a stale document still in the index. An answer is correct but ungrounded when it states the right 5-day carryover while the retrieved passages never mention carryover at all, so the model answered from pretraining or a lucky guess. The second case is dangerous because the same behavior produces hallucinations on questions where the model's prior is wrong.
 
 **K3.** Accuracy is dominated by frequent classes. If `security_report` makes up 8% of tickets and the model never predicts it, accuracy can still be 92% while recall on the class that matters is zero. Ask for three things instead:
 

@@ -471,7 +471,7 @@ day on passes one and three, one whiteboard a day, one full design case each wee
 
 | Weak answer | Why it fails | Stronger answer |
 |---|---|---|
-| "RAG is retrieval plus generation." | Definition only; no mechanism, cost, or failure. | Ingestion, chunking, hybrid retrieval, rerank, packing, grounded generation; chosen over fine-tuning for freshness and citations; fails on recall; measured by recall at k and faithfulness separately. |
+| "RAG is retrieval plus generation." | Definition only; no mechanism, cost, or failure. | Ingestion, chunking, hybrid retrieval, rerank, packing, grounded generation; chosen over fine-tuning for freshness and citations; fails on recall; measured by recall at k and groundedness separately. |
 | "Inference is slow because the model is large." | Misses prefill versus decode. | Prefill is parallel and compute-bound; decode is sequential and memory-bandwidth-bound; TTFT and TPOT are different problems with different fixes. |
 | "We tell the model in the system prompt not to do that." | Prompt wording is not a control. | Tool policy, ACL filters, sandboxes, egress allowlists, approval bound to arguments; the prompt helps, the code enforces. |
 | "We'd use an agent so it can figure out what to do." | Autonomy without justification. | Start with a workflow where the path is known; graduate to an agent only where observations determine the path, with budgets and a Definition of Done. |

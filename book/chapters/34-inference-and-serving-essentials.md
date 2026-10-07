@@ -12,21 +12,21 @@ This chapter is the serving math behind a model endpoint: what limits how many u
 
 **Prerequisites:** Chapters 2 (tokens, prefill and decode, the KV cache as a mechanism), 3 (the `aie_core` client and `ModelGateway`), and 5 (prompt layout for prefix caching). | **Code:** `book/projects/examples/ch34/` (run: `.venv/bin/python -m pytest book/projects/examples/ch34 -q` from the repository root) | **Builds:** a KV-cache and concurrency calculator, Little's Law and replica-estimate helpers, an async streaming load generator, an in-process fake server, and a serving-target router over `aie_core`.
 
+**First reading:** Why this matters, Mental model, Core concepts through Quantization trade-offs, How it works, the Implementation subsections KV-cache sizing and Capacity helpers, Production considerations, Common mistakes, Failure modes, and Before you ship. **Deep dives** (skip on a first pass): Speculative decoding, multi-adapter serving, Parallelism in one paragraph, Serving options compared, Architecture, the Implementation subsections from The load generator on, Code walkthrough (including What changes when you route between hosted and local), Tradeoffs, Evaluation and testing.
+
 ## Why this matters
 
-Most of this book treats the model as a service behind an HTTP call. That abstraction holds until one of four things happens. Volume grows until the per-token bill becomes a line item the finance team asks about. A customer or regulator requires that prompts never leave a region or a network. A product needs a model the hosted providers do not offer, such as a fine-tuned open model from Chapter 33 or a small specialist for classification. Or latency needs to be controlled rather than observed, because a voice product (Chapter 35, Case 2) cannot tolerate a provider's queue during a traffic spike.
+Most of this book treats the model as a service behind an HTTP call. That holds until one of four things happens: the per-token bill becomes a line item finance asks about; a customer or regulator requires that prompts never leave a network; a product needs a model no provider hosts, such as a fine-tune from Chapter 33; or latency must be controlled rather than observed, as for a voice product (Chapter 35, Case 2) during a provider's traffic spike.
 
-At that point an application engineer inherits a problem that looks like infrastructure: GPUs, serving engines, memory budgets, batch schedulers. The temptation is to treat it as someone else's domain. That is a mistake for two reasons. First, the serving layer's behavior leaks straight into application behavior: the prompt layout you chose in Chapter 5 decides whether prefix caching (reusing computation for a shared prompt opening) helps, the context lengths your RAG pipeline produces decide how many users fit on a GPU, and the quantization (lower-precision weights) an operator picks silently changes your structured-output success rate.
+At that point an application engineer inherits what looks like infrastructure, and it is not someone else's domain. The serving layer leaks straight into application behavior: your prompt layout (Chapter 5) decides whether prefix caching (reusing computation for a shared prompt opening) helps, your RAG context lengths decide how many users fit on a GPU, and the quantization (lower-precision weights) an operator picks can silently change your structured-output success rate. And the decision to self-host is often made badly in both directions: some teams pay per-token prices for workloads several times cheaper on dedicated hardware, others buy GPUs that never reach break-even utilization.
 
-Second, the decision to self-host is often made badly in both directions: teams pay per-token prices for workloads that would be several times cheaper on dedicated hardware, and other teams buy GPUs for a workload that never gets near the utilization needed to break even.
-
-Engine internals are a deep subject, and this chapter compresses them deliberately. You do not need to know how a paged attention kernel works to run a serving platform well, but you do need the arithmetic of memory, the vocabulary of metrics, and a disciplined benchmark protocol.
+You do not need to know how an attention kernel works. You do need the arithmetic of memory, the vocabulary of metrics, and a disciplined benchmark protocol.
 
 ## Mental model
 
 > **Mental model:** Serving an LLM is a memory and scheduling problem wrapped around matrix multiplication. Weights are a fixed cost; the KV cache (the per-request store of attention keys and values, Chapter 2) is the variable cost that decides how many users share the GPU; the scheduler decides who waits.
 
-Three consequences follow and recur throughout the chapter. Because the KV cache grows linearly with context length, long contexts buy capacity at the expense of concurrency, and "the model fits in memory" says nothing about how many requests fit. Because token generation reads the entire weight set once per decode step, shared by every sequence in the batch, the generation phase is limited by memory bandwidth, and batching several requests into one weight read is almost free throughput. Because queues form in front of a saturated GPU, average latency is meaningless near capacity and the tail is what users feel.
+Three consequences recur throughout the chapter. The KV cache grows linearly with context length, so "the model fits in memory" says nothing about how many requests fit. Each decode step reads the whole weight set once, shared by every sequence in the batch, so batching is almost free throughput. And queues form in front of a saturated GPU, so near capacity the tail, not the average, is what users feel.
 
 > **Mental model:** Capacity is an empirical envelope found by load testing, not a division of peak tokens per second by tokens per request.
 
@@ -34,67 +34,57 @@ Three consequences follow and recur throughout the chapter. Because the KV cache
 
 ### Hosted API or self-hosted engine
 
-The decision is rarely binary. Many production systems route most traffic to a hosted provider and send a slice to a self-hosted model: regulated tenants, high-volume cheap tasks, or a fine-tuned specialist. The question is which slice, if any, justifies the operational burden. Chapter 7 frames this as part of model selection; this section adds the serving-side detail. Five factors decide it.
-
-**Cost at volume.** Per-token pricing has no fixed component; a self-hosted GPU costs the same per hour whether it serves one request or a thousand. Self-hosting wins only when utilization is high and sustained. The cost section later gives the arithmetic; a GPU idle 60 percent of the day often costs more per useful token than the API it replaced.
-
-**Data residency and confidentiality.** Some requirements can only be met by keeping prompts inside your own network: air-gapped environments, contractual prohibitions on third-party processing, or source code the security team refuses to send anywhere. These settle the decision for the affected traffic.
-
-**Latency control.** A hosted API gives you an observed latency distribution; a self-hosted engine gives you a controlled one. You decide batch size, admission policy, headroom, and whether a batch job may delay an interactive user. You also own every outage. For voice and latency-budgeted agent loops, control can be worth the burden.
-
-**Model choice.** Fine-tuned open-weights models (Chapter 33), particular licenses, or small specialists no provider hosts require self-hosting. The strongest general models are often hosted-only, which is why the hybrid is common: self-host the specialist, call the API for the hard cases.
-
-**Operational burden.** GPU procurement or reservation, driver and engine upgrades, capacity planning, on-call for a stateful service whose failure mode is memory exhaustion, and a quality-suite rerun after every engine change. Budget a fraction of an engineer permanently.
+The decision is rarely binary. Many production systems route most traffic to a hosted provider and send a slice to a self-hosted model: regulated tenants, high-volume cheap tasks, or a fine-tuned specialist. Chapter 7 frames the hosting decision as part of model selection; the question here is which slice, if any, justifies the operational burden. The table gives the factors. Two deserve a sentence. Cost: a self-hosted GPU costs the same per hour whether it serves one request or a thousand, so a GPU idle 60 percent of the day often costs more per useful token than the API it replaced (arithmetic in Production considerations). Burden: procurement, engine upgrades, capacity planning, on-call for a service that fails by memory exhaustion, and a quality rerun after every engine change; budget a fraction of an engineer permanently.
 
 | Factor | Favors hosted API | Favors self-hosting |
 |---|---|---|
 | Traffic | Spiky, low, or unpredictable | Sustained, high, predictable enough to size |
 | Data | Can leave the network under contract | Must stay in-region or on-premises |
-| Latency | Observed p95 is acceptable | Need control over batching, admission, headroom |
+| Latency | Observed p95 is acceptable | Need control over batching, admission, headroom (and own every outage) |
 | Model | Frontier general model required | Fine-tuned, licensed, or specialist open model |
 | Team | No one to own GPUs and engine upgrades | Platform team exists, or workload justifies hiring |
 | Change rate | Want new models without migration work | Want pinned behavior and reproducible outputs |
 | Typical outcome | Everything hosted, gateway for retries and cost (Chapter 3, 30) | Hybrid: hosted default, self-hosted slice behind the same gateway |
 
-**The middle option: managed open-weight endpoints.** Between a hosted proprietary API and your own GPUs sits a third choice: a cloud or inference provider serves open weights for you, billed per token or per reserved GPU-hour. You get the model choice and portability of open weights, often including your own fine-tune or LoRA adapter, without procurement, driver upgrades, or an on-call rotation for memory exhaustion. You give up most of the latency control and part of the residency guarantee, and you still inherit the quality questions of this chapter: the provider picks the engine, the quantization, and the upgrade schedule, so ask which quantization is served and rerun your evaluation suite when it changes. It is the usual first step when a team wants open weights, and the right end state when volume is too spiky to keep dedicated GPUs busy. A dedicated-capacity variant (reserved replicas run by the provider) moves the cost model toward self-hosting: you pay per hour again, so the utilization arithmetic in Production considerations applies.
+**The middle option: managed open-weight endpoints.** A provider serves open weights for you, billed per token or per reserved GPU-hour. You get open-weight model choice, often including your own adapter, without procurement or on-call, and give up most latency control and part of the residency guarantee. The provider picks the engine and quantization, so ask which is served and rerun your evaluation suite when it changes. It is the usual first step toward open weights, and the right end state when volume is too spiky for dedicated GPUs.
 
-Whatever the split, both sides speak the same `LLMClient` protocol from Chapter 3, so retries, caching, cost accounting, and tracing come from the same `ModelGateway`. Where each target sits is a design choice. Interchangeable replicas of the same model belong in one gateway's fallback chain. A different model with a different envelope (shorter context, no tool calling, another quantization) belongs behind a capability-aware router like the one in Chapter 7 (this chapter's `check_fit` and `choose_target` are a minimal version) that chooses a target per request and then calls that target's gateway; putting it in a fallback chain would silently change capability in the middle of an incident.
+Whatever the split, both sides speak the `LLMClient` protocol from Chapter 3 behind the same `ModelGateway`. Interchangeable replicas of one model belong in a gateway's fallback chain. A model with a different envelope (shorter context, no tool calling) belongs behind a capability-aware router (Chapter 7; this chapter's `check_fit` and `choose_target` are a minimal version); in a fallback chain it would silently change capability mid-incident.
 
 ### The metrics, defined precisely
 
-Serving benchmarks are full of numbers that sound interchangeable and are not. Define each one before you measure it, and know which one your users experience.
+Serving benchmarks are full of numbers that sound interchangeable and are not.
 
 | Metric | Definition | Who feels it |
 |---|---|---|
-| Queue time | From request arrival at the server to the moment the scheduler starts prefill | Nobody directly; it is inside TTFT, and it is the first thing to grow under load |
-| Time to first token (TTFT) | From request send to first content token received. Includes network, queue time, prefill, and first scheduling step | Interactive users: this is the pause before anything appears |
-| Time per output token (TPOT), also inter-token latency | Average gap between consecutive content tokens after the first | Interactive users as the streaming pace; readers notice above roughly 100 ms per token |
-| End-to-end latency (E2E) | From send to final token, including all of the above plus post-processing | Everyone; agents and batch pipelines feel only this |
-| Throughput | Aggregate work per second across the server: output tokens/s, or requests/s | The operator and the bill |
-| Goodput | Throughput counting only requests that met their SLO | The product; it is the capacity you can advertise |
-| p50 / p95 / p99 | Percentiles of any of the above across requests | p50 is the demo; p95 and p99 are what one in twenty and one in a hundred users get |
+| Queue time | Arrival at the server until the scheduler starts prefill | Nobody directly; it sits inside TTFT and grows first under load |
+| Time to first token (TTFT) | Request send to first content token: network, queue, prefill, first step | Interactive users: the pause before anything appears |
+| Time per output token (TPOT), also inter-token latency | Average gap between content tokens after the first | Interactive users as streaming pace; noticeable above roughly 100 ms |
+| End-to-end latency (E2E) | Send to final token, plus post-processing | Everyone; agents and batch pipelines feel only this |
+| Throughput | Output tokens/s or requests/s across the server | The operator and the bill |
+| Goodput | Throughput counting only requests that met their SLO | The product; the capacity you can advertise |
+| p50 / p95 / p99 | Percentiles of any of the above | p50 is the demo; p95 and p99 are one user in twenty and one in a hundred |
 
-Two distinctions matter in practice. First, TTFT is where load shows up. A saturated GPU does not generate tokens more slowly; it makes new requests wait. TPOT stays flat while TTFT climbs, so a dashboard showing only tokens per second looks healthy while users stare at a spinner. Second, goodput, not throughput, is capacity. A benchmark reporting 4,000 tokens per second at a p95 TTFT of 9 seconds reports a number you cannot use.
+Two distinctions matter. First, TTFT is where load shows up. A saturated GPU does not generate tokens more slowly; it makes new requests wait, so TPOT stays flat while TTFT climbs and a tokens-per-second dashboard looks healthy while users stare at a spinner. Second, goodput, not throughput, is capacity: 4,000 tokens per second at a p95 TTFT of 9 seconds is a number you cannot use.
 
-Northwind Assist's targets are p95 TTFT under 2 seconds and p95 completion under 8 seconds for RAG answers. Every benchmark in this chapter is judged against those two numbers.
+Northwind Assist's RAG targets, used throughout: p95 TTFT under 2 seconds and p95 completion under 8 seconds.
 
 ### Prefill and decode
 
-A request passes through two phases that stress hardware differently. **Prefill** processes every prompt token at once: one large matrix multiplication per layer over the whole prompt, which keeps the GPU's arithmetic units busy and is therefore compute-bound. Prefill produces the first token and, as a side effect, the KV cache for the prompt. **Decode** then generates one token per step per sequence. Each step reads the entire weight set and the sequence's KV cache from GPU memory to produce a single token's worth of arithmetic.
+Chapter 2 introduced the two phases; here is what they mean for hardware. **Prefill** processes every prompt token at once, one large matrix multiplication per layer, so it is compute-bound; it produces the first token and the prompt's KV cache. **Decode** generates one token per step per sequence, and each step reads the entire weight set from GPU memory for one token's worth of arithmetic per sequence.
 
-That ratio, many bytes moved for very little arithmetic, is the whole intuition for why decode is memory-bandwidth-bound. Moving tens of gigabytes of weights from memory to the compute units takes a fixed time per step regardless of how many sequences are in the batch; the arithmetic for one extra sequence is tiny by comparison. A GPU decoding one sequence is mostly waiting on memory, and decoding sixteen sequences in one step costs nearly the same time. This is why batching is close to free throughput during decode, why memory bandwidth predicts single-stream TPOT better than FLOPS, and why quantizing weights to fewer bytes speeds up decode even when the arithmetic is unchanged.
+That is why decode is memory-bandwidth-bound. Moving tens of gigabytes of weights takes a fixed time per step, so decoding sixteen sequences in one step costs nearly the same as decoding one. Batching is therefore close to free throughput, memory bandwidth predicts single-stream TPOT better than FLOPS, and fewer bytes per weight speeds up decode.
 
-The two phases map onto the two user-facing metrics. Long prompts lengthen prefill and therefore TTFT; long outputs lengthen decode and therefore E2E. A 6,000-token RAG prompt and a 60-token chat message have similar TPOT and very different TTFT, which is why traffic shape, not model size alone, determines what users feel.
+Long prompts lengthen TTFT; long outputs lengthen E2E. A 6,000-token RAG prompt and a 60-token chat message have similar TPOT and very different TTFT: traffic shape, not model size alone, determines what users feel.
 
 ### The KV cache and the concurrency it allows
 
-Chapter 2 introduced the KV cache as the mechanism that avoids recomputing attention keys and values for every earlier token on every decode step. Here it matters as a budget. For a conventional attention model the cache for one sequence is
+Chapter 2 introduced the KV cache as a mechanism; here it is a budget. For a conventional attention model the cache for one sequence is
 
 ```
 kv_bytes = 2 * layers * kv_heads * head_dim * tokens * bytes_per_element
 ```
 
-The factor 2 is keys plus values. `kv_heads` is the number of key/value heads, which under grouped-query attention is smaller than the number of query heads: a model with 32 query heads and 8 KV heads stores one quarter of the cache a full multi-head model would. This single architectural choice, invisible to the application, can quadruple the users one GPU serves.
+The factor 2 is keys plus values. `kv_heads` counts key/value heads, which under grouped-query attention are fewer than query heads: 32 query heads sharing 8 KV heads store a quarter of the cache, which can quadruple the users one GPU serves.
 
 Take an illustrative 8-billion-parameter model with 32 layers, 8 KV heads, head dimension 128, and a BF16 cache (2 bytes per element). Per token that is 2 × 32 × 8 × 128 × 2 = 131,072 bytes, or 128 KiB. Two worked contexts:
 
@@ -103,136 +93,144 @@ Take an illustrative 8-billion-parameter model with 32 layers, 8 KV heads, head 
 | 8,192 | 1.00 GiB | A typical RAG answer: system prompt, five or six evidence chunks, a question, and a few hundred output tokens |
 | 32,768 | 4.00 GiB | A long document in context or a many-turn agent loop |
 
-Doubling the context doubles the cache. Now place it on an illustrative 80 GiB GPU. Weights at BF16 take about 15 GiB; reserve 10 percent of the device (8 GiB) as headroom for fragmentation and bursts, and 2 GiB for the runtime's own buffers. That leaves 80 − 15 − 8 − 2, roughly 55 GiB, for cache. At 8k tokens that is about 55 concurrent sequences; at 32k it is about 13. Same model, same hardware, a quarter of the users, purely because of context length. If the engine also quantizes weights to INT8 and the cache to FP8 (8-bit formats, covered under Quantization trade-offs below), the 32k figure rises to about 31 (`kv_cache.py` reproduces all of these numbers).
+Now place it on an illustrative 80 GiB GPU. Weights at BF16 take about 15 GiB; reserve 10 percent of the device (8 GiB) as headroom for fragmentation and bursts, and 2 GiB for the runtime's buffers. That leaves 80 − 15 − 8 − 2, roughly 55 GiB, for cache: about 55 concurrent sequences at 8k tokens, about 13 at 32k. Same model, same hardware, a quarter of the users, purely because of context length. With INT8 weights and an FP8 cache (see Quantization trade-offs), the 32k figure rises to about 31. `kv_cache.py` reproduces all of these numbers.
 
-Three consequences follow. Admission control must count KV memory, not requests: one 64k-context request is worth sixteen 4k requests (Chapter 29 owns the admission implementation; the budget comes from here). Context engineering (Chapter 5) is also capacity engineering: every thousand tokens trimmed from a prompt is cache given to another user. And an engine's "maximum model length" is a knob that trades concurrency for length, not a free parameter.
+Three consequences follow. Admission control must count KV memory, not requests: one 64k-context request is worth sixteen 4k requests (Chapter 29 implements admission; the budget comes from here). Context engineering (Chapter 5) is capacity engineering: every thousand tokens trimmed is cache for another user. And an engine's "maximum model length" trades concurrency for length; it is not a free parameter.
 
-The formula is a floor. Real footprints add block metadata, fragmentation, draft-model caches, and per-request workspaces. Treat the estimate as the plausibility check and the load test as the truth.
+The formula is a floor (real engines add metadata and fragmentation): a plausibility check, with the load test as the truth.
 
 ### When the architecture changes the arithmetic
 
-The formula above, and `kv_cache.py`, describe a dense model with conventional (grouped-query) attention in every layer. Many current open-weight models depart from that in ways that change both the fixed and the variable cost. Read the model's configuration file before you plan, because the model card's headline parameter count can mislead in either direction.
+The formula and `kv_cache.py` describe a dense model with conventional (grouped-query) attention in every layer. Many current open-weight models depart from that, so read the model's configuration file before you plan: the headline parameter count can mislead in either direction.
 
-**Mixture-of-experts (MoE).** An MoE model replaces each feed-forward block with many "expert" blocks and a small router that sends each token to a few of them. The model card then quotes two numbers: total parameters (every expert) and active parameters (what one token passes through). They govern different resources. **Memory scales with total parameters**: every expert must be resident, because the next token may need any of them. **Compute per token, and decode bandwidth at small batch, scale with active parameters**: a single sequence reads only the experts its token was routed to. Take an illustrative MoE with 48B total and 8B active parameters. At BF16 its weights need about 96 GB and do not fit on the illustrative 80 GiB device, where the dense 8B model left 55 GiB for cache; at FP8 they take about 48 GB and leave much less cache than the dense model. Yet its single-stream TPOT resembles the dense 8B model's, since each step reads roughly 8B parameters' worth of weights.
+**Mixture-of-experts (MoE).** An MoE model replaces each feed-forward block with many "expert" blocks and a router that sends each token to a few. **Memory scales with total parameters**, because every expert must be resident. **Compute per token, and decode bandwidth at small batch, scale with active parameters** (what one token passes through). An illustrative MoE with 48B total and 8B active parameters needs about 96 GB at BF16 and does not fit on the 80 GiB device; at FP8 it takes about 48 GB and leaves much less cache than the dense 8B model. Yet its single-stream TPOT resembles the dense 8B model's.
 
-Two consequences follow. First, the "batching is nearly free" argument weakens: as the batch grows, its tokens route to different experts, so a decode step reads more of the total weight set, and per-step time rises toward that of a dense model of the total size until the batch is large enough to amortize it. Second, the KV cache is untouched by the experts: it depends on the attention layers alone, so size it with the attention shape from the config, not the parameter count. MoE models suit fleets with plenty of memory and steady, high concurrency, and spread naturally across devices with expert parallelism (see the parallelism paragraph below). On a single small device they are often the wrong choice: you pay memory for the total and get the quality of something between the two numbers.
+Two consequences follow. "Batching is nearly free" weakens: a larger batch routes tokens to more experts, so per-step time rises toward that of a dense model of the total size. And the KV cache depends on the attention layers alone; size it from the config's attention shape. MoE models suit fleets with plenty of memory and steady, high concurrency, not a single small device.
 
 **Attention variants change the KV formula.** Three are common:
 
 - **Multi-query and grouped-query attention** shrink `kv_heads`, which the formula already captures.
-- **Sliding-window (local) attention** layers attend only to the last W tokens, so they keep at most W tokens of cache regardless of context length. Models that interleave local and global layers pay the full formula only for the global layers; for long contexts the real footprint can be a fraction of the naive estimate, provided the engine implements the window and does not allocate full-length cache for every layer.
-- **Latent attention** (multi-head latent attention, used for example in the DeepSeek-V2 and V3 model families) caches one compressed latent vector per token per layer instead of separate keys and values for every head. Per token the cost becomes roughly `layers × latent_dim × bytes` (plus a small positional component), which removes the factor 2 and the `kv_heads × head_dim` product and is several times smaller than a grouped-query cache of similar model size.
+- **Sliding-window (local) attention** layers attend only to the last W tokens, so they keep at most W tokens of cache. Models that interleave local and global layers pay the full formula only for the global layers, provided the engine implements the window rather than allocating full-length cache for every layer.
+- **Latent attention** (multi-head latent attention, used for example in the DeepSeek-V2 and V3 families) caches one compressed latent vector per token per layer. Per token the cost is roughly `layers × latent_dim × bytes`, several times smaller than a grouped-query cache of similar model size.
 
-Hybrid models that mix attention with linear-attention or state-space layers go further: those layers keep a fixed-size state per sequence that does not grow with context at all. In every case the practical rule is the same. Engines report the KV capacity they actually allocated at startup, as a number of tokens or blocks that fit; that number, divided by your p95 sequence length, is the concurrency ceiling to check your arithmetic against. `kv_cache.py` deliberately models only conventional attention; exercise K7 asks you to extend the reasoning.
+Hybrid models with linear-attention or state-space layers keep a fixed-size state that does not grow with context. In every case, check against the engine: it reports the KV capacity it allocated at startup, and that number divided by your p95 sequence length is the concurrency ceiling. `kv_cache.py` models only conventional attention; exercise K7 extends the reasoning.
 
 ### Static versus continuous batching
 
-Early serving systems used **static batching**: wait until N requests have arrived, run them together, return when the longest finishes. Because output lengths vary, most of the batch sits idle waiting for the one request still generating, and a request arriving a millisecond after the batch started waits for the whole batch. Utilization is poor and TTFT is erratic.
+**Static batching** runs N requests together and returns when the longest finishes, so most of the batch idles while one request still generates, and a late arrival waits for the whole batch. Utilization is poor and TTFT is erratic.
 
-**Continuous batching** schedules at the granularity of a decode step. At each step the engine admits new requests whose prompts fit in the remaining cache budget, runs one step for every active sequence, and retires those that produced an end token, freeing their cache blocks for the next arrival. This keeps the GPU full under mixed-length traffic and is why modern engines reach several times the throughput of static batching on the same hardware.
+**Continuous batching** schedules per decode step: admit new requests whose prompts fit in the remaining cache, run one step for every active sequence, retire finished ones and free their blocks. This keeps the GPU full under mixed-length traffic, for several times the throughput of static batching.
 
-Scheduling policy still matters. A long prompt admitted into a busy batch does a large prefill that stalls everyone's decode step, so interactive users see a TPOT hiccup. Engines mitigate this by chunking long prefills across steps or separating prefill and decode priorities; at very large scale some deployments run the two phases on separate worker pools and ship KV state between them, an optimization called disaggregated prefill and decode, listed in the comparison table below; it is not a starting point. The knob you will touch is the maximum number of batched sequences or tokens, which trades throughput for TPOT. Tune it against your SLO, not the engine's default.
+Scheduling policy still matters. A long prompt's prefill stalls everyone's decode step, a TPOT hiccup for interactive users; engines mitigate this by chunking long prefills across steps (very large deployments split prefill and decode onto separate pools, which is not a starting point). The knob you will touch is the maximum number of batched sequences or tokens, which trades throughput for TPOT. Tune it against your SLO, not the engine's default.
 
-Paged attention is the memory-management idea underneath continuous batching: cache is allocated in fixed-size blocks mapped to sequences like virtual-memory pages, so sequences grow without reserving a contiguous maximum-length region and freed blocks are reused with little fragmentation. You do not configure it; you benefit from it and read its utilization metric.
+Paged attention is the memory management underneath: cache is allocated in fixed-size blocks mapped to sequences like virtual-memory pages, so sequences grow without reserving a maximum-length region. You do not configure it; you read its utilization metric.
 
 ### Prefix caching and prompt layout
 
-When many requests share an identical token prefix, the KV cache computed for that prefix during one request's prefill can be reused for the next. Prefill for the shared part is skipped and TTFT drops, sometimes dramatically for a long system prompt or a cached document. Hosted providers expose the same idea as prompt caching with a per-token discount; self-hosted engines implement it as automatic prefix caching over the paged cache.
+When requests share an identical token prefix, the next request reuses the KV cache computed for it, skipping that prefill and cutting TTFT. Hosted providers sell this as prompt caching; self-hosted engines do automatic prefix caching over the paged cache. A hit requires the same model, tokenizer, adapter, and text, so the layout rules of Chapter 5 apply unchanged: stable content first, variable content last, and nothing unique (a timestamp, a request ID) in the shared prefix. Measure the hit rate before designing around it; unique long documents get nothing from it but the memory it consumes.
 
-The application controls whether it helps. A hit requires an identical token prefix: same model, tokenizer, adapter, and text. Anything that varies early in the prompt breaks the match for everything after it. The layout rules from Chapter 5 and the caching layers in Chapter 30 follow directly: stable system prompt and tool definitions first, tenant and session context next, the user's message and freshly retrieved evidence last. A timestamp or request ID in the system prompt defeats caching entirely. Measure the hit rate before designing around it; a workload of unique long documents gets nothing from prefix caching except the memory it consumes.
-
-Two cautions. Cached activations derive from user content; engines key on exact token match, which is safe for content, but timing can leak: a fast first token reveals that someone recently sent the same prefix, so review cross-tenant sharing with your security team (Chapter 26). And the prefix cache competes with active sequences for the same blocks, so a high hit rate under low load can vanish under high load.
+Two serving-specific cautions. Timing can leak: a fast first token reveals that someone recently sent the same prefix, so review cross-tenant sharing (Chapter 26). And the prefix cache competes with active sequences for the same blocks, so a high hit rate under low load can vanish under high load.
 
 ### Quantization trade-offs
 
 Quantization stores tensors in fewer bits. Three targets exist and should never be conflated.
 
-**Weight-only quantization** (INT8, INT4, FP8) shrinks the model's fixed memory cost. The illustrative 8B model drops from about 16 GB (15 GiB) of weights at 16 bits to about 8 GB at 8 bits and 4 GB at 4 bits, before scales and metadata. The freed memory becomes KV cache, which becomes concurrency; and because decode is bandwidth-bound, reading half the bytes per step also speeds up single-stream TPOT when the kernels for that format are efficient on your hardware. A 4-bit format with a slow dequantization kernel can be slower than 8-bit, so the speedup is empirical.
+**Weight-only quantization** (INT8, INT4, FP8) shrinks the fixed cost: the illustrative 8B model drops from about 16 GB (15 GiB) at 16 bits to about 8 GB at 8 bits and 4 GB at 4 bits. The freed memory becomes KV cache, which becomes concurrency. Fewer bytes per step can also speed up TPOT, but only with efficient kernels for that format; a slow 4-bit kernel can lose to 8-bit.
 
-**Activation quantization** (typically FP8 or INT8 for both weights and activations) also accelerates the arithmetic on hardware that supports those tensor-core formats, which matters for prefill. It is more sensitive to outlier channels and needs calibration data.
+**Activation quantization** (FP8 or INT8 for weights and activations) also accelerates the arithmetic on hardware that supports those formats, which matters for prefill. It is sensitive to outlier channels and needs calibration data.
 
-**KV-cache quantization** (FP8 or INT8 cache) halves the variable memory cost and therefore doubles concurrency at a given context. Quality effects are position- and task-dependent and show up most on long-context retrieval tasks, exactly the tasks a RAG system cares about.
+**KV-cache quantization** (FP8 or INT8 cache) halves the variable cost and doubles concurrency at a given context. Quality effects show up most on long-context retrieval, exactly what a RAG system cares about.
 
-One rule deserves emphasis: **measure task quality, not perplexity alone.** Perplexity is an aggregate language-modeling score that can move by a fraction of a percent while structured-output validity, tool-call argument accuracy, multilingual quality, or long-context faithfulness regress badly. Run the release evaluation suite (Chapters 24 and 25), sliced by task type, before and after any quantization change. If INT4 doubles concurrency but breaks structured output for one task family, it is not a win; if a small benchmark dip leaves the product evaluation unchanged and halves cost, it is.
+The memory saving is usually worth more than the kernel speed: doubling batch size on a bandwidth-bound decode nearly doubles throughput, and a 20 percent faster kernel does not.
 
-The memory saving is usually worth more than the kernel speed. Doubling batch size on a bandwidth-bound decode nearly doubles throughput; a 20 percent faster kernel does not.
+One rule deserves emphasis: **measure task quality, not perplexity alone.** Perplexity can barely move while structured-output validity, tool-call arguments, multilingual quality, or long-context faithfulness regress badly. Run the sliced release evaluation (Chapters 24 and 25) before and after any quantization change; INT4 that doubles concurrency but breaks structured output for one task family is not a win.
 
 ### Speculative decoding
 
-Decode is sequential: one token per step per sequence, each step reading all the weights. Speculative decoding attacks that sequential bottleneck. A cheap **draft** mechanism proposes several future tokens; the full **target** model then verifies all of them in a single forward pass, which costs about the same as generating one token because the pass is bandwidth-bound anyway. The verifier accepts the longest prefix of the draft that passes the acceptance test (under greedy decoding, that matches the target's own choice) and generates one more token itself. Under the standard acceptance rule the output distribution is identical to the target model's; speculation changes speed, not results.
+> **Deep dive.** How speculation trades draft cost for fewer sequential steps; skip on a first reading.
 
-The speedup is governed by the **acceptance rate**. If the draft guesses four tokens and three are typically accepted, each expensive step advances about four positions instead of one. If the draft is poorly matched to the target or the text is unpredictable, most proposals are rejected and the system pays the draft cost for nothing; a bad draft makes the system slower. Acceptance is high for predictable text (code, structured output, boilerplate) and low for creative or novel content.
+In speculative decoding a cheap **draft** proposes several future tokens and the full **target** model verifies them all in one forward pass, which costs about the same as one decode step because the pass is bandwidth-bound anyway. The target keeps the longest accepted prefix plus one token of its own. Under the standard acceptance rule the output distribution is identical to the target's: speculation changes speed, not results.
 
-Drafts come in several forms. A separate small model from the same family is the classic choice and needs its own weights and cache. **Medusa** adds prediction heads to the target so it proposes several tokens from one hidden state, at the cost of training those heads. **EAGLE** predicts at the level of hidden features with a small auxiliary network and tends to reach higher acceptance than a tiny standalone draft. **N-gram speculation** proposes continuations from token patterns already in the prompt or output, costs almost nothing, and suits tasks that copy from context, such as extraction and code editing. All are engine configuration choices; benchmark TTFT and TPOT at realistic concurrency, because speculation helps most at low batch sizes and its benefit shrinks when the GPU is already busy.
+The **acceptance rate** governs the speedup: four guesses with three accepted advance about four positions per expensive step, and a poorly matched draft makes the system slower. Acceptance is high for predictable text (code, structured output) and low for creative content.
+
+Drafts include a small same-family model, **Medusa** heads, **EAGLE** feature prediction, and nearly free **N-gram speculation** from the prompt (good for extraction and code editing). All are engine settings; benchmark at realistic concurrency, because speculation helps most at low batch sizes and fades when the GPU is busy.
 
 ### Serving many fine-tunes on one base: multi-adapter serving
 
-Chapter 33 recommends parameter-efficient fine-tuning, usually LoRA: the base weights stay frozen and the fine-tune is a small set of low-rank matrices, the adapter. That shape has a serving consequence. Instead of one replica per fine-tuned model, an engine can load the base weights once and keep many adapters resident, applying each request's adapter inside the same batch with kernels designed for mixed-adapter batches. The client selects an adapter by model name, so to the application each adapter looks like a separate model on the same endpoint.
+> **Deep dive.** Serving many LoRA fine-tunes from one replica; skip on a first reading.
 
-**When it pays.** Many fine-tunes with modest traffic each: one per tenant, per task family, or per language. Ten adapters on one base cost roughly one replica plus the adapters' memory (illustratively tens to hundreds of megabytes each, depending on rank and which layers they touch), where ten merged models would cost ten replicas, nine of them mostly idle. It also makes adapter rollout cheap: loading a new adapter version is a configuration change, not a new deployment.
+A LoRA fine-tune (Chapter 33) is a small set of low-rank matrices, the adapter, on frozen base weights. An engine can load the base once, keep many adapters resident, and apply each request's adapter inside a mixed batch; the client selects one by model name.
 
-**When not.** A single high-volume fine-tune is better merged into the base weights and served as a plain model, because applying an adapter at runtime adds a little work to every step. Full fine-tunes cannot share a base at all. And adapters for different base models, or the same base at different quantizations, need different pools.
+**When it pays.** Many fine-tunes with modest traffic each (per tenant, task, or language). Ten adapters cost roughly one replica plus tens to hundreds of megabytes each (illustrative), where ten merged models would cost ten mostly idle replicas.
 
-**What to watch.** Engines cap the number of adapters resident on the GPU and the maximum adapter rank; a request for a cold adapter waits for it to load, which shows up as a TTFT outlier. The prefix cache is per adapter, because the same text produces different keys and values under different adapters, so ten adapters split the cache hit rate ten ways. Each adapter is its own model release: evaluate it on its own slice (Chapter 33), record the adapter name and version in every trace, and add a contract test that an unknown adapter name is rejected rather than silently served by the base model.
+**When not.** A single high-volume fine-tune is better merged into the base, because a runtime adapter adds work to every step. Full fine-tunes cannot share a base, and different bases or quantizations need different pools.
+
+**What to watch.** A cold adapter shows up as a TTFT outlier while it loads, and the prefix cache is per adapter, so ten adapters split the hit rate ten ways. Each adapter is its own model release: evaluate its slice, trace its name and version, and test that an unknown adapter name is rejected rather than served by the base model.
 
 ### Parallelism in one paragraph
 
-When a model does not fit on one GPU, or one GPU cannot deliver the required throughput, the engine spreads work across devices. **Tensor parallelism** splits each matrix operation across GPUs and synchronizes after every layer, so it needs a fast interconnect and is used within one machine. **Pipeline parallelism** assigns layers to stages on different devices and passes activations along; it tolerates slower links but introduces idle bubbles. **Data parallelism** runs independent replicas of the whole model and is the right answer whenever the model fits on one device group, because replicas add capacity with no communication. **Expert parallelism** places the experts of a mixture-of-experts model on different devices and routes tokens to them, which requires all-to-all communication. The practical guidance for an application team is simple: fit the model on the smallest device group that holds weights plus a useful KV budget, scale with data-parallel replicas behind a load balancer, and treat multi-node tensor parallelism as a specialist's problem.
+> **Deep dive.** The four ways to spread a model across devices; skip on a first reading.
+
+When a model does not fit on one GPU, or one GPU is too slow, the engine spreads work across devices. **Tensor parallelism** splits each matrix operation across GPUs and synchronizes after every layer, so it needs a fast interconnect within one machine. **Pipeline parallelism** assigns layers to devices and passes activations along; it tolerates slower links but leaves idle bubbles. **Data parallelism** runs independent replicas and adds capacity with no communication. **Expert parallelism** places an MoE model's experts on different devices, with all-to-all communication. The guidance for an application team: fit the model on the smallest device group that holds weights plus a useful KV budget, scale with data-parallel replicas behind a load balancer, and leave multi-node tensor parallelism to specialists.
 
 ### Serving options compared
 
-The table lists the common choices as options, not recommendations. The cells reflect engine documentation as of mid-2026, and features change quickly across versions; verify every cell against the version you deploy, and pin that version.
+> **Deep dive.** Engine and endpoint options side by side; skip on a first reading.
+
+The table lists options, not recommendations. Cells reflect engine documentation as of mid-2026 and change quickly; verify each against the version you deploy, and pin it.
 
 | Option | Target hardware | Batching | Prefix cache | Structured output | Quantization formats | Operational maturity and notes |
 |---|---|---|---|---|---|---|
-| vLLM | Data-center and workstation GPUs, several vendors | Continuous, paged KV | Automatic prefix caching | Grammar and JSON-schema constrained decoding via pluggable backends | Many weight-only and FP8 formats, KV quantization | Widely deployed OpenAI-compatible server; large model catalog; supports adapters, tensor and pipeline parallelism, speculative decoding; optional disaggregated prefill/decode at scale |
-| SGLang | Data-center GPUs | Continuous, paged KV with radix-tree prefix sharing | Core design goal; strong for shared prefixes and multi-call agent programs | Constrained decoding built in, plus a frontend language for multi-step programs | Common weight-only and FP8 formats | OpenAI-compatible server; emphasizes scheduling and cache reuse for agentic and structured workloads; speculative decoding supported |
-| TensorRT-LLM | One GPU vendor's hardware only | Continuous, in-flight batching | Supported | Supported via guided decoding integrations | Vendor-optimized FP8, INT8, INT4 kernels | Often the highest peak performance on its hardware in published benchmarks; requires a per-model build step and tighter coupling to the vendor stack; typically fronted by a separate inference server |
-| llama.cpp (GGUF) | CPUs, consumer GPUs, laptops, edge; many backends | Limited parallel slots; not a high-concurrency design | Prompt cache per slot | Grammar-constrained sampling | GGUF with many low-bit schemes; GGUF is a file format, llama.cpp is the runtime | Excellent for local, offline, and single-user deployments; OpenAI-compatible server included; not intended for server-scale concurrency |
-| Managed open-weight endpoints | Provider's | Provider-managed | Varies by provider | Varies; often JSON-schema mode | Provider's choice; ask which is served | Open weights and often your own adapters without running GPUs; per-token or dedicated-capacity billing; engine and quantization upgrades on the provider's schedule |
-| Hosted endpoints | Provider's | Provider-managed | Prompt caching with discounts, provider-specific rules | Native structured outputs on most providers | Not exposed | No operations; regional options; capacity and latency are observed rather than controlled; model behavior can change on provider schedule |
+| vLLM | Data-center and workstation GPUs, several vendors | Continuous, paged KV | Automatic | Grammar and JSON-schema backends | Many weight-only and FP8 formats, KV quantization | Widely deployed OpenAI-compatible server; adapters, parallelism, speculation |
+| SGLang | Data-center GPUs | Continuous, radix-tree prefix sharing | Core design goal | Built in, plus a frontend language | Common weight-only and FP8 formats | OpenAI-compatible; strong for agentic and structured workloads |
+| TensorRT-LLM | One GPU vendor's hardware only | Continuous, in-flight | Supported | Via integrations | Vendor-optimized FP8, INT8, INT4 | Often highest peak performance on its hardware; per-model build step |
+| llama.cpp (GGUF) | CPUs, consumer GPUs, edge | Limited parallel slots | Per slot | Grammar-constrained sampling | GGUF file format, many low-bit schemes | Local and single-user use; OpenAI-compatible server; not for server-scale concurrency |
+| Managed open-weight endpoints | Provider's | Provider-managed | Varies | Varies; often JSON-schema mode | Provider's choice; ask | Open weights and often your adapters without GPUs; upgrades on the provider's schedule |
+| Hosted endpoints | Provider's | Provider-managed | Prompt caching with discounts | Native on most providers | Not exposed | No operations; latency observed, not controlled; behavior can change on provider schedule |
 
-Benchmark the shortlist on your exact model, your GPU generation, your prompt and output distributions, and your structured-output needs. A generic leaderboard measures none of those.
+Benchmark the shortlist on your model, hardware, and traffic; a generic leaderboard measures none of those.
 
 ## How it works
 
 ### A request's path through a serving stack
 
-A production stack has more parts than the engine. The application's gateway (Chapter 3) sends an HTTP request to a load balancer that routes it to a replica, usually by least outstanding requests or by prefix affinity so cache hits land on the replica that holds the prefix. The replica's admission controller checks that the request's token budget fits in free KV memory and either queues it, admits it, or rejects it fast with a retryable status. The tokenizer converts text to IDs. The scheduler places the prompt into the next decode step's batch for prefill, possibly chunked. The first token streams back; the sequence stays in the batch for every decode step until it emits an end token, hits `max_tokens`, or the client disconnects. On completion or cancellation its cache blocks return to the pool, and the response's usage block reports token counts for cost accounting and tracing.
+The gateway (Chapter 3) sends an HTTP request to a load balancer, which picks a replica by least outstanding requests or by prefix affinity (so cache hits land where the prefix lives). The replica's admission controller checks that the request's token budget fits in free KV memory and admits it, queues it, or rejects it fast with a retryable status. The scheduler places the tokenized prompt into the next step's batch for prefill, possibly chunked. The first token streams back, and the sequence stays in the batch until it emits an end token, hits `max_tokens`, or the client disconnects. Its cache blocks then return to the pool, and the usage block reports token counts for cost accounting and tracing.
 
 ### Capacity planning with Little's Law
 
-Little's Law is the queueing identity behind every capacity estimate; Chapter 35 applies it to whole-system sizing, and this section applies it to the serving fleet. For any stable system,
+Little's Law is the queueing identity behind every capacity estimate (Chapter 35 applies it to whole systems; here it sizes the serving fleet). For any stable system,
 
 ```
 L = λ × W
 ```
 
-where L is the average number of requests in the system (queued or running), λ is the arrival rate, and W is the average time a request spends in the system. It holds regardless of distribution, scheduling, or batching. A first use: peak arrivals of 20 requests per second with a 4 second mean end-to-end time means about 80 requests in flight. If each needs 1.5 GiB of KV cache at its typical length, the fleet needs 120 GiB of cache for those requests alone, before weights and headroom. Capacity planning starts there, not from a single-request benchmark.
+where L is the average number of requests in the system (queued or running), λ is the arrival rate, and W is the average time a request spends in the system. It holds regardless of distribution, scheduling, or batching. Peak arrivals of 20 requests per second with a 4 second mean end-to-end time means about 80 requests in flight; at 1.5 GiB of KV cache each, the fleet needs 120 GiB of cache before weights and headroom. Capacity planning starts there, not from a single-request benchmark.
 
-The second idea is the **queueing knee**. For an idealized single-server queue, mean response time is `S / (1 − ρ)`, where S is the service time and ρ the utilization (the fraction of time the server is busy). At 50 percent utilization requests take twice the service time; at 90 percent, ten times; at 99 percent, a hundred times. Real LLM servers batch and have heavy-tailed service times, so the real curve is not that formula, but it has the same shape: flat, then vertical. The point where it turns is the knee, and the operating point (the load you plan to run at, chosen in the protocol below) must sit before it. This is why **headroom** is not waste. A replica loaded to 60 percent of its measured goodput capacity has room for bursts, for the long-tail prompt, and for the replica next to it failing; one loaded to 90 percent has already crossed into the region where p99 is unbounded.
+The second idea is the **queueing knee**. For an idealized single-server queue, mean response time is `S / (1 − ρ)`, where S is the service time and ρ the utilization (the fraction of time the server is busy). At 50 percent utilization requests take twice the service time; at 90 percent, ten times; at 99 percent, a hundred times. Real LLM servers batch, but the curve has the same shape: flat, then vertical. The operating point (the load you plan to run at, chosen in the protocol below) must sit before the knee. That is why **headroom** is not waste: a replica at 60 percent of its measured goodput capacity has room for bursts, long-tail prompts, and a failed neighbor; one at 90 percent is already where p99 is unbounded.
 
 **Worked example (illustrative).** Northwind Assist's RAG endpoint peaks at 6 requests per second. Mean input is 3,000 tokens (p95 6,000), mean output 300 tokens (p95 600), mean E2E 4 seconds. A load test of one replica of the 8B model found it sustains 1,500 output tokens per second and 20,000 prefill tokens per second while meeting the p95 TTFT and completion SLOs.
 
-Little's Law puts 24 requests in flight at peak. Decode demand is 6 × 300 = 1,800 tokens per second; at a 60 percent target utilization one replica is good for 900, so decode needs 2.0 replicas. Prefill demand is 18,000 tokens per second against 12,000 usable, so 1.5 replicas. KV demand is 24 requests at a p95 sequence of 6,600 tokens, about 0.8 GiB each, 19 GiB total, well inside the 55 GiB cache budget of a single replica computed in the KV section (0.59 replicas at 60 percent utilization). Decode is the binding constraint; round up to 2 and add one replica for failover and rolling upgrades: 3 replicas. `capacity.py` encodes this computation, and if you change the p95 context to 30,000 tokens the binding constraint flips to KV, which is exactly the lesson of the KV section.
+Little's Law puts 24 requests in flight at peak. Decode demand is 6 × 300 = 1,800 tokens per second; at a 60 percent target utilization one replica is good for 900, so decode needs 2.0 replicas. Prefill demand is 18,000 tokens per second against 12,000 usable, so 1.5 replicas. KV demand is 24 requests at a p95 sequence of 6,600 tokens, about 0.8 GiB each, 19 GiB total, well inside the 55 GiB cache budget of a single replica computed in the KV section (0.59 replicas at 60 percent utilization). Decode is the binding constraint; round up to 2 and add one replica for failover and rolling upgrades: 3 replicas. `capacity.py` encodes this computation; raise the p95 context to 30,000 tokens and the binding constraint flips to KV.
 
 ### A load test and benchmark protocol
 
-A benchmark that cannot be reproduced is an anecdote. Record, for every run, the model and its exact weights or quantization, the engine and version, the hardware, the scheduler settings (maximum batched sequences and tokens, chunked prefill, speculative configuration), the sampling parameters, and the prompt and output distributions. Then follow this protocol.
+A benchmark that cannot be reproduced is an anecdote. Record for every run the weights and quantization, engine version, hardware, scheduler settings, sampling parameters, and prompt and output distributions. Then:
 
 1. **Warm up.** The first requests pay for kernel compilation, graph capture, and cold caches. Discard them.
-2. **Use realistic distributions.** Sample prompts from production traces or a representative mix: short chat turns, long RAG prompts, structured extraction with tool schemas. Sample `max_tokens` from the observed output distribution. A benchmark of identical 128-token prompts with 128-token outputs tells you nothing about mixed traffic, because queueing and KV pressure come from the tails.
-3. **Sweep concurrency.** Run a closed loop at 1, 2, 4, 8, 16, 32 concurrent clients (and beyond, until something breaks). Closed loop means each client sends its next request when the previous completes, which keeps offered load bounded and the sweep interpretable.
+2. **Use realistic distributions.** Sample prompts and `max_tokens` from production traces or a representative mix (short chat turns, long RAG prompts, extraction with tool schemas). Identical 128-token prompts tell you nothing, because queueing and KV pressure come from the tails.
+3. **Sweep concurrency.** Run a closed loop at 1, 2, 4, 8, 16, 32 concurrent clients and beyond, until something breaks. Closed loop means each client sends its next request when the previous completes, which keeps offered load bounded.
 4. **Record per request:** input and output tokens, concurrency level, TTFT, TPOT, E2E, success or error or cancel status. Record per level: GPU memory and utilization, KV-cache utilization, batch size, and queue depth from the engine's metrics endpoint.
 5. **Plot two curves.** p50 and p95 TTFT against offered load, and throughput (requests per second or output tokens per second) against p95 E2E. Throughput rises and flattens; TTFT stays flat and then climbs. The knee is where p95 TTFT leaves the floor.
-6. **Pick the operating point.** The highest concurrency at which p95 TTFT and p95 E2E meet the SLO with no errors. Its goodput is your capacity per replica. Plan replicas from that number with headroom, as in the worked example.
-7. **Repeat for every variant** you are comparing: quantization, engine version, scheduler setting, speculative decoding on or off. Keep workload and SLO constant and compare goodput at the operating point, not peak throughput.
+6. **Pick the operating point.** The highest concurrency at which p95 TTFT and p95 E2E meet the SLO with no errors. Its goodput is your capacity per replica; plan replicas from it with headroom, as in the worked example.
+7. **Repeat for every variant** (quantization, engine version, scheduler setting, speculation on or off) with workload and SLO held constant, and compare goodput at the operating point, not peak throughput.
 
-The load generator in this chapter implements steps 1 to 3, the per-request half of step 4, and step 6, and prints the data behind step 5's curves as a text table; exercises P1 and P2 add the engine metrics and the plots.
+The chapter's load generator implements steps 1 to 3, the per-request half of 4, and 6, printing step 5's data as a table; exercises P1 and P2 add engine metrics and plots.
 
 ## Architecture
 
-The first diagram shows the request path and where each metric is measured. The trust boundary matters: everything past the gateway is your infrastructure when self-hosting, and the application's authorization decisions (Chapter 16) must already have been made before a request reaches the engine.
+> **Deep dive.** The request path and a replica's batching timeline as diagrams; skip on a first reading.
+
+The first diagram shows the request path and where each metric is measured. Authorization (Chapter 16) must be decided before a request passes the gateway.
 
 ```mermaid
 flowchart LR
@@ -257,7 +255,7 @@ flowchart LR
     ENG -.-> MET
 ```
 
-The second diagram shows one request's life inside a replica, with two concurrent sequences sharing decode steps. Request B arrives during A's decode and is admitted at a step boundary, which is continuous batching; A's cache is freed the moment it finishes.
+The second diagram shows continuous batching inside a replica: request B arrives during A's decode and is admitted at a step boundary, and A's cache is freed the moment it finishes.
 
 ```mermaid
 sequenceDiagram
@@ -288,7 +286,7 @@ sequenceDiagram
 
 ## Implementation
 
-Five modules, all under `book/projects/examples/ch34/`. The listings below are excerpts that carry the ideas; every file is complete on disk, including each module's `__main__` demo and the full test file. The calculators and the load generator depend only on `httpx` and `pydantic`. `local_target.py` is the bridge to `aie_core`: it imports the library lazily, so the capacity helpers stay importable on their own, and its tests drive a real `OpenAICompatibleClient` and `ModelGateway` against the in-process fake server.
+Five modules under `book/projects/examples/ch34/`; the listings are excerpts and every file is complete on disk. Only `local_target.py` needs `aie_core`, imported lazily; the rest depend on `httpx` and `pydantic`.
 
 ```
 book/projects/examples/ch34/
@@ -470,6 +468,8 @@ def replicas_needed(
 
 ### The load generator
 
+> **Deep dive.** Measuring TTFT and TPOT through streaming and picking the operating point in code; skip on a first reading.
+
 ```python
 # path: book/projects/examples/ch34/loadtest.py (excerpt; full file on disk)
 async def run_one(
@@ -560,6 +560,8 @@ def find_operating_point(summaries: list[LevelSummary], cfg: LoadTestConfig) -> 
 
 ### The offline fake server
 
+> **Deep dive.** A fake with a real capacity limit, so the load generator is tested offline; skip on a first reading.
+
 ```python
 # path: book/projects/examples/ch34/fake_server.py (excerpt; full file on disk)
 @dataclass
@@ -602,6 +604,8 @@ class _SSEStream(httpx.AsyncByteStream):
 ```
 
 ### Serving targets and the `aie_core` client
+
+> **Deep dive.** The capability envelope and client factory that put a self-hosted engine behind the book's gateway; skip on a first reading.
 
 ```python
 # path: book/projects/examples/ch34/local_target.py (excerpt; full file on disk)
@@ -664,13 +668,15 @@ def make_client(
 
 ## Code walkthrough
 
-**`kv_cache.py`** is the formula with guard rails. `ModelShape` holds the four architecture facts that matter and tells you where to find them in a model's configuration file. `max_concurrent_sequences` subtracts weights, a headroom fraction, and a fixed runtime allowance from device memory and divides by the per-sequence cache. The headroom default of 10 percent is a planning posture, not a measurement: it is memory you refuse to count on. The `tensor_parallel` argument pools memory across a device group, which is the only parallelism arithmetic an application engineer needs; the runtime allowance is per device, so it scales with the group. `tokens_that_fit` answers the inverse question an admission controller asks: given the free cache right now, what is the longest request I can admit?
+> **Deep dive.** The non-obvious decisions behind the listings, and a sweep read end to end; skip on a first reading.
 
-**`capacity.py`** separates what is exact from what is a sketch. The three Little's Law functions (`in_flight` above, `arrival_rate` and `mean_time_in_system` on disk) are exact identities and are safe to use on any measured system. `mm1_response_time` is labeled an idealization in its docstring, and it exists to produce the knee curve, not to predict your server. `replicas_needed` computes three independent constraints and reports which one binds, because the remedy differs: a decode-bound fleet wants more replicas or quantized weights, a prefill-bound fleet wants shorter prompts or prefix caching, a KV-bound fleet wants shorter contexts, cache quantization, or a GQA model. The `ReplicaProfile` docstring (on disk) insists that its token rates come from a load test at the operating point, not from a spec sheet, because a spec sheet's tokens per second is measured past the knee.
+**`kv_cache.py`.** The 10 percent headroom default is memory you refuse to count on, a planning posture rather than a measurement. `tokens_that_fit` answers the admission controller's question: given the free cache now, how long a request can I admit?
 
-**`loadtest.py`** does the one thing most ad hoc benchmarks skip: it streams. `run_one` requests `stream_options.include_usage` so the server's final chunk reports the real completion token count; content deltas are counted as a fallback because servers may coalesce tokens into one chunk. TTFT is measured to the first non-empty content delta, not the first response byte, because engines send role-only or empty deltas first. TPOT is the span between first and last content token divided by tokens minus one. Errors become result rows with `ok=False` rather than exceptions, so an overloaded server shows up as an error rate instead of aborting the sweep; cancellation is not caught, so Ctrl-C or an outer deadline stops it. `run_level` (on disk) runs a closed loop: `concurrency` workers drain a shared queue of jobs, each starting its next request when the previous one finishes. `sweep` (on disk) warms up and then runs one level after another; the client's connection pool is sized to the highest concurrency level, because a default pool of 100 would queue requests on the client and report the wait as server TTFT. `summarize` computes nearest-rank percentiles and goodput as requests that met both SLOs divided by wall time; `find_operating_point` applies the protocol's rule: highest concurrency with zero errors and both p95s under the SLO.
+**`capacity.py`.** The Little's Law functions are exact; `mm1_response_time` only draws the knee. `replicas_needed` reports which constraint binds because the remedies differ: decode-bound wants more replicas or quantized weights, prefill-bound wants shorter prompts or prefix caching, KV-bound wants shorter contexts, cache quantization, or a GQA model. Its token rates must come from a load test at the operating point; a spec sheet's tokens per second is measured past the knee.
 
-Against the fake server configured with a capacity of 8 (prefill 0.02 s, 5 ms per token, 32 or 64 output tokens, 32 requests per level, and SLOs scaled to the fake: 0.15 s TTFT and 1 s end to end), the sweep produces this table. The timings are fake and vary a little between runs; the shape is what you will see against real hardware, and `test_walkthrough_shape_has_a_knee_at_capacity` checks it:
+**`loadtest.py`.** TTFT is measured to the first non-empty content delta, not the first byte, because engines send role-only or empty deltas first. Errors become rows with `ok=False`, so overload shows up as an error rate instead of aborting the sweep. `sweep` (on disk) sizes the connection pool to the highest concurrency level; a default pool of 100 would queue requests on the client and report the wait as server TTFT.
+
+Against the fake server with a capacity of 8 (prefill 0.02 s, 5 ms per token, 32 or 64 output tokens, 32 requests per level, SLOs of 0.15 s TTFT and 1 s end to end), the sweep produces this table. Timings vary slightly between runs; the shape is what real hardware shows, and `test_walkthrough_shape_has_a_knee_at_capacity` checks it:
 
 ```
  conc    n  err  ttft p50  ttft p95  tpot p50  e2e p50  e2e p95   req/s    tok/s   slo%  goodput
@@ -682,65 +688,61 @@ Against the fake server configured with a capacity of 8 (prefill 0.02 s, 5 ms pe
    32   32    0     0.423     0.856    0.0059     0.61     1.20   22.78   1025.0   25.0     5.69
 ```
 
-Read it the way you will read a real one. TPOT is flat at every level: the GPU did not get slower. Throughput climbs to concurrency 8 and then levels off, because the fake decodes at most 8 sequences at once and the rest wait for a slot. TTFT is flat until capacity, then p95 jumps about twentyfold, and goodput collapses from 27.0 to 5.8 requests per second even though raw throughput barely moved. The operating point is 8. A benchmark that reported only the 1,162 tokens per second peak would have been accurate and would have hidden the collapse.
+Read it the way you will read a real one. TPOT is flat at every level: the GPU did not get slower. Throughput climbs to concurrency 8 and levels off, because the fake decodes at most 8 sequences at once. TTFT is flat until capacity, then p95 jumps about twentyfold, and goodput collapses from 27.0 to 5.8 requests per second while raw throughput barely moves. The operating point is 8. A benchmark reporting only the 1,162 tokens per second peak would have been accurate and would have hidden the collapse.
 
-**`fake_server.py`** implements the server-sent-events framing of an OpenAI-compatible endpoint with a per-token sleep so TTFT and E2E differ, a real capacity limit (at most `capacity` sequences decode at once; the rest wait for a slot) so TTFT grows and throughput levels off when more requests are active than the fake can batch, and a `fail_above` knob that returns HTTP 429 to exercise the error path. As an `httpx.MockTransport`, it lets the generator run its real HTTP and SSE parsing code with no sockets.
+**`fake_server.py`** runs as an `httpx.MockTransport`, so the generator exercises its real HTTP and SSE parsing with no sockets.
 
-**`local_target.py`** is the routing side of self-hosting. `ServingTarget` records what an endpoint can do; `check_fit` returns every problem rather than the first so the trace (Chapter 31) explains a reroute; `choose_target` (on disk) walks a preference list. `envelope_for` (on disk) computes the envelope from the `CompletionRequest` the application already built, using `aie_core`'s token counter, so routing needs no second representation of the request. `make_client` builds the book's `OpenAICompatibleClient` with the target's `base_url` and two settings that matter in production: `provider` becomes `engine:target`, so every gateway span and cost report says which deployment answered, and `supports_response_schema` mirrors the target, so `complete_structured` switches to prompt-and-repair on an engine without schema mode instead of sending a `response_format` it will reject. That is the entire integration: the same `CompletionRequest`, the same `ModelGateway`, the same tests. One test streams through a gateway into the fake server and checks the span's provider; another runs `complete_structured` against a mocked schema-less target and checks that no `response_format` was sent.
+**`local_target.py`.** `check_fit` returns every problem, not the first, so the trace (Chapter 31) explains a reroute. In `make_client`, `provider` becomes `engine:target`, so every span and cost report says which deployment answered, and `supports_response_schema` mirrors the target, so `complete_structured` falls back to prompt-and-repair instead of sending a `response_format` the engine will reject. Everything else is unchanged: same `CompletionRequest`, same `ModelGateway`.
 
 ### What changes when you route between hosted and local
 
-The transport does not change; the envelope does. When a request that ran on a hosted endpoint is routed to a self-hosted engine, check five things before you assume parity.
+> **Deep dive.** Five capability differences to check before assuming parity; skip on a first reading.
 
-**Tool support.** Tool calling on open models depends on the engine's parser for that model family's tool-call format and on the model having been trained for it. A target that reports `supports_tools=False` should receive requests with `tools=None`, and the application should fall back to a text-protocol tool format or route tool-using requests elsewhere. Test with the actual tool definitions from Chapter 16; argument formatting errors are common and specific to model and parser version.
+The transport does not change; the envelope does.
 
-**Schema support.** Constrained decoding for JSON schemas is widely available on self-hosted engines, often more strictly than hosted structured outputs, but the supported subset of JSON Schema varies (recursive schemas, `anyOf`, string formats). `complete_structured` in `aie_core` already falls back to prompt-and-repair when `response_schema` is unsupported; make sure the target's capability flag is accurate so it does.
+**Tool support.** Tool calling on open models depends on the engine's parser for that family's format and on the model's training. A target with `supports_tools=False` should get `tools=None` and a text-protocol fallback, or a route elsewhere. Test with your real tool definitions (Chapter 16).
 
-**Context length.** A self-hosted engine's maximum model length is a deployment knob chosen for concurrency, often far below the model's trained maximum and far below a hosted endpoint's limit. `check_fit` reserves a margin because tokenizers differ between what the application counted with `count_tokens` and what the engine counts. Requests that do not fit should be compacted (Chapter 5) or routed, never silently truncated.
+**Schema support.** The supported subset of JSON Schema varies (recursive schemas, `anyOf`, string formats); keep the target's capability flag accurate.
 
-**Log-probabilities.** Many self-hosted engines return token log-probabilities on request, which hosted endpoints may restrict. They are the cheapest confidence signal a classifier cascade has (Chapter 33). The neutral `CompletionRequest` has no field for them, so build the target's client with `extra_body={"logprobs": True}` and read them from `completion.raw`; `extra_body` never overrides a field the adapter sets. Treat the numbers as engine- and quantization-specific: recalibrate the escalation threshold after any engine or quantization change.
+**Context length.** The engine's limit is a concurrency knob, often far below the model's trained maximum. `check_fit` reserves a margin because the application's and the engine's token counts can disagree. Requests that do not fit are compacted (Chapter 5) or routed, never silently truncated.
 
-**Model identity and behavior.** The model name the server expects is whatever the operator registered; the behavior is whatever quantization and engine version are deployed. `make_client` already puts the engine and target into the span's `provider`; Production considerations lists the remaining trace fields.
+**Log-probabilities.** Many self-hosted engines return them, the cheapest confidence signal for a classifier cascade (Chapter 33). Request them with `extra_body={"logprobs": True}`, read them from `completion.raw`, and recalibrate thresholds after any engine or quantization change.
+
+**Model identity.** The served name tells you little; behavior follows the deployed quantization and engine version, so record both in traces.
 
 ## Production considerations
 
-**Latency.** Set two SLOs, TTFT and completion, and alert on p95 of each per replica. Alert on queue depth and KV-cache utilization as leading indicators, because they rise before the latency percentiles do. Autoscaling on GPU utilization alone reacts too late: a GPU at 70 percent utilization can already be past the knee if its cache is full. Scale on queue depth, admission rejections, and SLO violations, and add replicas before the knee, not at it.
+This section gives the reasons behind the Before you ship checklist; self-explanatory items appear only there.
 
-**Cost model.** For self-hosting, cost per useful token is `(GPU hours × hourly cost + operations) / tokens served within SLO`. The denominator makes or breaks the case. Illustrative arithmetic: a GPU at 3.00 USD per hour running the 8B model at its operating point of 1,500 output tokens per second could produce 5.4 million output tokens per hour, about 0.55 USD per million if saturated around the clock. Real traffic has a daily cycle; at 35 percent average utilization the same GPU produces 1.9 million useful tokens per hour and the cost becomes about 1.60 USD per million, before engineer time, the failover replica that is idle by design, and load tests. Compare that to the per-token price you actually pay for the same traffic with caching discounts applied. The comparison favors self-hosting for sustained, high-utilization workloads or when a non-cost factor decides. Chapter 30 owns the full cost model; feed it goodput from your load test, not peak throughput.
+**Latency and autoscaling.** Queue depth and KV-cache utilization are leading indicators: they rise before the latency percentiles do. Autoscaling on GPU utilization alone reacts too late, because a GPU at 70 percent can already be past the knee if its cache is full. Scale on queue depth, admission rejections, and SLO violations.
 
-**Health checks and rolling upgrades.** A replica's readiness check must do a real tiny completion, not just return 200 from the HTTP server: an engine can accept connections while its weights are still loading or after its GPU context has died. During a rolling upgrade, drain a replica by stopping admission and waiting for in-flight sequences to finish or hit a drain timeout; a hard kill discards every active user's generation. Keep at least one replica of headroom permanently so an upgrade never drops capacity below the operating point.
+**Cost model.** Self-hosted cost per useful token is `(GPU hours × hourly cost + operations) / tokens served within SLO`, and the denominator makes or breaks the case. Illustrative arithmetic: a GPU at 3.00 USD per hour serving the 8B model at 1,500 output tokens per second produces 5.4 million tokens per hour, about 0.55 USD per million if saturated around the clock. At a realistic 35 percent average utilization it produces 1.9 million useful tokens per hour, about 1.60 USD per million, before engineer time, the idle failover replica, and load tests. Compare that to the per-token price you actually pay, caching discounts included. Chapter 30 owns the full cost model; feed it load-tested goodput.
 
-**Cancellation.** When a client disconnects or an agent loop abandons a step, the engine must notice and free that sequence's KV blocks. The zombie-generation failure mode below gives the test; some gateway configurations keep the upstream connection open after the client has gone, and the GPU keeps generating for nobody. Chapter 29 covers timeouts and cancellation plumbing at the gateway.
+**Upgrades and cancellation.** Drain a replica by stopping admission and waiting for in-flight sequences up to a timeout; a hard kill discards every active user's generation. Readiness and cancellation each have a failure mode below (replica flapping, zombie generations); Chapter 29 covers cancellation plumbing at the gateway.
 
-**Model version in traces.** Every span for a self-hosted call should carry the model name, weights or quantization identifier, adapter name and version when one is used, engine name and version, and the replica. Outputs change when any of these change, and without the fields in the trace you will debug a prompt for a day before discovering the operator upgraded the engine.
+**Releases and traces.** Treat a change of quantization, engine version, kernel configuration, speculation, or even maximum batch size as a model release: some settings alter outputs at temperature zero. Without engine and quantization identifiers in every span, you will debug a prompt for a day before discovering the operator upgraded the engine.
 
-**Quality suite after every engine or quantization change.** Treat a change of quantization, engine version, kernel configuration, speculative decoding setting, or even maximum batch size as a model release. Rerun the golden-set evaluation and the slice reports from Chapters 24 and 25 before promoting it. Some settings change sampling numerics enough to alter outputs at temperature zero.
-
-**Security.** The engine is now inside your trust boundary, which removes a third party and adds responsibilities: authenticate calls to the engine even on an internal network, because an OpenAI-compatible server will happily serve anyone; isolate tenants at the gateway, since the engine does not know what a tenant is; review prefix-cache behavior for cross-tenant timing leakage; and keep model weights, which may be licensed, out of public buckets.
+**Security.** An OpenAI-compatible server will serve anyone, so authenticate calls even on an internal network. The engine does not know what a tenant is, so isolate tenants at the gateway, and keep licensed weights out of public buckets.
 
 ## Common mistakes
 
-**Planning from peak tokens per second.** Dividing an engine's advertised throughput by tokens per request gives a capacity you can never run at. Use goodput at the operating point, then add headroom.
+Each is explained above; the list is for review.
 
-**Benchmarking with uniform prompts.** Identical 128-token prompts hide the queueing and KV pressure that long-tail requests create. Sample from production traces.
-
-**Measuring TTFT without streaming.** A non-streaming benchmark reports only E2E, so you cannot see the metric that saturates first.
-
-**Treating "the model fits" as "the users fit."** Weight memory is the fixed cost; the KV cache budget is what determines concurrency, and it depends on your context lengths.
-
-**Sizing a mixture-of-experts model by its active parameters.** The active count predicts single-stream speed; the total count decides whether the weights fit and how much memory is left for cache.
-
-**Self-hosting a spiky workload.** A GPU busy two hours a day costs more per useful token than the API; do the cost arithmetic before buying hardware.
-
-**Forgetting the failover replica.** N replicas sized exactly to peak become N minus one during every rolling upgrade and hardware fault.
+- **Planning from peak tokens per second** instead of goodput at the operating point plus headroom.
+- **Benchmarking with uniform prompts**, which hide long-tail queueing and KV pressure.
+- **Measuring without streaming**, which hides TTFT, the metric that saturates first.
+- **Treating "the model fits" as "the users fit."** The KV budget decides concurrency.
+- **Sizing an MoE model by its active parameters.** Total parameters decide whether it fits.
+- **Self-hosting a spiky workload.** A GPU busy two hours a day costs more per useful token than the API.
+- **Forgetting the failover replica.** N replicas sized exactly to peak become N minus one during every upgrade.
 
 ## Failure modes
 
-Each failure below names what breaks, how it looks in telemetry, and how to test for it before production does.
+Each failure names what breaks, its telemetry, and a test.
 
-**KV exhaustion under long contexts.** A burst of long-context requests fills the cache; new requests queue or are preempted mid-generation, and TTFT climbs while TPOT stays flat. Telemetry: KV utilization near 100 percent, queue depth rising, preemption or recompute counters incrementing on the engine. Test: run the load generator with a prompt mix whose p95 is your real p95, not your mean, and confirm admission rejects fast rather than queueing without bound.
+**KV exhaustion under long contexts.** A burst of long-context requests fills the cache; new requests queue or running ones are preempted, and TTFT climbs while TPOT stays flat. Telemetry: KV utilization near 100 percent, rising queue depth, engine preemption or recompute counters climbing. Test: load-test with a prompt mix whose p95 is your real p95, and confirm admission rejects fast rather than queueing without bound.
 
-**Head-of-line blocking by a long prefill.** One 30k-token prompt enters a busy batch and every active user's next token is delayed by its prefill. Telemetry: periodic TPOT spikes correlated with admissions of long prompts. Test: mix a few very long prompts into a stream of short ones and plot per-request TPOT over time; enable chunked prefill or a prompt-length cap if the spikes breach the SLO.
+**Head-of-line blocking by a long prefill.** One 30k-token prompt enters a busy batch and delays every active user's next token. Telemetry: periodic TPOT spikes aligned with long-prompt admissions. Test: mix a few very long prompts into short traffic and plot per-request TPOT; enable chunked prefill or a prompt-length cap if spikes breach the SLO.
 
 **Quantization regression on one task family.** Aggregate quality looks unchanged but structured-output validity drops or tool arguments acquire formatting errors. Telemetry: repair-loop rate in `complete_structured`, tool-call validation failures, sliced evaluation scores. Test: the release suite with slices, run before promotion.
 
@@ -748,7 +750,7 @@ Each failure below names what breaks, how it looks in telemetry, and how to test
 
 **Zombie generations after client disconnect.** Abandoned streams keep decoding; KV utilization stays high with no corresponding client connections. Telemetry: active sequences on the engine exceed open connections at the gateway. Test: open streams, close them early, watch the engine's active-sequence metric fall within a bounded time.
 
-**Replica flapping during rolling upgrade.** Readiness passes before weights finish loading and the load balancer sends traffic to a replica that times out every request. Telemetry: error spikes aligned with deployment events, one replica with zero completions. Test: a readiness check that performs a real completion; staged rollout, one replica first.
+**Replica flapping during rolling upgrade.** Readiness passes while weights are still loading (or after the GPU context has died), and the load balancer sends traffic to a replica that times out every request. Telemetry: error spikes aligned with deployment events, one replica with zero completions. Test: a readiness check that performs a real completion; staged rollout, one replica first.
 
 **Speculative decoding that slows the system.** A draft with low acceptance for your workload adds cost at every step and TPOT worsens at high concurrency. Telemetry: acceptance rate below break-even for the draft length; TPOT regression versus baseline. Test: the same sweep with speculation on and off, compared at the operating point.
 
@@ -756,28 +758,24 @@ Each failure below names what breaks, how it looks in telemetry, and how to test
 
 ## Tradeoffs
 
-Every lever in this chapter trades one resource for another, and the right setting is workload-specific.
+> **Deep dive.** The levers side by side, with the settings this chapter recommends; skip on a first reading.
 
-- **Context length versus concurrency.** Longer maximum contexts let single requests claim cache that many users could have shared: a 128k setting admits rare requests whose cache crowds out dozens of ordinary ones, and worst-case planning has to assume them. Set the engine's limit to your p99 plus margin, not to the model's trained maximum, and route the rare long request to a pool configured for it.
-- **Batch size versus TPOT.** Larger batches raise throughput almost linearly during decode and raise per-token latency slightly; past the cache budget they raise TTFT sharply. Tune the maximum batched tokens against the SLO.
-- **Quantization versus quality.** Fewer bits buy concurrency and bandwidth; the price is task-specific and only visible in a sliced evaluation.
-- **Speculation versus utilization.** Speculative decoding helps most when the GPU is underutilized (low concurrency, interactive use) and least when it is already full.
-- **Prefix caching versus memory.** A warm prefix cache reduces prefill work but occupies blocks that active sequences need; under heavy load it may be evicted anyway.
-- **Headroom versus cost.** Every percentage point of headroom is idle hardware; every point removed moves you toward the knee. Sixty to seventy percent of measured goodput capacity is a common operating posture for interactive services, and batch pools can run hotter.
-- **Hosted versus managed open-weight versus self-hosted.** Each step toward self-hosting buys control, residency, and lower cost at high utilization, and costs operational burden, capacity risk, and slower access to new models. The managed open-weight middle buys model choice without the GPUs.
-- **Engine choice.** Peak performance and hardware specialization against portability, model coverage, and operational familiarity. Benchmark, pin, and plan to re-benchmark on upgrade.
+The levers not settled elsewhere in the chapter:
+
+- **Context length versus concurrency.** A 128k limit admits rare requests whose cache crowds out dozens of ordinary ones, and worst-case planning must assume them. Set the engine's limit to your p99 plus margin and route the rare long request to a pool configured for it.
+- **Batch size versus TPOT.** Larger batches raise decode throughput almost linearly and TPOT slightly; past the cache budget they raise TTFT sharply. Tune maximum batched tokens against the SLO.
+- **Headroom versus cost.** Every point of headroom is idle hardware; every point removed moves you toward the knee. Sixty to seventy percent of measured goodput capacity is a common posture for interactive services; batch pools can run hotter.
+- **Engine choice.** Peak performance and hardware specialization against portability and model coverage. Benchmark, pin, and re-benchmark on upgrade.
 
 ## Evaluation and testing
 
-Three kinds of tests belong to a serving layer, and they run at different times.
+> **Deep dive.** What the test file pins and how real-hardware runs differ; skip on a first reading.
 
-**Unit tests of the arithmetic**, in `test_ch34.py`, pin the formulas to known values: 128 KiB per token for the illustrative shape, exactly 1 GiB at 8k and 4 GiB at 32k, a fourfold concurrency drop between them, and the replica estimate's binding constraint flipping from decode to KV when contexts and request durations lengthen. These tests are cheap and catch the unit errors (GB versus GiB, bytes versus elements, query heads versus KV heads) that produce wildly wrong plans.
+**Unit tests of the arithmetic** in `test_ch34.py` pin the formulas to the chapter's numbers. They catch the unit errors (GB versus GiB, bytes versus elements, query heads versus KV heads) that produce wildly wrong plans.
 
-**Offline tests of the load generator** run the real HTTP and SSE code against the in-process fake and assert the shape the protocol predicts: TTFT strictly below E2E, TPOT close to the configured per-token delay, p95 TTFT rising sharply once concurrency exceeds the fake's capacity, errors counted rather than raised, and the operating-point finder selecting the last level inside capacity. `test_walkthrough_shape_has_a_knee_at_capacity` runs the walkthrough's setup and checks its shape (a real capacity limit, TTFT rising sharply above it, throughput leveling off, flat TPOT, an operating point of 8); `test_cancelling_a_sweep_stops_it` checks that an outer deadline stops a sweep instead of being swallowed. If you extend the generator (for example to record engine metrics between levels), extend the fake first so the behavior is tested before it meets a GPU.
+**Offline tests** run the real HTTP and SSE code against the fake and assert the shape the protocol predicts (flat TPOT, p95 TTFT rising past capacity, errors counted, an operating point of 8), plus the gateway integration: the span's provider, and no `response_format` sent to a schema-less target. If you extend the generator, extend the fake first.
 
-**Benchmark runs against real hardware** are evaluations, not tests, and should be stored as artifacts with the full configuration record from the protocol section. Compare runs by goodput at the operating point under a fixed SLO. Pair every performance run with the quality suite from Chapters 24 and 25 on the same deployment; a performance gain that comes with a quality regression is a failed run. Finally, record the operating point per replica in the capacity model and re-measure whenever the model, engine, quantization, or prompt distribution changes materially; the capacity envelope is empirical and it expires.
-
-The full test file is on disk at `book/projects/examples/ch34/test_ch34.py`. The `aie_core` tests run offline against the fake server and a mock transport; the `integration` marker remains registered for tests you add against a real engine, which are skipped unless `--run-integration` is passed.
+**Benchmark runs against real hardware** are evaluations, not tests: store each with its configuration record and pair it with the quality suite on the same deployment, since a speedup with a quality regression is a failed run. Re-measure whenever the model, engine, quantization, or prompt distribution changes; the capacity envelope expires. Tests you add against a real engine take the `integration` marker and are skipped unless `--run-integration` is passed.
 
 ## Before you ship
 

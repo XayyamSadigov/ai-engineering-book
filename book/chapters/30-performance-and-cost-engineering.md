@@ -1,6 +1,16 @@
 # Chapter 30 — Performance and Cost Engineering
 
-After this chapter you will be able to take apart where the time in an AI request goes and set a latency budget for each stage that adds up to the service-level objective. You will be able to say which tokens you are paying for and why, and design caches whose keys cannot leak data across tenants or serve stale answers. You will build a cost model whose unit is the successful task rather than the model call, and enforce per-tenant spend limits that degrade service gracefully before they block it. The code lives in `book/projects/examples/ch30/`: a latency budget and span-based tracker, four scoped cache layers (embedding, retrieval, response, semantic) plus a generic TTL cache and a key linter; a `CostModel` with scenario comparison, monthly projection and chargeback from trace files, a spend guard that wraps the model gateway, and an asyncio fan-out helper with prefetching and micro-batching. Everything builds on `aie_core` (Chapter 3) and runs offline.
+An AI request costs and takes time in proportion to its tokens, its calls and its failures, so performance and cost are designed in, not tuned afterwards. This chapter shows where the time and money in a request go and gives you budgets, scoped caches, a cost model and per-tenant spend controls to keep both within target.
+
+**You will be able to:**
+- Break a request's latency into stages and set a latency budget whose stages add up to the TTFT and completion objectives.
+- Design cache keys for six layers (prompt prefix, embedding, retrieval, tool result, response, semantic) that cannot leak across tenants or serve stale answers, and lint them in CI.
+- Calculate cost per successful task, including retries, failures, human review, amortized infrastructure and the break-even point of provider prompt caching.
+- Enforce per-tenant spend limits with reservations, deduplicated alerts and a degrade mode, and attribute every span's spend to a tenant and feature.
+- Run independent steps in parallel under a deadline, and choose between streaming, micro-batching and batch APIs.
+- Apply optimizations in an order that takes the cheap, safe, large wins first.
+
+**Prerequisites:** Chapter 3 (the `aie_core` gateway, `Usage`, `PricingTable`), Chapter 5 (prompt layout and prefix caching practice), Chapter 7 (routing and cascades). | **Code:** `book/projects/examples/ch30/` (run: `.venv/bin/python -m pytest book/projects/examples/ch30 -q` from the book root) | **Builds:** latency budgets and tracker, scoped caches with a key linter, `CostModel` and chargeback, `SpendGuard`, and a deadline-bound fan-out helper.
 
 ## Why this matters
 
@@ -61,6 +71,8 @@ Enforce the budget twice. At run time, each stage gets `min(its budget, time rem
 
 Tokens are the unit both latency and cost are made of, so budgeting them is the most direct control you have. Input tokens drive prefill latency and input cost. Output tokens drive decode latency and output cost, and output tokens are typically priced several times higher than input tokens (the illustrative prices in this book use a 4:1 ratio).
 
+Reasoning models add hidden "thinking" tokens before the visible answer. Chapter 3 covers how they are billed and reported: as output, inside `max_tokens`. For budgeting, two consequences matter. They are decode time spent before the first visible token, so they land in TTFT, not after it. And their number varies by question, which widens the cost and latency distributions rather than shifting their means, so budget against p95, not the average. Treat the reasoning-effort setting some providers expose as a lever like `max_tokens`, set per task by evaluation (Chapter 7).
+
 There are three levels of token budget. Per section within one prompt: system instructions, tool definitions, history, evidence, and an output reserve each get a cap, and the context builder of Chapter 5 enforces it so a long document cannot silently crowd out the instructions. Per request: `max_tokens` caps output, and the prompt asks for an answer format sized to the need (three sentences and citations, not an essay). Per task: an agent or chain making several calls gets a cumulative cap, because per-request limits do not stop a loop of forty modest calls. `TaskTokenBudget` in this chapter's code charges each step's usage and refuses a step the remaining budget cannot cover, so the loop stops with a partial result rather than an overrun.
 
 The fleet arithmetic is what makes token discipline a business concern. Northwind Assist answers about 6,000 questions a day (Chapter 35, Case 1). One thousand extra input tokens per answer is 6 million tokens a day, 180 million a month, or about 360 USD a month at the illustrative input price, for a change that might look like "add two more chunks". At a busier 3 requests per second around the clock (259,200 requests a day), the same thousand tokens is 259 million tokens a day, about 520 USD a day at the same illustrative price. Every per-request choice is multiplied by volume; make the multiplication explicit before the change ships.
@@ -84,9 +96,15 @@ An AI request path has six cacheable layers, and they differ sharply in value an
 
 **Prompt prefix caching** is the provider's or engine's reuse of prefill for a prefix it has recently seen. Your code does not manage it; your prompt layout earns it. Stable content goes first and byte-identical: system prompt, tool definitions, shared reference material; then tenant context; then the volatile question and fresh evidence (Chapters 5 and 34). Measure it with `Usage.cached_input_tokens`, which the gateway records on every span.
 
-The economics depend on the provider's terms. Some charge a premium to write a prefix into the cache and a steep discount to read it; with an illustrative write price of 1.25 times the input price and a read price of 0.1 times, caching pays off from the second request that reuses the prefix within the cache's lifetime: two requests pay 1.25 + 0.1 = 1.35 times the prefix's input price instead of 2. A prefix that is reused rarely, or that expires between requests on a low-traffic tenant, costs more with caching than without. Do not distort the instruction hierarchy to chase hits: if a constraint must sit near the end of the prompt to be followed, keep it there.
+The economics depend on the provider's terms, and this is the arithmetic Chapter 5 defers to here. Write the prefix's normal input price as 1. Some providers charge a write multiplier `w` the first time a prefix enters the cache and a read multiplier `r` on every later hit within its lifetime (the TTL); providers that cache implicitly have `w = 1`, so any hit is pure saving. With illustrative values `w = 1.25` and `r = 0.1`:
 
-**Embedding caching** is the safest layer and saves the most during ingestion. A vector depends on more than model name and text: the model version, output dimensions, any instruction prefix (some models expect "query:" before queries) and the text preparation all change it. `aie_core.CachedEmbeddings` already keys on a fingerprint of the embedding space (provider, model, dimensions, instruction, text-preparation version) plus the raw text (Chapter 3). Following Chapter 8's `NamespacedStore`, this chapter's `EmbeddingCache` adds text normalization on top of the same space fingerprint, so "Refund  policy" and "refund policy" share an entry and a space change simply stops old entries matching.
+- **Per prefix.** One write followed by `n` reads costs `w + n × r` instead of `1 + n`. Caching wins when `n > (w − 1) / (1 − r)`, here 0.28, so a single reuse pays: two requests cost 1.25 + 0.1 = 1.35 instead of 2. A provider tier with a longer TTL and a higher write premium, say `w = 2`, needs two reuses.
+- **Per request, from traffic.** Whether the next request finds the prefix depends on how often that exact prefix arrives. If it arrives at rate λ and entries live for T after their last use, the chance a request finds a live entry is about `p = 1 − e^(−λT)` for random arrivals. The expected prefix cost per request is `(1 − p) × w + p × r`, which beats 1 when `p > (w − 1) / (w − r)`, here about 0.22, or λT above about 0.25. With a 5-minute TTL, a prefix seen once every 20 minutes is the break-even; once a minute (λT = 5, p ≈ 0.99) it costs about 0.11, an 89 percent saving on the prefix; once an hour (p ≈ 0.08) it costs about 1.16, more than not caching at all.
+- **On the bill.** Saving = prefix tokens × input price × (1 − expected prefix cost per request). The prefix is usually a minority of the input, so the bill moves less than the cache ratio suggests. In the ladder below, 800 cached tokens out of 4,500 save 12 percent per success. That figure assumes every request reads the prefix with no write premium; at a 95 percent hit rate with `w = 1.25` the saving is about 6 percent smaller.
+
+Two design rules follow. Every distinct prefix divides the traffic, so one system prompt per tenant or per experiment arm can push low-traffic prefixes below break-even (Chapter 5); a feature whose prefixes sit below it should leave explicit caching off. And measure `p` per prefix, as the share of requests whose `cached_input_tokens` covers the prefix, rather than assuming it. Do not distort the instruction hierarchy to chase hits: if a constraint must sit near the end of the prompt to be followed, keep it there.
+
+**Embedding caching** is the safest layer and saves the most during ingestion. A vector depends on more than model name and text: the model version, output dimensions, any instruction prefix (some models expect "query:" before queries) and the text preparation all change it. `aie_core.CachedEmbeddings` already keys on a fingerprint of the embedding space (provider, model, dimensions, instruction, text-preparation version) plus the raw text; Chapter 8 explains the fingerprint. Following Chapter 8's `NamespacedStore`, this chapter's `EmbeddingCache` adds text normalization on top of the same space fingerprint, so "Refund  policy" and "refund policy" share an entry and a space change simply stops old entries matching.
 
 **Retrieval caching** saves the most in interactive chat, where repeated questions run the same search and rerank. Cache evidence ids, not text, so a document deleted or re-permissioned since caching is checked again at hydration. The key carries the tenant and the ACL scope (a hash of the caller's sorted groups), so employees with different groups never share an entry, and the index version, bumped on every reindex, so a reindex retires all old entries without a scan.
 
@@ -156,7 +174,9 @@ v0 naive                                0.02462      0.02863      0%       5154
 4 + route 60% to small model            0.00484      0.00560    -80%       1008
 ```
 
-The monthly column is cost per success times 6,000 questions a day for 30 days. The naive version sends 9,000 input tokens (twenty chunks and the full history) and lets answers run to 600 tokens. Trimming to the Chapter 35 budget of 4,500 input and 300 output tokens, and adding a reranker so eight good chunks replace twenty mediocre ones, halves the cost even though the reranker adds a fee. The success rate also rises slightly because there are fewer distractors. Caching the 800-token stable prefix saves another 12 percent of what remained (6 points against v0). A semantic cache with an 8 percent hit rate saves less than the prefix cache did, with far more correctness risk. Routing easy questions to a small model then halves what remains, because its success rate on those questions holds up in evaluation. The order matters: had the team started with the semantic cache, it would have taken on the riskiest layer for an 8 percent saving while the 51 percent from trimming the prompt and capping the output went unclaimed.
+The monthly column is cost per success times 6,000 questions a day for 30 days. The naive version sends 9,000 input tokens (twenty chunks and the full history) and lets answers run to 600 tokens. Trimming to the Chapter 35 budget of 4,500 input and 300 output tokens, and adding a reranker so eight good chunks replace twenty mediocre ones, halves the cost even though the reranker adds a fee. The success rate also rises slightly because there are fewer distractors. Caching the 800-token stable prefix saves another 12 percent of what remained (6 points against v0). A semantic cache with an 8 percent hit rate saves less than the prefix cache did, with far more correctness risk. Routing easy questions to a small model then halves what remains, because its success rate on those questions holds up in evaluation.
+
+Read the ladder as the saving each step adds on top of the previous ones, not as the recommended sequence. The optimization order at the end of this section puts model choice before trimming, and that is about picking the smallest model that meets the bar for each step, a one-time decision made by evaluation. Step 4 here is a different thing: per-request routing, which needs a router, an evaluation per traffic slice and a measured misroute cost (Chapter 7), so it comes once the cheaper steps are in place. Each step's percentage also depends on what came before, because each one shrinks the base the next one acts on. What the ladder does show is the cost of a wrong order: had the team started with the semantic cache, it would have taken on the riskiest layer for an 8 percent saving while the 51 percent from trimming the prompt and capping the output went unclaimed.
 
 ### Retrieval, embedding, and index costs
 
@@ -186,7 +206,7 @@ Enforcement must survive concurrency: if fifty requests each check "is there bud
 
 **Alerts.** Fire at fixed fractions of the limit (50, 80 and 100 percent), once per threshold per tenant per day, and outside any lock so a slow pager does not stall requests. An alert that fires on every request after the limit is crossed gets muted, and then it is useless.
 
-**Chargeback.** Aggregate spend per tenant from traces: model spend from `llm.complete` spans, other spend (embeddings, reranking, tool fees) from spans that carry `cost_usd`, and successes from task spans, so each tenant sees its cost per successful task. Cache hits need one rule. A hit was not billed, but the price of the call it replaced is the cache's value. The current `aie_core` gateway records a hit with `cost_usd = 0` and the replaced price as `avoided_cost_usd`; older versions put the original price in `cost_usd`, which would bill every hit twice if summed naively. `chargeback` reads both shapes into avoided spend, never into spend, and reports it next to actual spend. Shared fixed costs such as the platform, idle failover capacity and the vector database are allocated by each tenant's share of direct spend, or by another rule finance agrees to; write the rule down, so that when a tenant disputes its share, the allocation can be checked against it.
+**Chargeback.** Aggregate spend per tenant from traces: model spend from `llm.complete` spans, other spend (embeddings, reranking, tool fees) from spans that carry `cost_usd`, and successes from task spans, so each tenant sees its cost per successful task. Cache hits need one rule. A hit was not billed, but the price of the call it replaced is the cache's value. The `aie_core` gateway records a hit with `cost_usd = 0` and the replaced price as `avoided_cost_usd`, and `chargeback` adds that to avoided spend, never to spend, and reports it next to actual spend. Shared fixed costs such as the platform, idle failover capacity and the vector database are allocated by each tenant's share of direct spend, or by another rule finance agrees to; write the rule down, so that when a tenant disputes its share, the allocation can be checked against it.
 
 ### Back-of-envelope estimates
 
@@ -205,7 +225,7 @@ One serving sanity check is worth memorizing: 20 requests per second at 4 second
 Applied in the wrong order, optimizations waste weeks and add risk for little gain. This order puts the cheap, safe, large wins first:
 
 1. **Measure first.** Per-stage latency distributions, tokens per call by prompt section, calls per task, success rate, and cost per successful task, broken down by tenant and feature. Without these, every later step is a guess. Evaluate before optimizing, so you can see when an optimization costs quality.
-2. **Right-size the model.** Choose the smallest model that meets the quality bar per step, by evaluation (Chapter 7). This is usually the largest single factor in the price.
+2. **Right-size the model.** Choose the smallest model that meets the quality bar per step, by evaluation (Chapter 7). This is usually the largest single factor in the price. Per-request routing between models is a later refinement, once a router can be evaluated against the trimmed workload.
 3. **Trim context and output.** Enforce token budgets per section, rerank to fewer and better chunks, compact history, cap `max_tokens`, and ask for concise formats. This cuts cost and latency together and often improves quality.
 4. **Cache.** In order of safety: prompt-prefix layout, embeddings, retrieval, read-only tool results, exact responses where outputs are deterministic, and semantic caching last, only where traffic is repetitive and the false-hit rate is measured.
 5. **Parallelize, stream and batch.** Take independent steps off the critical path, stream user-visible output, micro-batch interactive embeddings, and move offline work to batch APIs.
@@ -805,16 +825,7 @@ Chargeback reads the dicts `JsonlTracer` writes. Note the cache-hit branch.
 ```python
 # path: book/projects/examples/ch30/cost.py  (excerpt; full file on disk)
 def chargeback(records: Iterable[Mapping[str, Any]], pricing: PricingTable | None = None, *, llm_span: str = "llm.complete", task_span: str = "task") -> ChargebackReport:
-    """Aggregate spend per tenant from span records (the dicts `JsonlTracer` writes).
-
-    - `llm.complete` spans carry tokens and `cost_usd` (from the gateway). A cache hit is avoided
-      spend, not spend: the current gateway records `cost_usd=0` and `avoided_cost_usd=<price>`;
-      spans from older versions carried the original price in `cost_usd`. Both shapes land in
-      `avoided_usd`.
-    - Any other span with `cost_usd` (embedding, rerank, tool) counts toward `other_usd`.
-    - `task` spans with a boolean `success` give the denominator for cost per successful task.
-    - Spans without a `tenant` land in `_unattributed`; watch that share, it should be near zero.
-    """
+    # ...
     tenants: dict[str, TenantUsage] = {}
 
     def usage_for(tenant: str) -> TenantUsage:
@@ -1090,13 +1101,13 @@ class Prefetcher:
 
 **Attribution.** `AttributingTracer.export` uses `setdefault`, so a span's own attribute wins over a bound one. Export runs when a span closes, so a span must close inside the `bind` block; a test checks that the gateway's own `llm.complete` span picks up the tenant.
 
-**Budgets and deadlines.** An infeasible `LatencyBudget` cannot be constructed. `Deadline.timeout_for` returns seconds, ready for `CompletionRequest.timeout_s` or `asyncio.wait_for`, and returns zero once time is gone so callers fail fast. `LatencyReport` carries both the wall-clock end-to-end p95 and the sum of stage p95s: when they are close, the path is serial and every stage's tail reaches the user. `worst_stage` ignores the synthetic `end_to_end` and `ttft` violations, which say that something was slow but not what.
+**Budgets and deadlines.** An infeasible `LatencyBudget` cannot be constructed. This chapter's `Deadline` is deliberately small: it turns a budget into per-stage timeouts inside one process. Chapter 29's `reliability.Deadline` is the production one, with a header to carry the remaining time across services, child deadlines and cancellation; a service using both creates the Chapter 29 deadline at the edge and asks this budget only for each stage's share. `Deadline.timeout_for` returns seconds, ready for `CompletionRequest.timeout_s` or `asyncio.wait_for`, and returns zero once time is gone so callers fail fast. `LatencyReport` carries both the wall-clock end-to-end p95 and the sum of stage p95s: when they are close, the path is serial and every stage's tail reaches the user. `worst_stage` ignores the synthetic `end_to_end` and `ttft` violations, which say that something was slow but not what.
 
 **Keys.** `make_key` hashes a sorted JSON object under a namespace, so component order never changes a key and a tenant prefix can be purged. `Scope.acl_scope` hashes sorted groups, so group order does not matter and group names stay out of keys. The embedding cache's `space` fingerprint changes with model version, dimensions, prefix or text preparation; the tests change each and assert a miss.
 
 **Semantic cache.** `lookup` filters by eligibility before comparing similarity, and also tracks the best similarity among ineligible entries, a measure of what the scope check prevented. Linear scan is fine for thousands of entries; beyond that, keep the vectors in your vector store with tenant and scope as filter columns (Chapter 9).
 
-**Cost and chargeback.** `mix` sums weighted spend and weighted successes separately before dividing. `what_if` makes "what do 1,000 more tokens cost" a one-liner. `chargeback` counts `cache_hit` spans as avoided cost, from `avoided_cost_usd` or, for legacy spans, from `cost_usd`, and puts tenantless spans in `_unattributed`; a test runs it without a pricing table to prove the hit's value comes from the span itself.
+**Cost and chargeback.** `mix` sums weighted spend and weighted successes separately before dividing. `what_if` makes "what do 1,000 more tokens cost" a one-liner. `chargeback` counts `cache_hit` spans as avoided cost and puts tenantless spans in `_unattributed`; a test runs it without a pricing table to prove the hit's value comes from the span itself.
 
 **Guard and fan-out.** `reserve` computes exposure as committed plus open reservations, so five concurrent 0.3 USD requests against a 1 USD limit yield three allows and two blocks. `commit` charges the reservation's day, so a request straddling midnight lands where it started. A stream stopped after output started commits the usage seen or, failing that, the reserved estimate: an unknown cost is overcounted rather than lost. A stream that fails before any output (a 429, say) releases its reservation, so an outage does not leave phantom spend that blocks the tenant for the rest of the day. `fan_out` stops waiting as soon as a required step fails, cancels and awaits the rest before raising `RequiredStepFailed`, and does the same when the caller itself is cancelled (a client disconnect), so nothing keeps running, or billing, after the request ends.
 
@@ -1113,8 +1124,6 @@ class Prefetcher:
 ## Common mistakes
 
 - **Caching before trimming.** Building a semantic cache for a workload whose largest cost is 9,000-token prompts and uncapped answers. Trim first; the cache then has less to save and less risk to carry.
-- **Keys without scope.** A retrieval or response cache keyed on the query alone. It works in every single-tenant test and leaks in production.
-- **Volatile prefixes.** A timestamp, a request id or the user's name at the top of the system prompt, which defeats provider prefix caching for every request.
 - **Cost per call as the metric.** Choosing a model because its calls are cheaper while its success rate, retries or review rate make each success more expensive.
 - **Unbounded output.** No `max_tokens` and no answer-format instruction, so output length, the dominant latency term, is whatever the model feels like.
 - **Counting cache hits as spend.** Summing `cost_usd` over all gateway spans, including hits that were never billed.
@@ -1123,13 +1132,13 @@ class Prefetcher:
 
 ## Failure modes
 
-**Cross-scope cache leak.** An HR-only answer appears for a non-HR user. In telemetry: a cache hit span whose request's groups do not cover the cited document's ACL. Root cause: a key without ACL scope, or ACL enforced outside the prompt while the response cache keyed only on the prompt. Test: the linter and a two-scope miss test.
+**Cross-scope cache leak.** An HR-only answer appears for a non-HR user. In telemetry: a cache hit span whose request's groups do not cover the cited document's ACL. Root cause: a key without ACL scope, or ACL enforced outside the prompt while the response cache keyed only on the prompt. Such a key passes every single-tenant test. Test: the linter and a two-scope miss test.
 
 **Stale answer after reindex.** A policy changed an hour ago and answers still quote the old text. In telemetry: hits whose cached `index_version` differs from the current one, or answers citing chunk versions that no longer exist. Root cause: no index version in the key, or a long TTL with no invalidation. Test: version-bump and source-invalidation tests.
 
 **Semantic false hit.** Users get a fluent answer to a neighboring question. In telemetry: thumbs-down and follow-up rephrasings concentrated on semantic-cache hits; hits with similarity just above threshold. Root cause: a threshold tuned for hit rate rather than false-hit rate. Test: false-hit rate on labeled question pairs as a release gate.
 
-**Prefix cache collapse.** Cost per answer rises about 14 percent overnight with no traffic change. In telemetry: `cached_input_tokens / input_tokens` drops after a prompt deploy. Root cause: a volatile value moved into the prefix, or tool definitions reordered. Test: Chapter 5's prefix-stability check in CI.
+**Prefix cache collapse.** Cost per answer rises about 14 percent overnight with no traffic change. In telemetry: `cached_input_tokens / input_tokens` drops after a prompt deploy. Root cause: a volatile value (a timestamp, a request id, the user's name) moved into the prefix, or tool definitions reordered. Test: Chapter 5's prefix-stability check in CI.
 
 **Retry storm.** A provider slowdown triggers timeouts, timeouts trigger retries, and retries add load and cost. In telemetry: `attempt` greater than one on a rising share of spans, cost per request rising while successes fall. Root cause: retries without a budget, or timeouts shorter than normal p99. Test: fault injection against the retry budget (Chapter 29).
 
@@ -1163,7 +1172,24 @@ Every optimization also needs a quality check, because most can reduce quality. 
 
 Performance needs realistic load: queueing, rate limits, cache hit rates and tails only appear under concurrency with a realistic prompt-length mix. Use Chapter 34's load-test protocol against staging with production-like caches, report per-stage p95 from traces, and compare the canary's cost per successful task and stage latencies against control before widening a rollout (Chapter 32).
 
+## Before you ship
+
+- [ ] A `LatencyBudget` with p95 TTFT and completion targets exists in code, constructs without error, and each stage's timeout comes from `Deadline.timeout_for` or Chapter 29's deadline.
+- [ ] Dashboards show per-stage p50, p95 and p99 from traces, with an alert on each stage's p95 against its budget, and TTFT is also measured at the client.
+- [ ] Every model call has an explicit `max_tokens` sized for the answer format (and for reasoning tokens on reasoning models), and agent or chain tasks run under a `TaskTokenBudget` or step cap.
+- [ ] The cache-key linter runs in CI over every cache class, with zero errors; a two-scope test proves each cache misses when tenant or ACL scope differs.
+- [ ] Index version, prompt version and embedding-space fingerprint are bumped by the deploy pipeline, and a test proves a version bump retires old cache entries.
+- [ ] The semantic cache, if enabled, has a threshold chosen on labeled question pairs, a false-hit rate gate in the release pipeline, source-id invalidation wired to document updates, and refuses personalized and ungrounded writes.
+- [ ] The prompt-cache ratio (`cached_input_tokens / input_tokens`) per prompt version is on a dashboard, and a prefix-stability check runs in CI (Chapter 5).
+- [ ] Every span carries tenant, request id and feature; the unattributed share of spend is a metric with an alert near zero.
+- [ ] Each tenant has a `SpendPolicy` with a mode, a daily limit and alert thresholds; the ledger lives in a shared store when more than one replica runs, and a concurrent-reservation test passes against it.
+- [ ] Prices live in versioned configuration, models missing from the price table are refused, and the spend ledger is reconciled daily against the provider's usage export.
+- [ ] Fan-out groups have a deadline, per-branch timeouts and a concurrency bound, and a test proves a cancelled caller stops every branch.
+- [ ] Every optimization was compared on the offline evaluation set, and the canary reports cost per successful task, not cost per call.
+
 ## Exercises
+
+**Start here:** K3, K4, E1, P3, D1 (about 4 hours). The rest go deeper.
 
 ### Knowledge questions
 
@@ -1189,15 +1215,17 @@ E3. A finance stakeholder asks for chargeback that includes the shared vector da
 
 E4. You run three replicas of the API behind a load balancer and the in-memory `SpendGuard`. Describe the failure this causes and design the shared-ledger replacement, including what happens when the ledger store is unavailable.
 
+E5. Northwind is considering one system prompt per tenant, each about 3,000 tokens, instead of one shared prompt. The provider charges an illustrative 1.25 times the input price to write a prefix into its cache, 0.1 times to read it, and entries live 5 minutes after their last use. The retail tenant sends about 40 requests an hour and a small tenant about 3 an hour. Estimate the expected prefix cost per request for each tenant with and without the split, and recommend a layout.
+
 ### Practical exercises
 
-P1. Extend `LatencyTracker` to report, per stage, the share of end-to-end violations in which that stage itself exceeded its budget. Add a test with synthetic spans where retrieval causes most violations.
+P1. (about 90 min) Extend `LatencyTracker` to report, per stage, the share of end-to-end violations in which that stage itself exceeded its budget. Add a test with synthetic spans where retrieval causes most violations.
 
-P2. Implement a `ToolResultCache` for read-only tools with per-tool TTLs, a tool-version component, and a refusal to cache any tool not in a read-only registry. Declare its `key_components` and make it pass `lint_cache_key("tool", ...)`.
+P2. (about 2 hours) Implement a `ToolResultCache` for read-only tools with per-tool TTLs, a tool-version component, and a refusal to cache any tool not in a read-only registry. Declare its `key_components` and make it pass `lint_cache_key("tool", ...)`.
 
-P3. Build a threshold-tuning script for `SemanticCache`: given labeled question pairs (same answer or not), compute hit rate and false-hit rate for thresholds from 0.70 to 0.99 using `FakeEmbeddings(vocabulary=...)`, and pick the lowest threshold whose false-hit rate is at or below a target.
+P3. (about 2 hours) Build a threshold-tuning script for `SemanticCache`: given labeled question pairs (same answer or not), compute hit rate and false-hit rate for thresholds from 0.70 to 0.99 using `FakeEmbeddings(vocabulary=...)`, and pick the lowest threshold whose false-hit rate is at or below a target.
 
-P4. Add an hourly spend anomaly detector to `cost.py`: from trace JSONL, compute spend per tenant per hour and flag hours more than three times the trailing 7-day median for the same hour of the week. Test it with a synthetic spike.
+P4. (about 2 hours) Add an hourly spend anomaly detector to `cost.py`: from trace JSONL, compute spend per tenant per hour and flag hours more than three times the trailing 7-day median for the same hour of the week. Test it with a synthetic spike.
 
 ### Debugging exercises
 
@@ -1218,3 +1246,11 @@ D3. Retail's daily limit is 50 USD in `enforce` mode, yet yesterday's committed 
 - Compare designs by cost per successful task, which charges each design for its calls, retries, failures and human review.
 - Attribute every span to a tenant and feature, count cache hits as avoided cost rather than spend, and enforce per-tenant limits with reservations, deduplicated alerts and a degrade mode.
 - Optimize in order: measure, right-size the model, trim context and output, cache, parallelize and batch, and only then change infrastructure.
+
+## Further reading
+
+- *The Tail at Scale* (Dean and Barroso, 2013): why fan-out amplifies tail latency and how hedged and tied requests cut it; the background for this chapter's parallelization section.
+- *A Proof for the Queuing Formula: L = λW* (Little, 1961): the law behind every in-flight and capacity estimate in the back-of-envelope section.
+- *Site Reliability Engineering* (Beyer et al., eds., 2016): service-level objectives and error budgets, the frame that latency budgets apply stage by stage.
+- *Efficiently Scaling Transformer Inference* (Pope et al., 2023): why prefill and decode cost what they do, which explains the TTFT and TPOT terms in the latency equation.
+- *SGLang: Efficient Execution of Structured Language Model Programs* (Zheng et al., 2024): prefix sharing in a serving engine, the self-hosted side of the prompt-cache arithmetic.

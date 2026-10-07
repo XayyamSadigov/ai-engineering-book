@@ -7,7 +7,7 @@ Solutions: `../solutions/ch17-solutions.md`
 
 ### Knowledge questions
 
-**K1.** Define the five positions on the spectrum in one sentence each, using only the question "who decides the next step." Give one Northwind example per position that is not in this chapter.
+**K1.** Define the five positions on the spectrum in one sentence each, using the question "who decides the next step" (and, for the two positions where code decides, whether there is a step sequence at all). Give one Northwind example per position that is not in this chapter.
 
 **K2.** A chain has five model steps with per-step success probabilities 0.99, 0.98, 0.97, 0.99, and 0.95. What is the chain's success probability under independence? Name two reasons the real figure differs, one in each direction.
 

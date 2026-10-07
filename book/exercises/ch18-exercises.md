@@ -45,6 +45,6 @@ Solutions: `../solutions/ch18-solutions.md`
 
 **D1.** After a deploy of the ticket server, the share of answers that cite a ticket drops from about 60 percent to under 5 percent. No errors are logged; the model simply stops calling `search_tickets`. The server's changelog says only "improved tool descriptions". Diagnose and name the telemetry that confirms it.
 
-**D2.** A newly connected HTTP ticket server, deployed with three replicas, fails about two thirds of `tools/call` requests with "server not initialized", while `initialize` itself always succeeds. A single-replica staging deployment never fails. Diagnose.
+**D2.** A newly connected HTTP ticket server on a 2025 revision, deployed with three replicas, fails about two thirds of `tools/call` requests with "server not initialized", while `initialize` itself always succeeds. A single-replica staging deployment never fails. Diagnose, and say whether the same deployment could fail this way on the 2026-07-28 revision.
 
 **D3.** Two weeks after a calendar vendor's server was enabled for all users, an audit finds that some replies sent through the internal `send_reply` tool were copied to an external address. The internal server and its descriptions did not change, and every `send_reply` call was approved by a human who saw only the reply body. Reconstruct what happened and name the two control failures.

@@ -35,7 +35,7 @@ Solutions: `../solutions/ch14-solutions.md`
 
 **P2.** (about 90 min) Add a `first_stage_recall` evaluator that reads each candidate list from the trace and reports recall@50 per list and for their union, so a report can show coverage before fusion and reranking.
 
-**P3.** (about 90 min) Implement a judge cache for `FaithfulnessJudge` keyed by judge version, a hash of the answer, and the packed chunk ids, with a JSONL backend. Show with a test that re-scoring a stored run makes no judge calls.
+**P3.** (about 90 min) Implement a judge cache for `GroundednessJudge` keyed by judge version, a hash of the answer, and the packed chunk ids, with a JSONL backend. Show with a test that re-scoring a stored run makes no judge calls.
 
 **P4.** (about 3 hours) Extend `synthesize_questions` with an embedding-based dedupe using `aie_core` embeddings and a multi-chunk mode that shows the model two chunks from different documents and asks for a question requiring both. Report how the difficulty distribution changes.
 

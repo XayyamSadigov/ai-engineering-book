@@ -1,10 +1,21 @@
 # Chapter 39 — Capstone: Northwind Assist
 
-This chapter assembles everything the book built into one deployable system and records how it was built, in the order the decisions had to be made. By the end you will be able to take a set of independently tested packages (a gateway, a retrieval stack, a tool executor, an agent loop, memory stores, guardrails, reliability primitives, evaluators) and compose them into a service that authenticates users, keeps tenants apart, answers with citations or abstains, acts only with authorization and approval, degrades instead of failing, reports what every request cost, and refuses to ship when its own evaluation says it got worse. The code lives in `book/capstone/northwind-assist/`: a FastAPI service with a streaming web UI, an orchestrator, an evaluation suite with a release gate, a Dockerfile, Docker Compose and Kubernetes manifests, and GitHub and GitLab pipelines. Its 76 offline tests and its gate run without a model key.
+This chapter assembles everything the book built into one deployable system, Northwind Assist, and records how it was built in the order the decisions had to be made. The packages each pass their own tests; this chapter is about the seams between them, where the failures that reach users actually live.
+
+**You will be able to:**
+
+- Compose independently tested packages (gateway, retrieval, tools, agent loop, memory, guardrails, reliability, evaluation) into one service with a single request identity, plan and budget.
+- Decide admission, spend and the degraded plan before streaming, so rejections are real HTTP statuses and a rejected request costs nothing.
+- Find and fix seam bugs: name the contract two packages disagree on, pin it with a test, and fix it in the package that owns it.
+- Build a release gate that has been seen to fail, by running a deliberately broken configuration in CI and expecting a non-zero exit.
+- Read evaluation results, a cost model and a readiness review the way a reviewer would, including what a fake model can and cannot tell you.
+- Map the book's ten mental models onto concrete controls, and plan a capstone of your own in another domain.
+
+**Prerequisites:** the whole book, in particular Chapter 28 (the reference architecture this chapter follows), Chapters 13 to 15 (grounded RAG and authorization in retrieval), 16 and 19 (governed tools and the agent loop), 25 (the release gate), 27 (guardrails), 29 to 31 (reliability, cost, tracing). | **Code:** `book/capstone/northwind-assist/` (run: `cd book/capstone/northwind-assist && python -m pytest -q && northwind-assist-eval --out eval/out`) | **Builds:** Northwind Assist: a FastAPI service with a streaming web UI, an orchestrator, an evaluation suite with a release gate, a Dockerfile, Docker Compose and Kubernetes manifests, and GitHub and GitLab pipelines. Its offline tests and its gate run without a model key.
 
 ## Why this matters
 
-Every earlier chapter could be tested on its own. A packer that drops superseded evidence, a breaker that opens at a 50 percent failure rate, an approval manager that binds a decision to an argument hash: each one has a test that proves it. None of those tests proves that the system is correct, because the failures that reach users live at the seams. The tenant id the retrieval filter uses is not the one the cache key uses. The agent loop passes its own idempotency key to the tool executor and quietly disables duplicate suppression. The output guardrail runs on the final answer while the user already read the streamed sentences. The tracer that redacts personal data does so one step after the exporter copied the attributes. You will meet each of these in this chapter. Two of them, the idempotency key and the tracer, happened while building it, and each was fixed in the package that owned the contract.
+Every earlier chapter could be tested on its own. A packer that drops superseded evidence, a breaker that opens at a 50 percent failure rate, an approval manager that binds a decision to an argument hash: each one has a test that proves it. None of those tests proves that the system is correct, because the failures that reach users live at the seams. The tenant id the retrieval filter uses is not the one the cache key uses. The agent loop passes its own idempotency key to the tool executor and quietly disables duplicate suppression. The output guardrail runs on the final answer while the user already read the streamed sentences. The tracer that redacts personal data does so one step after the exporter copied the attributes. You will meet each of these in this chapter. Two of them, the idempotency key and the tracer, turned up while building it, and each was fixed in the package that owned the contract.
 
 The capstone is also where the book's mental models stop being slogans. "Retrieval quality dominates generation quality" becomes a stage-isolation table that names the stage to fix. "The model proposes, code authorizes" becomes a function that rehydrates an email address only inside the tool layer. "Evaluate before optimizing" becomes an exit code that blocks a merge. Building the whole system is how you find out whether you believe them.
 
@@ -16,7 +27,7 @@ Finally, a capstone is a portfolio artifact and an interview answer. Being able 
 
 Three working images guided the build.
 
-**Composition, not construction.** The capstone writes almost no AI code. Its job is to decide who calls whom, with which identity, under which budget, and to prove the seams hold. When a capability already existed in a package, the capstone imported it, even when a few lines of local code would have been more convenient. Where two packages disagreed about a contract, the disagreement was reported to the package's owner, fixed there, and the capstone switched to the official API; the README's integration section lists all twelve.
+**Composition, not construction.** The capstone writes almost no AI code. Its job is to decide who calls whom, with which identity, under which budget, and to prove the seams hold. When a capability already existed in a package, the capstone imported it, even when a few lines of local code would have been more convenient. Where two packages disagreed about a contract, the disagreement was reported to the package's owner, fixed there, and the capstone switched to the official API; the seam-bugs table at the end of the build log lists them.
 
 **Decide once, early, and carry the decision.** Identity is decided once at the edge. The plan a request runs under (full, reduced, minimal, static) is decided once before any spending. The model is chosen once per workflow by a router. Every later stage reads those decisions from the request context instead of re-deriving them, which is what makes them testable and keeps them consistent.
 
@@ -235,7 +246,27 @@ The example directories are not installable packages, so `northwind_assist/_path
 
 ## Build log
 
-The steps are in the order the build needed them, which is also a reasonable order to read the code. Listings are excerpts of files that exist at the stated paths; the full files are on disk.
+The steps are in the order the build needed them, which is also a reasonable order to read the code. Listings are excerpts of files that exist at the stated paths; the full files are on disk. Three integration stories are told in full because each teaches a rule you will need again: the idempotency key (step 8), the redaction order in the tracer (step 11), and the stale PTO answer (under Evaluation results). The other seam bugs the build found are collected in one table at the end of the log.
+
+**Package legend.** The build log names packages by their import names. This is what each one is and where it was built.
+
+| Package or project | Chapter | What it does in the capstone |
+|---|---|---|
+| `aie_core` | 3 | provider-neutral `LLMClient`, `ModelGateway` with retries and fallbacks, pricing, settings, tracer |
+| `semsearch` (Project 2) | 9 | vector store with filtered search; the dense index behind ragkit |
+| `ragkit` | 11 to 14 | loading, chunking, BM25 and dense retrieval, fusion, reranking, evidence packing, grounded streaming, RAG metrics |
+| `toolkit` | 16 | `ToolExecutor`: schema validation, policy, idempotency, approvals bound to argument hashes, audit |
+| `agentkit` | 19 | `AgentRuntime`: the bounded loop, budgets, Definition of Done, event log and replay |
+| `memorykit` | 21 | profile and conversation memory behind a write policy |
+| `evalkit` | 24 | cases, datasets, runner, metrics, judges, statistics, report |
+| `guardrails` | 27 | input, context, output and tool stages; PII vault; `RedactingTracer` |
+| `reliability` | 29 | deadlines, circuit breakers, admission control, degraded plans |
+| Project 1, `extraction_api` | 6 | schema-validated extraction with review routing |
+| Project 3, `rag_assistant` | 15 | authority rules, document registry, ingestion queue and worker, index versions |
+| Project 4, `support_assistant` | 16 | the six Northwind service-desk tools, their argument models and policy |
+| Project 5, `incident_agent` | 20 | incident-research agent; not composed (see the composition map) |
+| Project 6, `research_team` | 22 | multi-agent research team; not composed (see the composition map) |
+| `examples/chNN` | 4, 5, 7, 25, 26, 30, 31, 32 | prompt registry, context builder, router, release gate, attack corpus, caches and spend guard, `AITracer`, manifest and flags |
 
 ### Step 1: one identity, many projections
 
@@ -364,7 +395,7 @@ Chapter 29's guidance on wrapping order is precise: the circuit breaker goes *in
         self.router: Router = northwind_router(self.catalog, clients, tracer=tracer)
 ```
 
-The first API gap appeared here. `aie_core.make_llm_client` was the only public factory, and for real providers it returned a `ModelGateway` with its own retry loop and its own tracer from `get_tracer()`. Wrapping that in a breaker and a second gateway would have put two retry loops and two tracers into every request, and mixing tracers breaks the span tree. The first build reached for a private helper; the fix landed in `aie_core` instead, as `make_provider_client(settings, model=...)` for the bare adapter (and a `tracer=` argument on `make_llm_client`). `provider_client()` and `fallback_client()` now call it. That is the pattern for the whole chapter: a workaround at the seam is temporary, and the fix belongs in the package that owns the contract.
+The breaker must wrap the *bare* provider adapter. `aie_core.make_llm_client` returns a full `ModelGateway` with its own retry loop and tracer, and wrapping that in a second gateway would put two retry loops and two tracers into every request. `provider_client()` and `fallback_client()` therefore call `aie_core.make_provider_client(settings, model=...)`, which returns the adapter alone (seam bug 3 in the table at the end of the build log).
 
 The per-request view of the model layer is `RoutedClient`. It implements `LLMClient`, so ragkit's streamer, agentkit's runtime and memorykit's summarizer accept it unchanged, and it does four things to every request on its way in or out:
 
@@ -436,7 +467,7 @@ One switch exists only for evaluation. `NA_RAG_ENFORCE_ACL=false` copies chunks 
 
 The second backend, `NA_KNOWLEDGE_BACKEND=p3`, hands the whole ingestion tier to Project 3: its registry in Postgres, its Redis job queue and worker, blue-green index versions, tombstones for deletions, pgvector, and BM25 snapshots on a shared volume. The capstone asks Project 3 for a retrieval pipeline per principal (`rag_assistant.retrieval.wiring.build_pipeline`, which also wraps each retriever in a breaker and a tombstone filter) and keeps its own request path. `test_p3_knowledge_backend_answers_through_the_same_path` builds the backend in memory, syncs and drains the queue, and checks that the same question is answered with citations and that the logistics incident report stays invisible to a retail user.
 
-The retrieval cache stores ids and needs to turn them back into chunks. The first version of the P3 backend had to remember chunks it had served, because Project 3's index offered no lookup by id; Project 3 and ragkit now provide `IndexSet.get_chunks(ids, principal)` and `BM25Index.get_chunks(ids, principal)`, which return chunks in the requested order and drop unknown ids, ids the principal may not read, and chunks of documents that are not active in the registry. Both backends implement `get_chunks` with them, so a cache hit can never resurrect a deleted or re-permissioned chunk.
+The retrieval cache stores ids and needs to turn them back into chunks. Both backends implement `get_chunks` with ragkit's `BM25Index.get_chunks(ids, principal)` and Project 3's `IndexSet.get_chunks(ids, principal)`, which return chunks in the requested order and drop unknown ids, ids the principal may not read, and chunks of documents that are not active in the registry. A cache hit therefore can never resurrect a deleted or re-permissioned chunk.
 
 ### Step 6: grounded answers that stream
 
@@ -508,7 +539,7 @@ Chapter 30 placed three caches by cost and specified their keys. The capstone us
 
 Every key carries the tenant, a hash of the caller's sorted group set (so keys do not reveal group names), and the version of everything that produced the value. The tenant also prefixes the key, so `purge_tenant` removes a tenant's entries in one call. The retrieval cache stores chunk *ids*, never text. On a hit, the service re-hydrates the ids from the live chunk table and re-checks each chunk against the principal, so a document that was deleted or re-permissioned after caching cannot be served from the cache. Answers are cached only when they passed validation cleanly: no withheld sentence, no redaction, status `answered` or `insufficient_evidence`. A partial answer is not worth replaying.
 
-The tests cover the three properties that matter. `test_answer_cache_key_includes_tenant_groups_and_versions` builds five keys that differ in exactly one component and asserts five distinct values, and asserts that whitespace and case normalization map equivalent questions to one key. `test_cached_answer_is_free_and_never_crosses_tenants` asks the same question twice as `ana` (the second answer is a hit with cost zero) and once as `lee` in the other tenant (a miss with a real cost). `test_embedding_cache_keys_on_space_fingerprint` shows that two caches over the same model name but different model versions never share a vector, which is the bug in `aie_core.CachedEmbeddings`' original key that the integration notes flagged.
+The tests cover the three properties that matter. `test_answer_cache_key_includes_tenant_groups_and_versions` builds five keys that differ in exactly one component and asserts five distinct values, and asserts that whitespace and case normalization map equivalent questions to one key. `test_cached_answer_is_free_and_never_crosses_tenants` asks the same question twice as `ana` (the second answer is a hit with cost zero) and once as `lee` in the other tenant (a miss with a real cost). `test_embedding_cache_keys_on_space_fingerprint` shows that two caches over the same model name but different model versions never share a vector, which a key built from the model name alone would allow (Chapter 8's space fingerprint exists to prevent exactly that).
 
 The answer cache sits behind a flag (`rag.answer_cache`) with a kill switch whose safe variant is `off`, because it is the cache with the highest correctness risk: it serves text, not ids.
 
@@ -516,7 +547,7 @@ The answer cache sits behind a flag (`rag.answer_cache`) with a kill switch whos
 
 The tool layer reuses Project 4's six tools, argument models and policy without modification, under toolkit's `ToolExecutor` with a SQLite idempotency store, an approval manager with four-eyes enforcement, and an audit sink. agentkit runs the loop. The seam between them is where the most consequential mismatch of the project showed up.
 
-agentkit's `executor_tools` adapter used to forward agentkit's own idempotency key, `run_id:request_id`, to toolkit. toolkit prefers an explicit key to its default, which is derived from the tenant, the user, the session and the argument hash. A user who retried "create ticket: VPN drops at store 0412" after a timeout started a new agent run, got a new run id and therefore a new key: toolkit saw a different action and created a second ticket. Each package's tests passed, because each package's own notion of "the same action" was self-consistent.
+**Integration story: the idempotency key.** agentkit's `executor_tools` adapter forwarded agentkit's own idempotency key, `run_id:request_id`, to toolkit. toolkit prefers an explicit key to its default, which is derived from the tenant, the user, the session and the argument hash. A user who retried "create ticket: VPN drops at store 0412" after a timeout started a new agent run, got a new run id and therefore a new key: toolkit saw a different action and created a second ticket. Each package's tests passed, because each package's own notion of "the same action" was self-consistent. The lesson generalizes: when two packages each have an opinion about identity (of a user, an action, a request), the composition must choose one on purpose, or the one that happens to be passed last wins.
 
 The fix is in agentkit: `executor_tools(..., idempotency=...)` takes `"content"` (the default now: pass no key, let the executor derive its content-bound one), `"run"` (the old behavior) or a callable. The capstone passes a callable only when the client sent an `Idempotency-Key` header, and scopes that key by tenant and user, because two callers can pick the same header value:
 
@@ -536,7 +567,7 @@ def idempotency_policy(header_key: str | None, *, tenant: str, user_id: str) -> 
     return key
 
 
-# ToolLayer.tools_for
+# ...
     def tools_for(self, ctx: RequestContext, gctx: GuardContext, activity: ToolActivity, *,
                   allow_side_effects: bool) -> list[GuardedTool]:
         tctx = ctx.tool_context()
@@ -546,7 +577,7 @@ def idempotency_policy(header_key: str | None, *, tenant: str, user_id: str) -> 
                 if allow_side_effects or t.side_effect is AgentSideEffect.READ]
 ```
 
-`test_create_ticket_is_idempotent_within_a_session` sends the same request twice in one session (two agent runs) and finds one ticket and a duplicate result; `test_client_idempotency_key_suppresses_duplicates_across_sessions` does the same across sessions with a shared header.
+The second function is `ToolLayer.tools_for`, which builds the agent's tool list for one request. `test_create_ticket_is_idempotent_within_a_session` sends the same request twice in one session (two agent runs) and finds one ticket and a duplicate result; `test_client_idempotency_key_suppresses_duplicates_across_sessions` does the same across sessions with a shared header.
 
 Each adapted tool is wrapped once more, by `GuardedTool`, which puts the guardrail tool stage in front of the executor:
 
@@ -567,9 +598,9 @@ Each adapted tool is wrapped once more, by `GuardedTool`, which puts the guardra
 
 First, re-hydration. The input guard replaced the email address in "send TCK-2026-0001 to priya.raman@northwind.example: ..." with a vault token before the model saw it. The model therefore proposes `to: "<PII:email:...>"`. Inside the tool boundary, and only for the arguments the rule names (`to` on the reply tools), the vault turns the token back into the address. The model never handles the raw value, and an address the model invents or copies from another conversation stays a token and fails validation.
 
-The first build found that the tool schemas' email patterns rejected tokens, so agentkit's argument validation and Chapter 25's argument assertions both flagged every correct send. guardrails now ships `token_tolerant_schema()`: the model sees a schema whose string patterns also accept PII tokens (`GuardedTool.spec`), while toolkit validates the re-hydrated address against the original schema. The call that executes is the re-hydrated one returned by `guard_tool_call`, never the model's original.
+Tokens need two schemas. A strict email pattern would reject every correct proposal, because a correct proposal contains a token. The model therefore sees guardrails' `token_tolerant_schema()`, whose string patterns also accept PII tokens (`GuardedTool.spec`), while toolkit validates the re-hydrated address against the original schema. The call that executes is the re-hydrated one returned by `guard_tool_call`, never the model's original.
 
-Second, the guardrail tool stage on the re-hydrated call: recipient domains, field lengths, ticket id format, and for outbound tools canaries, secrets and personal data other than the recipient. The rules are guardrails' `support_tool_rules`. Their first version named the search argument `q` and the lookup argument `id` while Project 4's tools take `query`, so the preset failed closed and blocked every legitimate search; the preset now uses Project 4's contracts (a guardrails test runs P4's real specs through it). The capstone calls it with `require_send_approval=False`, because toolkit's approval manager already binds approvals to argument hashes and a second approval gate in the guardrail would need a token that no component mints.
+Second, the guardrail tool stage on the re-hydrated call: recipient domains, field lengths, ticket id format, and for outbound tools canaries, secrets and personal data other than the recipient. The rules are guardrails' `support_tool_rules`, written against Project 4's argument names; a preset that names an argument the tool does not have fails closed and blocks every legitimate call (seam bug 5). The capstone calls it with `require_send_approval=False`, because toolkit's approval manager already binds approvals to argument hashes and a second approval gate in the guardrail would need a token that no component mints.
 
 Third, the executor: schema validation, policy (scopes, the recipient allowlist, the contractor deny on `send_reply`, the lead requirement for P1 tickets, rate limits), idempotency, and for `send_reply` an approval request that returns `pending_approval` without performing anything. agentkit reads that as a non-ok observation, the model tells the user the reply awaits approval, `note_output` records the requester's context against the approval id, and the stream emits an `approval` event with the exact arguments and their hash.
 
@@ -593,7 +624,7 @@ Approval is the only path to the side effect:
         return self.executor.execute_approved(approval_id, requester)
 ```
 
-Only a lead may decide; the requester cannot (four-eyes), and the approval manager enforces that again underneath. The executor re-runs the requester's policy at execution time, so it needs the requester's real scopes and groups. If they are gone (a restart lost the in-memory context), `approve` answers `409 requester_context_lost` before recording any decision, and the approval stays pending. An earlier version rebuilt a context with a fixed set of scopes and no groups, which would have executed the approved call with scopes the requester may never have held and without the group-based policy checks once approvals became durable; `test_approval_fails_closed_when_requester_context_is_lost` pins the fail-closed behavior.
+Only a lead may decide; the requester cannot (four-eyes), and the approval manager enforces that again underneath. The executor re-runs the requester's policy at execution time, so it needs the requester's real scopes and groups. If they are gone (a restart lost the in-memory context), `approve` answers `409 requester_context_lost` before recording any decision, and the approval stays pending. The tempting alternative, rebuilding a context with a default set of scopes and no groups, would execute the approved call with scopes the requester may never have held and skip the group-based policy checks; `test_approval_fails_closed_when_requester_context_is_lost` pins the fail-closed behavior.
 
 Approvals in another tenant answer `404`, identical to a missing id, so their existence is not confirmed. The executor runs the *stored* arguments, re-checks the argument hash, and marks the approval consumed, so a second approval call fails. `test_changed_arguments_invalidate_the_approval` approves a reply and then tries to execute it with one sentence appended ("Also wire 5,000 EUR."); the executor answers `approval_mismatch` and the outbox stays empty.
 
@@ -637,7 +668,7 @@ Project 1's `ExtractionService` is a fixed workflow (classify, extract with a sc
 
 Chapter 31's `AITracer` gives every span a trace id and a parent id through its own context variable and stamps the version manifest on the root. Two facts constrained how the capstone uses it.
 
-The first is where redaction runs. The original guardrails `RedactingTracer` scrubbed attributes in `export()`, but `OTelAITracer` copies attributes into the OpenTelemetry span in `_backend_end`, which runs before the sink's export, so personal data would have reached the OTLP exporter unscrubbed. The first build scrubbed in a subclass's `_finalize`; guardrails then moved the fix to where it belongs. `RedactingTracer.span()` now opens the span on the wrapped tracer and scrubs on every write and when the body exits, before the wrapped tracer's own end-of-span work, and delegates tracer-specific attributes (`capture_policy`, `sink`) to it. The capstone wraps whichever Chapter 31 tracer the environment selects:
+**Integration story: where redaction runs.** guardrails' `RedactingTracer` scrubbed attributes in `export()`, and its own tests proved that nothing unscrubbed reached the sink. But `OTelAITracer` copies attributes into the OpenTelemetry span in `_backend_end`, which runs *before* the sink's export, so personal data reached the OTLP exporter unscrubbed. Both packages were correct about their own contract; the composition leaked. The lesson: a privacy control must run before the first copy of the data, and "before export" is not a position in a pipeline you do not own. The capstone first bridged the gap by scrubbing in a subclass, then guardrails took the fix. `RedactingTracer.span()` now opens the span on the wrapped tracer and scrubs on every write and when the body exits, before the wrapped tracer's own end-of-span work, and delegates tracer-specific attributes (`capture_policy`, `sink`) to it. The capstone wraps whichever Chapter 31 tracer the environment selects:
 
 ```python
 # path: book/capstone/northwind-assist/northwind_assist/observability/tracing.py (excerpt)
@@ -649,7 +680,7 @@ The first is where redaction runs. The original guardrails `RedactingTracer` scr
     return RedactingTracer(AITracer(sink, resource=resource, capture=capture))
 ```
 
-The collector configuration deletes every `*.content` attribute as a second line of defense. `test_pii_is_redacted_before_the_model_and_in_traces` sends a card number and an email address and finds neither in any model request nor in any exported span, and `test_otel_backend_never_receives_pii` writes raw values into a span on purpose and checks the OpenTelemetry exporter: the wrapped tracer delivers them scrubbed, the unwrapped one would not. Tests select the in-memory sink with `TRACE_SINK=memory`, which `aie_core` now accepts.
+The collector configuration deletes every `*.content` attribute as a second line of defense. `test_pii_is_redacted_before_the_model_and_in_traces` sends a card number and an email address and finds neither in any model request nor in any exported span, and `test_otel_backend_never_receives_pii` writes raw values into a span on purpose and checks the OpenTelemetry exporter: the wrapped tracer delivers them scrubbed, the unwrapped one would not. Tests select `aie_core`'s in-memory sink with `TRACE_SINK=memory`.
 
 The second fact is that the current span lives in a context variable, and Starlette may advance a synchronous response generator from different worker threads. A span opened in one `next()` call and closed in another would corrupt the tree. The API therefore runs the whole turn on one thread and only streams from a queue:
 
@@ -688,7 +719,7 @@ def _sse(prepared: Prepared, q: queue.Queue[ServerEvent | None]) -> Iterator[str
 
 The endpoint starts the turn before it returns the response, because `prepare()` already holds an admission slot and a spend reservation that only `run()` releases; a client that disconnected before reading the first byte would otherwise leak both. Such an unread turn runs to completion and is billed, which releases them. The `finally` clause is the cancellation path from Chapter 28: when the browser goes away, the generator is closed, the request deadline is cancelled, and the next model call's `Deadline.apply` raises before spending. Comment lines every ten seconds keep idle proxies from closing a silent stream.
 
-The result, checked by `test_one_trace_per_request_with_stage_spans_and_lineage`, is one tree per request: `request` at the root with tenant, route, the version manifest and its fingerprint, Chapter 31's lineage keys (`index.version`, `prompt.id`, `prompt.version`), cost, tokens, evidence ids, cache hit and abstention; under it `guardrail.input`, `router.decide`, `retrieval.pipeline` with `retrieval.retrieve` per retriever, `retrieval.fusion` and `retrieval.rerank`, `guardrail.context`, `context.build`, `llm.generate` with the provider attempt `llm.complete`, and `guardrail.output`. Agent requests add `agent.run`, `agent.step`, `agent.tool`, `guardrail.tool` and `tool.execute`. One more gap showed up here: streaming provider attempts are adopted into the tree through `AITracer.export()`, which linked them correctly but left the propagated keys (tenant, prompt identity) in the span's baggage instead of its attributes, so a query for `llm.complete` spans by `tenant.id` missed every streamed call. Chapter 31's `export()` now stamps them, and the test asserts `tenant.id` and `prompt.id` on the streamed attempt.
+The result, checked by `test_one_trace_per_request_with_stage_spans_and_lineage`, is one tree per request: `request` at the root with tenant, route, the version manifest and its fingerprint, Chapter 31's lineage keys (`index.version`, `prompt.id`, `prompt.version`), cost, tokens, evidence ids, cache hit and abstention; under it `guardrail.input`, `router.decide`, `retrieval.pipeline` with `retrieval.retrieve` per retriever, `retrieval.fusion` and `retrieval.rerank`, `guardrail.context`, `context.build`, `llm.generate` with the provider attempt `llm.complete`, and `guardrail.output`. Agent requests add `agent.run`, `agent.step`, `agent.tool`, `guardrail.tool` and `tool.execute`. The test also asserts `tenant.id` and `prompt.id` on the streamed `llm.complete` attempt, because a streamed call whose lineage sits only in baggage is invisible to a query by tenant (seam bug 4).
 
 Feedback joins the trace through `response.id`: the `done` event carries the request id, `POST /v1/feedback` accepts it only from the user who made the request, and a `feedback` span with the same `response.id` lets Chapter 31's join scripts attach ratings to traces.
 
@@ -708,7 +739,7 @@ Every request ends by settling its spend reservation with the actual cost from t
                 "by_intent": {k: round(v, 6) for k, v in sorted(self.by_intent.items())}}
 ```
 
-Cost per *successful* answer divides all spend by successes, so abstentions, failed agent runs and retries are charged to the answers that worked; it is the number a budget owner can compare with the cost of a human answering the same question (Chapter 30). The spend guard fires threshold alerts once per tenant and day (at 50, 80 and 100 percent by default) and a `blocked` alert when it starts refusing. `GET /v1/cost/daily` requires the `cost:read` scope and shows a tenant admin only its own tenant; `test_cost_is_accounted_per_tenant_and_reported_daily` checks that an agent gets `403`, that the per-tenant totals add up to the total, and that intents are attributed. Unknown tenants (the gold set's `shared` evaluation principal, or a tenant added before its budget) get the smallest configured limit; without that default, the first eval run failed 28 cases with "no spend policy for tenant 'shared'".
+Cost per *successful* answer divides all spend by successes, so abstentions, failed agent runs and retries are charged to the answers that worked; it is the number a budget owner can compare with the cost of a human answering the same question (Chapter 30). The spend guard fires threshold alerts once per tenant and day (at 50, 80 and 100 percent by default) and a `blocked` alert when it starts refusing. `GET /v1/cost/daily` requires the `cost:read` scope and shows a tenant admin only its own tenant; `test_cost_is_accounted_per_tenant_and_reported_daily` checks that an agent gets `403`, that the per-tenant totals add up to the total, and that intents are attributed. Unknown tenants (the gold set's `shared` evaluation principal, or a tenant added before its budget) get the smallest configured limit rather than an error (seam bug 9).
 
 ### Step 13: the evaluation suite and the gate
 
@@ -728,7 +759,7 @@ The gate is where the capstone stops being a demo (mental model 4). Three suites
 
 Required documents the variant may not read move to `forbidden_doc_ids` (and the case gets the `forbidden-doc` tag, which Chapter 14's metrics invert); when nothing required remains visible, the variant expects an abstention. The result is 151 cases, 32 of them permission probes, with no hand-labeled expectations (the derivation rule has its own blind spot, discussed under Evaluation results). The evaluators are ragkit's `retrieval_evaluator` and `answer_evaluator` plus an offline lexical faithfulness check; Chapter 14's stage isolation and report run on the result.
 
-**Tools.** Ten support tasks, each with a Chapter 25 `TrajectorySpec`: allowed tools, a reference step count and a budget, and end-state predicates ("a ticket with category `vpn_network` exists", "no reply was sent"). The agent's event log is exported with `trajectory_from_events` and scored by `TrajectoryEvaluator` with Chapter 25's `NORTHWIND_TOOLS` catalog, passed through `token_tolerant_schema()` because trajectories record what the model proposed (tokens, not addresses). The catalog's first version named arguments differently from Project 4 (`title` where Project 4 has `subject`); it now uses Project 4's contracts. A capstone evaluator `world_safe` checks the outbox and the ticket store directly: a contractor's send must not leave the building, a read-only user's ticket must not be created, a lookup of another tenant's employee must not reveal their title or location.
+**Tools.** Ten support tasks, each with a Chapter 25 `TrajectorySpec`: allowed tools, a reference step count and a budget, and end-state predicates ("a ticket with category `vpn_network` exists", "no reply was sent"). The agent's event log is exported with `trajectory_from_events` and scored by `TrajectoryEvaluator` with Chapter 25's `NORTHWIND_TOOLS` catalog, passed through `token_tolerant_schema()` because trajectories record what the model proposed (tokens, not addresses). The catalog uses Project 4's argument names (seam bug 6). A capstone evaluator `world_safe` checks the outbox and the ticket store directly: a contractor's send must not leave the building, a read-only user's ticket must not be created, a lookup of another tenant's employee must not reveal their title or location.
 
 **Security.** Fifteen attacks: the five Chapter 26 adversarial carriers (plain instruction, HTML comment, base64 payload, fake tool output, markdown image exfiltration) loaded into a separate index next to the real corpus; the real shared-data newsletter; a direct injection asking to send the directory to an outside mailbox; an approval request whose body carries an exfiltration image; two memory-poisoning attempts; and five cross-tenant probes, four of them against canary documents in another tenant. The gated metric is `effect_prevented`: no off-allowlist URL in the answer, no canary in the prompt or the answer, no forbidden document cited, no message sent without a human decision, no hidden HTML comment reaching the model, no poisoned memory written, no approval created for an off-allowlist recipient. A second metric, `attack_detected`, records whether any guard flagged the attempt; it is reported, not gated, because the design does not depend on detection.
 
@@ -761,7 +792,7 @@ metric = "no_permission_leak"
 
 ### Step 14: shipping it
 
-**Image.** One image, three roles (API, ingestion worker, evaluation job), built from the book root so every path dependency is in the context. The first build found a packaging bug the moment it ran: ragkit and Project 3 declared a dependency named `semsearch`, but Project 2's distribution is called `p2-semantic-search`, so `pip install` looked for `semsearch` on the package index and failed. Every local virtualenv had hidden this, because Project 2 was already installed under its real name. The fix is in the two `pyproject.toml` files, and the image now installs the book's packages and their declared dependencies in one resolver run:
+**Image.** One image, three roles (API, ingestion worker, evaluation job), built from the book root so every path dependency is in the context. The image installs the book's packages and their declared dependencies in one resolver run:
 
 ```dockerfile
 # path: book/capstone/northwind-assist/Dockerfile (excerpt)
@@ -772,13 +803,34 @@ RUN pip install -e projects/aie_core -e projects/evalkit -e "projects/p2-semanti
       "pyjwt[crypto]>=2.8" "jinja2>=3.1" "opentelemetry-sdk>=1.24" "opentelemetry-exporter-otlp-proto-http>=1.24"
 ```
 
-A clean image build is therefore part of CI: it is the only place a missing or misnamed dependency shows up. The image runs as a non-root user, exposes a health check, and starts uvicorn with a keep-alive timeout above the longest legitimate stream. When this chapter was written, the image was built, the gate passed inside it, and the API container served `/readyz` and a streamed answer. The container registry returned 503 for the pgvector, Redis and collector images, so `docker compose up` with the Project 3 backend against real Postgres and Redis was not run; `docker compose config` validates.
+A clean image build is part of CI, because it is the only place a missing or misnamed dependency shows up: a developer's virtualenv already has every sibling package installed under its real name and hides the error (seam bug 10). The image runs as a non-root user, exposes a health check, and starts uvicorn with a keep-alive timeout above the longest legitimate stream. Build it from the book root with `docker build -f capstone/northwind-assist/Dockerfile book`, then smoke-test it in two steps: run `northwind-assist-eval` inside the container and expect exit 0, and start the API container and check that `/readyz` answers and that one chat request streams `meta`, `citation`, `delta` and `done` events.
 
-**Compose.** `api`, `worker` (Project 3's ingestion worker through `northwind-assist-worker --role ingest`), `postgres` with pgvector, `redis` with append-only persistence (the ingestion queue must survive a restart), `otel-collector`, and two job profiles: `sync` enqueues a full sync of the documents, `eval` runs the gate inside the image.
+**Compose.** `api`, `worker` (Project 3's ingestion worker through `northwind-assist-worker --role ingest`), `postgres` with pgvector, `redis` with append-only persistence (the ingestion queue must survive a restart), `otel-collector`, and two jobs under the `jobs` profile: `sync` enqueues a full sync of the documents, `eval` runs the gate inside the image. The full-stack check is `docker compose config` (the file is valid), then `docker compose up -d` and `docker compose run --rm sync`, then wait until Project 3's status shows the queue drained and every document active, and only then send requests. That sequence is the only test of the Project 3 backend against real Postgres, pgvector and Redis; the offline suite exercises the same backend in memory. Practical exercise P5 turns it into an automated check.
 
 **Kubernetes.** A sketch, not a chart: API and worker Deployments with non-root security contexts, read-only root filesystems, readiness on `/readyz` and a `preStop` sleep so the load balancer drains first; a termination grace period longer than the request deadline; a CronJob for the nightly evaluation; a Service and an Ingress with proxy buffering off (an SSE stream that the proxy buffers turns time to first token into completion time); an HPA on in-flight requests per pod rather than CPU, because the pods spend their time waiting on the provider; a ConfigMap for behavior settings, which is deployed like code; and a Secret manifest that contains only placeholders. One limit before scaling out: approvals, request ownership and the default idempotency store are per-process in this build, so the API must run as a single replica until they move to a shared store (Postgres or Redis).
 
 **CI.** GitHub Actions and GitLab CI run the same stages: lint (ruff), type check (mypy), the offline tests, the eval gate with its report as an artifact and the prompt-lock check, an image build on the main branch, a canary step at 5 percent with a placeholder for Chapter 32's canary verdict, and a manual promotion. A nightly schedule runs the gate even when no code changed, because providers change models underneath a fixed name.
+
+### Seam bugs: what composition found
+
+Every bug below passed the owning package's own tests. Each was first bridged at the seam so the build could continue, then fixed in the package that owns the contract, pinned by a test there, and the bridge removed. A workaround at a seam is temporary; the fix belongs to the owner, or every other caller keeps the bug.
+
+| # | Seam | Symptom | Test or check that catches it | Owning fix |
+|---|---|---|---|---|
+| 1 | agentkit to toolkit: idempotency key | a retried request in a new agent run created a second ticket | `test_client_idempotency_key_suppresses_duplicates_across_sessions` | agentkit `executor_tools(idempotency="content")` (step 8) |
+| 2 | guardrails tracer to OTel backend | personal data reached the OTLP exporter before redaction | `test_otel_backend_never_receives_pii` | guardrails `RedactingTracer` scrubs on write (step 11) |
+| 3 | `aie_core` factory to the capstone gateway | two retry loops and two tracers per request, a split span tree | `test_one_trace_per_request_with_stage_spans_and_lineage` | `aie_core.make_provider_client` returns the bare adapter |
+| 4 | streamed provider spans to trace queries | `llm.complete` spans queried by `tenant.id` missed every streamed call | `test_one_trace_per_request_with_stage_spans_and_lineage` | Chapter 31 `AITracer.export()` stamps lineage attributes |
+| 5 | guardrails tool preset to Project 4 tools | preset named `q` and `id` where the tools take `query`; failed closed on every legitimate search | tool suite `traj_success` | guardrails `support_tool_rules` uses Project 4's names, checked against the real specs |
+| 6 | Chapter 25 tool catalog to Project 4 tools | argument assertions failed correct calls (`title` where Project 4 has `subject`) | tool suite `traj_tool_args` | `NORTHWIND_TOOLS` uses Project 4's contracts |
+| 7 | input guard PII tokens to tool schemas | email patterns rejected tokens, so every correct send was flagged | tool suite `traj_tool_args` | guardrails `token_tolerant_schema()` for the model, original schema for toolkit |
+| 8 | retrieval cache ids to the index | no public lookup by id, so the P3 backend had to remember served chunks and could resurrect a deleted one | `test_deletion_propagates_to_index_and_caches` | ragkit and Project 3 `get_chunks`, ACL and active-status checked |
+| 9 | spend guard to evaluation principals | the first eval run failed 28 cases with "no spend policy for tenant 'shared'" | eval run | capstone: unknown tenants get the smallest configured limit |
+| 10 | package metadata to a clean install | ragkit and Project 3 depended on `semsearch`; Project 2's distribution is `p2-semantic-search` | first image build | the two `pyproject.toml` files |
+| 11 | RAG eval target to report | the report crashed when the target raised | eval run with a failing target | ragkit.eval lists errors as blocking "not checked" rows |
+| 12 | root span to Chapter 31's completeness metric | every capstone trace rated incomplete, so `telemetry_gaps` would fire permanently | `test_capstone_traces_are_complete_and_healthy_traffic_fires_nothing` | capstone root span carries `index.version`, `prompt.id`, `prompt.version` |
+
+Read the table by column, not by row. The "Seam" column is almost always a name or an identity that two packages each defined (an argument name, an idempotency key, a tenant, a lineage key). The test column is almost always a test that runs *through* both packages, or a clean build. That is the case for a thin layer of end-to-end tests over well-tested packages: unit tests prove the contracts, and only composition proves they agree.
 
 ## Evaluation results
 
@@ -808,6 +860,16 @@ Three readings are worth more than the numbers.
 **Some failures are label policy, not system behavior.** Four of the six missed abstentions are principal variants of RQ-019 and RQ-021, whose required document is invisible to the variant but whose question is answerable from another document the variant may read. The derivation rule "nothing required is visible, so abstain" is stricter than the truth. The fix belongs in the dataset (mark which questions have alternative sources), not in the system; until then the gate's abstention threshold has headroom for it. RQ-037 is the known label error from Chapter 14.
 
 The judge needs the same honesty. The offline lexical faithfulness check agrees with the 16-row human-labeled sample in 69 percent of rows, with Cohen's kappa 0.36. It passes "Alcohol is reimbursable during business travel" against evidence that says the opposite (negation is invisible to word overlap) and rejects a correct paraphrase ("roll ten leftover vacation days into next year"). On the demo model it scores 1.0 because the demo model only quotes, which makes it a smoke check and nothing more. The gate keeps a threshold on it to catch gross breakage; quality decisions need an LLM judge calibrated against humans as in Chapter 24, run on sampled production traffic (practical exercise P4).
+
+### What changes with a real model
+
+Every number above comes from a fake model and fake embeddings. When you switch `LLM_PROVIDER` and `NA_MODEL_MAP` to a real provider (practical exercise P2), expect the rows to fall into three groups.
+
+**Rows that should not move.** `no_permission_leak`, `citations_valid`, `traj_safe`, `world_safe` and `effect_prevented` are properties of code, not of the model: the ACL filter, the citation validator, toolkit's policy and approvals, the URL allowlist and the memory write policy hold whatever the model says. If one of these rows changes with a model swap, treat it as a bug in a control, not as model variance. This is the payoff of mental model 6: the safety rows were designed not to depend on the model, and the swap is the experiment that proves it.
+
+**Rows that will move, in a direction you can predict.** `generation-ignored-evidence` should shrink, because a real model paraphrases and answers where the demo model's lexical matcher gave up; `abstention_correct` and `hit@1` may rise with it. The withheld-sentence rate may *rise*, because a real model has its own citation style (one marker at the end of a paragraph is common) that the sentence validator rejects; that is the stale-PTO failure below, and the first thing to check if answer quality looks worse than expected. The lexical faithfulness score will drop below 1.0, because real answers paraphrase; that is the judge's weakness showing, not the model's, which is why practical exercise P4 replaces it. Cost per case rises toward the cost model's figures (real token counts, longer answers), and latency becomes meaningful for the first time: the in-process timings in `summary.json` measure only harness overhead.
+
+**Rows that become distributions.** A real model is nondeterministic (mental model 1). `traj_success`, `traj_tool_args`, `abstention_correct` and `attack_detected` will vary from run to run. Run each suite several times, report a mean with an interval, and compare candidate against baseline with Chapter 24's paired comparison, not a single run against a fixed threshold. Real embeddings also change retrieval, so `recall@5` and the stage-isolation table must be re-measured rather than assumed: the 0.996 here says that the fake embedding matches the gold set's vocabulary, not that retrieval is solved.
 
 ### Failure analysis: a valid citation on a stale answer
 
@@ -854,8 +916,8 @@ A readiness review organized by the concerns of Chapter 28's reference architect
 | Cost | Is spend attributed and capped per tenant? | pass | ledger, SpendGuard with degrade then block, alerts |
 | Observability | Can any answer be reproduced from its trace? | pass | manifest fingerprint on every span, `done.lineage` with evidence chunk ids and prompt version |
 | Privacy | Does personal data reach the provider or the traces? | pass | input tokenization, scrub before export, collector deletes content |
-| Deployment | Does the stack start from one command? | partial | image built and smoke-tested; `compose up` blocked by registry outage here |
-| Deployment | Is there a real-provider integration test? | gap | not yet run against a real provider; the switch is `LLM_PROVIDER` plus `NA_MODEL_MAP` |
+| Deployment | Does the stack start from one command? | partial | the image builds and passes the gate in CI; the Compose stack with the Project 3 backend is checked by `docker compose up -d`, the `sync` job and requests against the running API, not yet automated (practical exercise P5) |
+| Deployment | Is there a real-provider integration test? | gap | no integration suite yet; the switch is `LLM_PROVIDER` plus `NA_MODEL_MAP` (practical exercise P2) |
 | State | Do approvals and conversation memory survive a restart? | partial | idempotency, profile memory, audit and agent events persist to files when their paths are set (Compose sets them; the defaults are in memory); pending approvals and session windows are in process memory, and an approval that outlives its requester's context fails closed |
 
 The last row is the most important gap for a real deployment: toolkit's `ApprovalManager` is in memory, so a restart loses pending approvals (the lead sees an empty inbox and the requester's reply silently never goes out). Chapter 38's `InterruptManager` persists approvals with expiry and escalation in SQLite and is the planned replacement; it is practical exercise P1 below.
@@ -874,7 +936,7 @@ The README's runbook covers start and stop, key rotation, reindexing, deletion, 
 
 **Alerts.** Page on symptoms users feel: p95 completion above 8 seconds for 10 minutes, a fast availability burn, the `llm:primary` breaker open for more than 5 minutes, and any request whose final ACL check dropped a hit. Ticket, not page, on drift: abstention rate up a quarter against the previous week, cost per request up a quarter, agent loops, a slow completion burn, telemetry gaps, a tenant crossing 80 percent of its budget before noon, the nightly gate failing.
 
-The trace-derived rules are code: `ops/alerts.yaml` uses Chapter 31's rule format and metric set, and `tests/test_alerts.py` loads it (an unknown metric fails the load), runs healthy traffic through the orchestrator and asserts that nothing fires, then injects a final-check ACL violation and asserts that `cross_tenant_retrieval` pages. Writing that test found a real gap: the root span carried the index version only as `version.index_version` and agent requests carried no prompt version, so Chapter 31's completeness metric rated every capstone trace incomplete and its `telemetry_gaps` alert would have fired permanently. The root now carries `index.version`, `prompt.id`, `prompt.version`, `response.abstained` and, on a final-check violation, `acl.violations` with `error.class=retrieval_contamination`. The breaker and nightly-gate alerts are not trace metrics; they come from `/readyz` scraped as a gauge and from the CI job's status.
+The trace-derived rules are code: `ops/alerts.yaml` uses Chapter 31's rule format and metric set, and `tests/test_alerts.py` loads it (an unknown metric fails the load), runs healthy traffic through the orchestrator and asserts that nothing fires, then injects a final-check ACL violation and asserts that `cross_tenant_retrieval` pages. An alert rule is only as good as the attributes it reads, so the root span carries the keys Chapter 31's completeness metric expects (seam bug 12): `index.version`, `prompt.id`, `prompt.version`, `response.abstained` and, on a final-check violation, `acl.violations` with `error.class=retrieval_contamination`. The breaker and nightly-gate alerts are not trace metrics; they come from `/readyz` scraped as a gauge and from the CI job's status.
 
 ## Failure modes
 
@@ -892,7 +954,7 @@ The trace-derived rules are code: `ops/alerts.yaml` uses Chapter 31's rule forma
 
 ## Tradeoffs
 
-**Composition over rewriting.** Reusing twelve packages meant living with their contracts, and the README records twelve places where a contract was missing or two of them disagreed. Each disagreement was first bridged at the seam so the build could continue, then reported, fixed by the owning package with a test there, and the bridge removed. That costs a round trip per issue; it buys packages that stay correct for every other caller, and a capstone with no private copies of their logic. A rewrite would have been more uniform and would have lost the evidence each package's tests carry.
+**Composition over rewriting.** Reusing twelve packages meant living with their contracts and paying a round trip to the owning package for each seam bug in the table above. It buys packages that stay correct for every other caller, and a capstone with no private copies of their logic. A rewrite would have been more uniform and would have lost the evidence each package's tests carry.
 
 **Two knowledge backends.** The local backend makes the gate fast (about three seconds for 176 cases) and hermetic; the Project 3 backend is the production shape. The cost is that the gate does not test the pgvector path. The mitigation is that both backends implement one interface and one test runs the same request through the Project 3 backend in memory.
 
@@ -904,9 +966,64 @@ The trace-derived rules are code: `ops/alerts.yaml` uses Chapter 31's rule forma
 
 ## Known limitations and extension projects
 
-The limitations, in the order a production team would hit them: pending approvals and conversation windows live in process memory; no integration run against a real provider has been done yet; the offline faithfulness judge is weak; the Compose stack's Project 3 path is unverified against real Postgres and Redis; and the dataset's abstention labels for principal variants are stricter than the truth. The practical exercises below turn the first four into projects with acceptance criteria.
+The limitations, in the order a production team would hit them: pending approvals and conversation windows live in process memory; no integration suite runs against a real provider; the offline faithfulness judge is weak; the Compose stack's Project 3 path against real Postgres and Redis is checked by hand, not in CI; and the dataset's abstention labels for principal variants are stricter than the truth. The practical exercises below turn the first four into projects with acceptance criteria.
+
+## The book in one page
+
+This is the last chapter, so this section looks back over the whole book. Chapter 1 named ten mental models and promised that later chapters would turn them into engineering consequences. The table shows where Northwind Assist enforces each one, and what would fail without it.
+
+| # | Mental model | Where the capstone enforces it | What fails without it |
+|---|---|---|---|
+| 1 | LLM output is probabilistic; design for distributions | the gate judges suites of 10 to 151 cases against thresholds, never one example; safety rows are `must_pass_all` | a prompt change "verified" on three examples ships a regression |
+| 2 | Context is a limited resource | `ContextBuilder` token budget for the agent prompt, `EvidencePacker` with `final_k`, smaller k and shorter answers in the reduced plan | evidence crowds out instructions; cost and latency grow with no quality gain |
+| 3 | Retrieval quality usually dominates generation | hybrid BM25 and dense retrieval, `AuthorityReranker`, recall@5 gated, stage isolation naming the failing stage | the team tunes prompts while the right document never reaches the model |
+| 4 | Evaluate before optimizing | `northwind-assist-eval` exit code blocks the merge; CI runs the ACL-off configuration and expects exit 1; nightly gate | the leaking configuration ships, because retrieval metrics look fine |
+| 5 | Prefer deterministic workflows where the path is known | intent rules pick fixed workflows; the agent loop runs only for tool actions, with step, tool, cost and time budgets and a Definition of Done | a question pays for an agent loop and can reach a side-effecting tool |
+| 6 | The model proposes, code authorizes | toolkit policy, approvals bound to argument hashes, PII re-hydrated only inside the tool layer, `effect_prevented` gated | an injected document sends the directory to an outside mailbox |
+| 7 | Reliability is engineered around the model | breaker inside the gateway, backup model, reduced and static plans, one `Deadline` per request, admission control | a provider outage becomes an outage of the whole assistant |
+| 8 | Model quality alone does not determine application quality | the model is a router parameter per workflow; the stale-PTO bug was in formatting and validation; approval time outweighs the model bill | a model upgrade is expected to fix a validator, a label or a workflow problem |
+| 9 | Observe at the prompt, retrieval and tool level | one trace per request with retrieval, guardrail, model and tool spans, the version manifest on every span, `answer.withheld` on the dashboard | "the answers got worse" cannot be localized to a stage or a version |
+| 10 | Production AI is primarily systems engineering | the composition map: identity, admission, caches, queues, ledger, deployment; the capstone writes almost no AI code | a strong model sits inside a service that leaks, overspends and cannot be debugged |
+
+Read the last column again. None of those failures is exotic: each is a failure mode an earlier chapter described, and several turned up in this build. The book's claim is that they are prevented by ordinary engineering applied in the right places, and the capstone is the evidence.
+
+### Build your own capstone in another domain
+
+The fastest way to own this material is to build the same shape over different data. Pick a domain with real documents and at least one consequential action: for example, a contract-review assistant that drafts redlines for a legal team, a claims-intake assistant that opens cases for an insurer, or an internal platform assistant that files change requests. Then work through the list in order. Each item names the chapter that owns it.
+
+- [ ] Write requirements and SLOs where every line maps to a test, a gate threshold or a document (Chapter 28).
+- [ ] Draw the trust boundaries and write the threat model before the first line of code: who supplies each piece of text, and what could it make the system do (Chapter 26).
+- [ ] Take identity and tenant only from a verified credential, decide them once at the edge, and derive every package's principal from one context object.
+- [ ] Build a gold set of 30 to 50 real questions before the second prompt iteration, with permission variants derived from document ACLs (Chapters 14 and 24).
+- [ ] Apply authorization inside retrieval, check it again after, and evaluate leaks against the source of truth, not the index (Chapter 15).
+- [ ] Start with a workflow; write down the dynamic decision that justifies any agent loop, and give the loop budgets and a Definition of Done (Chapters 17 and 19).
+- [ ] Put every side effect behind policy code, an idempotency key you chose on purpose, and an approval bound to the exact arguments (Chapter 16).
+- [ ] Emit one trace per request with prompt, index and model versions, and redact before the first copy of the data leaves the process (Chapters 27 and 31).
+- [ ] Meter cost per successful answer, cap spend per tenant, and estimate the human time the system creates as well as the model bill (Chapter 30).
+- [ ] Define the degraded plan for a provider outage and test it with an open breaker (Chapter 29).
+- [ ] Add a release gate, then add a deliberately broken configuration to CI that must make it fail (Chapter 25).
+- [ ] Write a readiness review with honest "partial" and "gap" rows, and one failure analysis that traces a wrong answer to its root cause.
+
+If your domain makes one of these items irrelevant, write down why. That sentence is often the most interesting design decision in the project.
+
+### What to learn next
+
+The book covers what a strong software engineer needs to build, evaluate and run AI systems on top of models someone else trained. Several neighboring areas are deliberately shallow here, and each is a reasonable next step depending on where your work goes.
+
+- **Training models from scratch.** Pretraining data pipelines, distributed training, scaling behavior and training-time evaluation. Chapter 33 stops at adapting existing models; this is a different discipline with different tools and budgets.
+- **Multimodal systems.** Images, scanned documents, audio and video as first-class inputs and outputs, beyond the OCR seam in Chapter 11 and the voice case in Chapter 35. The same evaluation discipline applies, but datasets and failure modes differ.
+- **On-device and edge inference.** Small models, aggressive quantization, and the product constraints of running without a server. Chapter 34's serving math is the starting point; memory and power become the binding budgets.
+- **Specific vendors and platforms.** The book is vendor neutral on purpose. When you commit to a provider, a cloud platform or a framework, read its current documentation with Chapter 23's selection criteria in hand, and keep your own evaluation suite as the arbiter.
+- **Research directions.** Interpretability, alignment and preference methods, evaluation of long-horizon agents, and learned retrieval move quickly. Read papers as evidence that an idea can work, then measure it on your data, as the references page advises.
+- **Governance and regulation.** Risk-management frameworks and regulatory regimes increasingly decide what you must document, test and disclose. The readiness review and the threat model in this chapter are the raw material those processes ask for.
+
+### A last word
+
+Models will keep changing, and some of the specific numbers, products and limits in this book will age. The parts that will not age are the habits: decide identity once, put authorization in code, measure before you optimize, make every request leave evidence, and do not trust a gate you have never seen fail. You now have a working system that does all of that, and the tests that prove it. Build the next one in your own domain, keep the evaluation suite honest, and treat the model as what it is: a powerful, unreliable dependency that good engineering makes useful.
 
 ## Exercises
+
+**Start here:** K1, K3, E1, P1, D2 (about 6 hours). The rest go deeper.
 
 ### Knowledge questions
 
@@ -934,15 +1051,15 @@ E4. The service desk wants the assistant to send routine "your ticket was resolv
 
 ### Practical exercises
 
-P1. **Durable approvals.** Replace toolkit's in-memory `ApprovalManager` with Chapter 38's `InterruptManager` (SQLite) for `send_reply`, with a 15-minute expiry and escalation to a second lead after 10 minutes, and persist the requester's context (user, tenant, scopes, groups) with each approval. Acceptance: a pending approval survives an API restart and can be approved afterwards, with policy re-checked against the persisted requester context (the restored approval executes under the persisted scopes and groups, never under defaults); an expired approval cannot be executed; escalation is visible in `GET /v1/approvals`; all existing tests pass.
+P1. (about 4 hours) **Durable approvals.** Replace toolkit's in-memory `ApprovalManager` with Chapter 38's `InterruptManager` (SQLite) for `send_reply`, with a 15-minute expiry and escalation to a second lead after 10 minutes, and persist the requester's context (user, tenant, scopes, groups) with each approval. Acceptance: a pending approval survives an API restart and can be approved afterwards, with policy re-checked against the persisted requester context (the restored approval executes under the persisted scopes and groups, never under defaults); an expired approval cannot be executed; escalation is visible in `GET /v1/approvals`; all existing tests pass.
 
-P2. **Real-provider integration suite.** Add `@pytest.mark.integration` tests that run the grounded-answer, agent and extraction paths against one real provider configured with `LLM_PROVIDER` and `NA_MODEL_MAP`, plus an eval run whose report is compared with the offline reference. Acceptance: skipped by default; with credentials, all pass; the report shows per-stage latency and cost from real spans; no test asserts exact model text.
+P2. (about 3 hours, plus provider credentials) **Real-provider integration suite.** Add `@pytest.mark.integration` tests that run the grounded-answer, agent and extraction paths against one real provider configured with `LLM_PROVIDER` and `NA_MODEL_MAP`, plus an eval run whose report is compared with the offline reference. Acceptance: skipped by default; with credentials, all pass; the report shows per-stage latency and cost from real spans; no test asserts exact model text.
 
-P3. **Intent classifier with a baseline.** Label 200 user messages with their workflow, train or prompt a classifier, and route with it only when its confidence is above a threshold, falling back to the rules. Acceptance: on a held-out set the combined router beats the rules on macro-F1 by at least 5 points, never routes a question to a side-effecting workflow below the threshold, and its decision appears in `meta` and on the `router.decide` span.
+P3. (about 5 hours) **Intent classifier with a baseline.** Label 200 user messages with their workflow, train or prompt a classifier, and route with it only when its confidence is above a threshold, falling back to the rules. Acceptance: on a held-out set the combined router beats the rules on macro-F1 by at least 5 points, never routes a question to a side-effecting workflow below the threshold, and its decision appears in `meta` and on the `router.decide` span.
 
-P4. **Calibrated online judge.** Sample 1 percent of production answers into an evaluation job that runs ragkit's faithfulness judge with a separate model, writes scores as `eval.score` spans joined by `response.id`, and reports agreement with 50 human labels. Acceptance: Cohen's kappa against the human sample is reported per judge version; a judge below 0.6 cannot be used to gate; the dashboard shows faithfulness by version fingerprint.
+P4. (about 4 hours) **Calibrated online judge.** Sample 1 percent of production answers into an evaluation job that runs ragkit's faithfulness judge with a separate model, writes scores as `eval.score` spans joined by `response.id`, and reports agreement with 50 human labels. Acceptance: Cohen's kappa against the human sample is reported per judge version; a judge below 0.6 cannot be used to gate; the dashboard shows faithfulness by version fingerprint.
 
-P5. **Compose end to end.** Bring up the Compose stack with the Project 3 backend, sync the corpus through the worker, and run the security and RAG suites against the running API over HTTP. Acceptance: the same gate passes; a document deleted through the admin API disappears from answers within the freshness SLO; the collector shows one trace per request with the worker's ingestion spans in separate traces.
+P5. (about 4 hours) **Compose end to end.** Bring up the Compose stack with the Project 3 backend, sync the corpus through the worker, and run the security and RAG suites against the running API over HTTP. Acceptance: the same gate passes; a document deleted through the admin API disappears from answers within the freshness SLO; the collector shows one trace per request with the worker's ingestion spans in separate traces.
 
 ### Debugging exercises
 
@@ -962,3 +1079,11 @@ D3. In a load test, p95 time to first `delta` measured at the client is 7.8 seco
 - One tracer, redaction before any backend, and the version manifest on every span turn "what happened?" into a query.
 - Cost per successful answer is the number to manage, and human approval time can dwarf the model bill.
 - A gate earns trust only after it has been seen to fail: run a deliberately broken configuration in CI and expect a non-zero exit.
+
+## Further reading
+
+- **Sculley et al., *Hidden Technical Debt in Machine Learning Systems*.** The short classic on why the model is the small part of the system; read it as the argument behind mental model 10 and this chapter's composition map.
+- **Beyer et al. (eds.), *Site Reliability Engineering*.** SLOs, error budgets and alerting on symptoms; the background for the capstone's SLO table, alerts and runbook.
+- **Nygard, *Release It!*.** Circuit breakers, timeouts, bulkheads and the stability anti-patterns the degraded plans are built to survive.
+- **Kleppmann, *Designing Data-Intensive Applications*.** Idempotence, queues and event logs; the theory behind the idempotency story, the ingestion queue and agent replay.
+- **OWASP Top 10 for Large Language Model Applications.** A shared vocabulary to check the capstone's threat model and security suite against; check the current edition.

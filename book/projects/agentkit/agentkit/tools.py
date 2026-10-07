@@ -276,8 +276,8 @@ def executor_tools(executor: Any, exec_ctx: Any, *, names: set[str] | None = Non
       (toolkit: tool, tenant, user, session, normalized-argument hash). The same action proposed in
       two runs of one session executes once, and so does a re-execution after a crash.
     - "run": pass agentkit's `run_id:request_id`. Duplicates are suppressed only within one
-      run (crash and resume); a new run repeats the action. This was the behavior before the
-      option existed.
+      run (crash and resume); a new run repeats the action. Use it when repeating an action
+      across runs is intended.
     - a callable `(tool_name, arguments, ctx) -> key | None` for anything else, for example a
       business key such as `f"ticket:{arguments['incident_id']}"`; None falls back to content.
     """

@@ -237,7 +237,7 @@ def account_cache_hit(attributes: dict[str, Any]) -> dict[str, Any]:
 
 # ----------------------------------------------------------------------------- OTel GenAI aliases
 # Conceptual equivalents in the OpenTelemetry GenAI semantic conventions. CHECK CURRENT
-# CONVENTIONS: these names were experimental at the time of writing and may have changed.
+# CONVENTIONS: the GenAI semantic conventions are still evolving; pin the version you emit.
 GENAI_ALIASES: dict[str, str] = {
     Attr.LLM_PROVIDER: "gen_ai.provider.name",
     Attr.LLM_MODEL: "gen_ai.request.model",

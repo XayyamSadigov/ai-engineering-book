@@ -1,6 +1,16 @@
 # Chapter 3 — Working with LLM APIs
 
-After this chapter you will be able to call any hosted or self-hosted language model through one interface, stream its output, get validated structured data back, run the tool-calling loop, and wrap all of it in a gateway that retries, respects deadlines, limits rate and concurrency, falls back across models, caches, and accounts for cost. The chapter builds `aie_core`, the shared library every later project in this book imports (`book/projects/aie_core/`). Northwind Assist, the running example, makes its very first model call here.
+This chapter turns a raw HTTP call to a language model into a dependable library call. It builds `aie_core`, the shared client and gateway that every later project imports, and Northwind Assist, the running example, makes its very first model call here.
+
+**You will be able to:**
+- call any hosted or self-hosted model through one provider-neutral interface, and explain what the adapter translates on the wire;
+- stream output with correct cancellation, and get validated structured data back through a bounded repair loop;
+- run the tool-calling protocol by hand: tool specs, tool calls, tool results, and the replay rule;
+- build a gateway that classifies errors, retries with jittered backoff under one deadline, limits rate and concurrency, and falls back across models;
+- account for every call's tokens and cost, including cached input and reasoning tokens;
+- decide when to build this layer yourself and when to adopt a vendor SDK or an off-the-shelf LLM gateway.
+
+**Prerequisites:** Chapter 2 (tokens, prefill and decode, why output is probabilistic). | **Code:** `book/projects/aie_core/` (run: `cd book/projects/aie_core && pytest -q`) | **Builds:** the `aie_core` package.
 
 ## Why this matters
 
@@ -18,7 +28,64 @@ A second model to carry through the chapter: **a completion is a transaction wit
 
 ## Core concepts
 
-The subsections below fall into three groups. The first group, from messages through tokens and usage, describes what one call looks like on the wire. The second, from the error taxonomy through cost accounting, is the gateway: what wraps that call so it survives production. Its first pieces build on each other: errors must be classified before you can retry, retries need a deadline, and deadlines do not protect the provider's quota, so you need a rate limiter. The last group carries the same shape over to embeddings. The flowchart in the Architecture section draws the whole gateway as one picture, and it is worth a glance now.
+The subsections below fall into three groups. The first group, from one raw call through tokens and usage, describes what one call looks like on the wire. The second, from the error taxonomy through cost accounting, is the gateway: what wraps that call so it survives production. Its first pieces build on each other: errors must be classified before you can retry, retries need a deadline, and deadlines do not protect the provider's quota, so you need a rate limiter. The last group carries the same shape over to embeddings. The flowchart in the Architecture section draws the whole gateway as one picture, and it is worth a glance now.
+
+### One call on the wire
+
+Strip away every library and a model call is one HTTPS POST with a JSON body. The listing below uses the OpenAI-dialect shape, which many servers speak; the URL, model name, and key variable are placeholders, and other providers spell some fields differently (next sections).
+
+```python
+# Illustrative: one chat completion over raw HTTP (OpenAI-dialect shape, placeholder URL and model)
+import os
+import httpx
+
+resp = httpx.post(
+    "https://llm.example.com/v1/chat/completions",
+    headers={"Authorization": f"Bearer {os.environ['LLM_API_KEY']}"},
+    json={
+        "model": "example-model",
+        "messages": [
+            {"role": "system", "content": "You are Northwind Assist, an internal helper."},
+            {"role": "user", "content": "What is the refund deadline for retail customers?"},
+        ],
+        "temperature": 0,
+        "max_tokens": 200,
+    },
+    timeout=10.0,
+)
+resp.raise_for_status()
+body = resp.json()
+print(body["choices"][0]["message"]["content"], body["usage"])
+```
+
+The response body (abridged, illustrative) carries the three things every later section depends on: the generated message, the reason generation stopped, and metered usage.
+
+```json
+{
+  "choices": [{"message": {"role": "assistant", "content": "Retail refunds ..."},
+               "finish_reason": "stop"}],
+  "usage": {"prompt_tokens": 41, "completion_tokens": 18}
+}
+```
+
+That one call already contains every problem this chapter solves. `raise_for_status` turns a 429 and a 400 into the same exception, though one should be retried and the other never. The ten-second timeout applies to one attempt, not to the caller's budget. Nothing limits how many of these run at once, nothing records what they cost, and the dictionary paths are one provider's spelling. Here is the same call through `aie_core`:
+
+```python
+from aie_core import CompletionRequest, Message, make_llm_client
+
+client = make_llm_client()  # FakeLLM offline; a ModelGateway around the real adapter when LLM_PROVIDER is set
+completion = client.complete(CompletionRequest(
+    messages=[
+        Message.system("You are Northwind Assist, an internal helper."),
+        Message.user("What is the refund deadline for retail customers?"),
+    ],
+    max_tokens=200,
+    timeout_s=10.0,
+))
+print(completion.text, completion.finish_reason, completion.usage)
+```
+
+The call site looks no simpler. What changed is behind it: neutral types instead of one vendor's JSON, classified errors, retries under one deadline, rate and concurrency limits, fallback, caching, cost, and a trace span. The rest of the chapter builds those pieces in that order.
 
 ### Messages and roles
 
@@ -31,18 +98,7 @@ Every chat-style API accepts a list of messages, each tagged with a role. Four r
 
 The model is stateless. Every request carries the entire conversation it should know about; the "memory" a chat product appears to have is the client re-sending history. This is why context engineering (Chapter 5) is a client-side discipline and why token counting matters: history grows with every turn and you pay for all of it each time.
 
-`aie_core` models this with `Message`, which has four constructors so that call sites read like the conversation they build:
-
-```python
-from aie_core import Message
-
-messages = [
-    Message.system("You are Northwind Assist, an internal helper for Northwind employees."),
-    Message.user("What is the refund deadline for retail customers?"),
-]
-```
-
-Content is either a string or a list of `ContentPart` objects for multimodal input (text and image references). Nearly all code in this book uses the string form.
+`aie_core` models this with `Message`, which has four constructors (`Message.system`, `.user`, `.assistant`, `.tool`) so that call sites read like the conversation they build, as in the listing above. Content is either a string or a list of `ContentPart` objects for multimodal input (text and image references). Nearly all code in this book uses the string form.
 
 ### System prompts
 
@@ -82,7 +138,7 @@ Finally, retries and streams interact badly. A failure before the first byte can
 
 Downstream code wants typed objects. There are three ways to get them, in decreasing order of reliability:
 
-1. **Schema mode.** The request carries a JSON Schema and the provider constrains decoding (Chapter 2) so the output is guaranteed to parse and to match the schema's shape. This is `response_schema` in `CompletionRequest`, sent as `response_format` of type `json_schema` in the OpenAI dialect. The guarantee holds only in that dialect's strict mode, which the adapter sends when constructed with `strict_schemas=True`; the default is off because strict mode restricts which schema features are accepted.
+1. **Schema mode.** The request carries a JSON Schema and the provider constrains decoding so the output is guaranteed to parse and to match the schema's shape (Chapter 6 explains how constrained decoding works and where it falls short). This is `response_schema` in `CompletionRequest`, sent as `response_format` of type `json_schema` in the OpenAI dialect. The guarantee holds only in that dialect's strict mode, which the adapter sends when constructed with `strict_schemas=True`; the default is off because strict mode restricts which schema features are accepted.
 2. **Tool as schema.** A server that has tool calling but no schema mode can be forced to call a single tool whose parameter schema is your output schema. The "arguments" of that call are your structured result. The Anthropic-dialect adapter in this book emulates `response_schema` this way, with a forced tool named `emit_structured_output`, and presents the result as JSON text so callers cannot tell the difference. Some servers of that dialect now offer a native schema mode as well.
 3. **Prompt and parse.** Describe the schema in the prompt, parse whatever comes back. Weakest, but universal, and the fallback for servers that support neither of the above.
 
@@ -107,6 +163,8 @@ Two details trip people. The assistant message with tool calls must be replayed 
 
 Providers meter in tokens, the units their tokenizer splits text into (Chapter 2). You need counts at two moments. Before the call, to budget context and to feed the rate limiter, you can only estimate: `count_tokens` uses `tiktoken` when it is installed and can load a vocabulary, and a characters-divided-by-four heuristic otherwise. `count_message_tokens` adds a small per-message overhead for role markers and framing. Neither is exact for every model; treat estimates as estimates and leave headroom. After the call, the provider reports exact `usage`: input tokens, output tokens, and how many input tokens were served from a prompt cache. `Completion.usage` normalizes all three across providers, and the gateway turns them into cost and into attributes on a span (one timed record of an operation; Chapter 31 assembles spans into request trees). Record usage on every call; it is the only exact record of what you are paying for.
 
+**Reasoning tokens.** Reasoning models (Chapter 2) generate hidden "thinking" tokens before the visible answer. Several consequences reach the API layer. They are billed as output tokens, at the output rate, even though you never see most of them. They count against `max_tokens` on most APIs, so a budget sized for the visible answer can be spent entirely on thinking, leaving an empty or truncated reply with `finish_reason` `length`; size `max_tokens` for both, or use the provider's separate reasoning budget or effort setting where one exists. They make cost per request much more variable: two requests with identical visible answers can differ several-fold in billed output, so watch the distribution of `output_tokens`, not just its mean. And providers that report them separately do so in a detail field of usage; this `Usage` type does not break them out (they are inside `output_tokens`), but the vendor payload in `Completion.raw` still carries the field if you want to chart thinking on its own. One more consequence matters in tool loops: some providers return the reasoning as opaque items (sometimes encrypted) that must be sent back verbatim on the next turn alongside the tool results. The neutral `Message` type here has no slot for them, so a loop built on it drops them; Chapter 19 covers storing provider items in the agent's event log so they survive replay.
+
 ### Error taxonomy
 
 Everything so far assumed the call succeeds. The rest of the gateway exists because it often does not, and the first decision on any failure is whether to try again. Vendors return dozens of error codes. The gateway needs exactly one bit from each: can retrying possibly help? `aie_core` maps every provider failure into six classes, each carrying `retryable` and an optional `retry_after_s` hint.
@@ -130,7 +188,11 @@ Retries have an idempotency problem that LLM calls mostly dodge. A plain complet
 
 ### Timeouts and deadline propagation
 
-Retries spend time, so they need a ceiling. A timeout without a deadline is a trap. If each attempt gets sixty seconds and you allow three attempts with backoff, a caller who expected sixty seconds can wait more than three minutes. The gateway therefore computes one deadline when the call starts (`timeout_s` on the request or the gateway default) and derives every per-attempt timeout from what remains. Before sleeping for a backoff delay it checks whether the sleep still fits; if not, it skips straight to the next client in the fallback chain (see Model fallbacks) or gives up. Before trying a fallback it checks whether any time is left. The deadline also propagates *into* the adapter as the HTTP read timeout, so a single stuck connection cannot outlive the caller's patience. One caveat in this implementation: the remaining time is computed when the attempt starts, before it waits on the rate limiter and concurrency semaphore, so under heavy queueing an attempt can run past the deadline by the time it spent queued. When the budget runs out between attempts, the error you get is a `TimeoutError` chained (as `__cause__`) to the last provider error; when it runs out before any attempt could start, for example while waiting on the rate limiter, the `TimeoutError` has no cause. These gateway-raised timeouts are marked non-retryable, so they end the call at once rather than moving on to fallbacks, unlike a provider timeout, which the table above lists as retryable.
+Retries spend time, so they need a ceiling. A timeout without a deadline is a trap. If each attempt gets sixty seconds and you allow three attempts with backoff, a caller who expected sixty seconds can wait more than three minutes.
+
+The fix is to compute one deadline when the call starts (`timeout_s` on the request or the gateway default) and derive everything from what remains of it. Each attempt's timeout is the remaining time, not a fresh sixty seconds. Before sleeping for a backoff delay, the gateway checks whether the sleep still fits; if not, it skips straight to the next client in the fallback chain (see Model fallbacks) or gives up. Before trying a fallback, it checks whether any time is left. And the deadline propagates *into* the adapter as the HTTP read timeout, so a single stuck connection cannot outlive the caller's patience.
+
+Two edge cases shape what callers see. When the budget runs out between attempts, the error is a `TimeoutError` chained (as `__cause__`) to the last provider error, so a caller can tell "the provider is broken" from "we ran out of time"; when it runs out before any attempt could start, for example while waiting on the rate limiter, the `TimeoutError` has no cause. And these gateway-raised timeouts are marked non-retryable, so they end the call at once rather than moving on to fallbacks, unlike a provider timeout, which the table above lists as retryable. One accounting gap in this implementation is listed under Known limitations at the end of the Code walkthrough.
 
 Chapter 29 extends this with circuit breakers and admission control at the service level; here the unit is one call.
 
@@ -146,8 +208,6 @@ The limiter is per process. Provider quotas are per account or per key, so four 
 
 Rate limits bound throughput; concurrency limits bound how many requests are in flight at once. They are different knobs, linked by Little's law: the number of requests in flight equals arrival rate times latency. Twenty requests per second with five-second latency means a hundred concurrent connections, each holding a socket, memory for the response, and a slot in the provider's queue. The gateway holds a `threading.BoundedSemaphore` for synchronous callers and an `asyncio.Semaphore` for async ones, both sized by `max_concurrency`. Async is the natural fit for fan-out, such as embedding a batch or running several retrieval queries in parallel: `asyncio.gather` over `gateway.acomplete` gives you concurrency without threads, and the semaphore keeps the fan-out from becoming a flood.
 
-One asyncio detail shapes the implementation. An asyncio primitive is tied to the event loop that first uses it, and each `asyncio.run` creates a new loop. The gateway therefore keeps one `asyncio.Semaphore` per running loop; otherwise code that calls `asyncio.run` repeatedly against a shared gateway, common in scripts and task workers, fails under contention with "bound to a different event loop". The semaphores do not share a count, so a process can have up to `max_concurrency` calls in flight for sync callers plus `max_concurrency` per running event loop.
-
 ### Batching
 
 Concurrency raises throughput for work someone is waiting on. For work nobody is waiting on, the cheaper lever is batching, a word used for two unrelated things. Client-side batching groups independent calls so they run concurrently, which is just fan-out with a semaphore. Provider batch APIs are a different product: you upload a file of requests, the provider processes them asynchronously within a window of hours, and you download results, typically at a steep discount. Use them for anything that is not interactive: nightly ticket classification, re-embedding a corpus, generating evaluation data. Do not use them for anything a person is waiting on. `aie_core` does not wrap batch APIs because their shape is provider-specific and job-oriented; Chapter 30 shows where they slot in.
@@ -162,23 +222,21 @@ It is also only safe when the key includes everything that makes the answer spec
 
 The gateway supports scoping through `metadata["cache_scope"]` (for example `"tenant:retail"`), the one metadata field that enters the key, and `require_cache_scope=True` makes a multi-tenant gateway refuse to cache any request that arrives without a scope, so a forgotten field costs hit rate rather than leaking data. Chapter 30 generalizes this into scoped caches with lint checks on key components.
 
-**Provider prompt caching** happens on the provider's side, out of your code's sight. The provider reuses the computation for a prefix of the prompt it has recently seen (the transformer prefill, Chapter 2), charges less for those tokens, and reports them as cached input tokens. You benefit by keeping the stable part of the prompt first and byte-identical: system prompt, tool definitions, shared documents, then the volatile user content. A timestamp at the top of a system prompt silently destroys this. `Usage.cached_input_tokens` is how you measure whether it is working, and the pricing table charges cached tokens at a separate rate so the savings show up in cost accounting.
+**Provider prompt caching** happens on the provider's side: it reuses the prefill computation for a prompt prefix it has recently seen (Chapter 2 explains why that works) and bills those tokens at a reduced rate. Your code's part is to measure it: `Usage.cached_input_tokens` divided by `input_tokens` is the hit rate, and the pricing table charges cached tokens separately so the savings show up in cost. Chapter 5 owns the practice of laying prompts out so the prefix stays stable, and Chapter 30 owns the cost math.
 
 ### Model fallbacks
 
-When retries on the primary are exhausted and the deadline still has time left, the gateway can try a different model. A fallback chain buys a great deal of availability, and it is also where breakage hides. The gateway moves to each fallback in turn. Four things can break when the fallback is a different model or provider: context length (the fallback may reject a prompt the primary accepted), tool support (the fallback may not call tools, or may call them differently), schema support (the fallback may not have a schema mode; the adapter emulates where it can), and behavior (the fallback may answer differently enough to fail your evaluations). Test the fallback path in CI with the fakes, run your evaluation set against the fallback model before you need it, and record `provider` and `model` on every span so you can tell during an incident which model actually answered. One interaction with caching to know about: the response-cache key uses the primary model's name, so an answer produced by a fallback is stored and later served as if the primary had produced it, until the entry expires. If that matters for your feature, set `metadata={"cache": False}` on those requests, or subclass the gateway to skip storing a completion whose `model` differs from the primary's. Whether to fall back at all is a product decision; see Tradeoffs.
+When retries on the primary are exhausted and the deadline still has time left, the gateway can try a different model. A fallback chain buys a great deal of availability, and it is also where breakage hides. The gateway moves to each fallback in turn. Four things can break when the fallback is a different model or provider: context length (the fallback may reject a prompt the primary accepted), tool support (the fallback may not call tools, or may call them differently), schema support (the fallback may not have a schema mode; the adapter emulates where it can), and behavior (the fallback may answer differently enough to fail your evaluations). Test the fallback path in CI with the fakes, run your evaluation set against the fallback model before you need it, and record `provider` and `model` on every span so you can tell during an incident which model actually answered. The response cache has one interaction with fallbacks, listed under Known limitations. Whether to fall back at all is a product decision; see Tradeoffs.
 
 ### Cost accounting
 
-Cost is usage times price, and cached input is billed at its own rate: a request with 340 input tokens, 200 of them cached, and 25 output tokens is billed at three rates, and without the split a 60% prompt-cache hit would be invisible in the spend report. `PricingTable` holds prices per million tokens for input, cached input, and output, keyed by model name with prefix matching so dated model variants inherit the base price. Every number you put in it is illustrative and will be stale; load it from configuration, not code. The gateway attaches `cost_usd` to each completion's `raw` dictionary and to the span, so cost per request, per user, per feature, and per fallback appears wherever your traces go. A response-cache hit is recorded as zero cost plus an `avoided_cost_usd`; keeping the two separate is what stops a cache from inflating the spend report while still showing its value. Chapter 30 builds the cost model on top of this.
+Cost is usage times price, and cached input is billed at its own rate: a request with 340 input tokens, 200 of them cached, and 25 output tokens is billed at three rates, and without the split a 60% prompt-cache hit would be invisible in the spend report. `PricingTable` holds prices per million tokens for input, cached input, and output, keyed by model name with prefix matching so dated model variants inherit the base price. Every number you put in it is illustrative and will be stale; load it from configuration, not code. The gateway attaches `cost_usd` to each completion's `raw` dictionary and to the span, so cost per request, per user, per feature, and per fallback appears wherever your traces go. A response-cache hit is recorded as zero cost plus an `avoided_cost_usd`; keeping the two separate is what stops a cache from inflating the spend report while still showing its value.
+
+Reasoning tokens distort this accounting in a way averages hide. They arrive inside `output_tokens` and are billed at the output rate, which is usually several times the input rate, so a reasoning model can make a short visible answer the most expensive line of the request. Two consequences follow. Cost per request becomes long-tailed, so report percentiles of cost per request, not only the mean. And comparing models by their price per million tokens misleads when one of them thinks and the other does not; compare cost per completed task on your own traffic instead. Chapter 30 builds the cost model on top of this.
 
 ### Embedding clients and the embedding space
 
-The same library carries the embedding side, because every retrieval chapter needs it and it has the same remote, metered, failure-prone shape as completion. `EmbeddingClient` is a protocol with two attributes and two methods: `model`, `dimensions`, `embed(texts)` for documents, and `embed_query(text)` for queries, kept separate because some embedding models expect different instructions for the two sides (Chapter 8). `OpenAICompatibleEmbeddings` sends inputs in batches of `batch_size`. It checks that the response holds exactly one vector per input with indices 0 to n-1 and restores that order, because a provider may return vectors out of order and a silent shift would pair every text with the wrong vector. It learns `dimensions` from the first response when you do not set it, and it maps failures into the same error taxonomy. It does not retry: indexing jobs should wrap it with the retry and deadline primitives of Chapter 29, and query-time callers usually prefer one fast failure. `FakeEmbeddings` derives each vector from a hash of the text's tokens, so the same text always gets the same vector, or, with a `vocabulary`, embeds bag-of-words counts so that tests can control which texts are close.
-
-`CachedEmbeddings` wraps any client so repeated texts are embedded once, and its key needs care. Two vectors can be compared only if they come from the same **embedding space**: same provider, same model, same output dimensionality, the same instruction or prefix prepended to the text, and the same text preparation (cleaning and chunk rendering). A cache keyed on model name and text alone would hand back a vector from the old space after you changed an instruction or truncated dimensions, and nothing would fail: cosine similarity still returns numbers, retrieval recall quietly collapses. So the wrapper hashes all five properties into a `space_fingerprint` and puts it in front of the text in every key; changing any of them changes every key, which invalidates the cache instead of mixing spaces. Suppose Northwind indexes its handbook at 1,536 dimensions and later switches to 768 to save storage: a cache keyed on model and text would keep returning 1,536-dimension vectors for unchanged paragraphs, while the fingerprint changes and forces every paragraph to be re-embedded, which is the correct behavior.
-
-Wrappers can stack, for example a cache around a retrying client, so provider, model, and dimensions are read from the real client at the bottom of the stack; the instruction and `text_prep_version` belong to the cache wrapper itself. The fingerprint is frozen at construction, and a client whose dimensionality is learned lazily contributes `"unknown"` rather than changing keys mid-life, because a key that changed after the first response would orphan every entry written before it. Bump `text_prep_version` whenever you change cleaning or chunk rendering. Store the same fingerprint next to the vectors in your index, which is what Chapter 8's namespaced store and Chapter 9's `index:model:version` namespaces do, so a query embedded in one space is never searched against vectors from another.
+The same library carries the embedding side, because every retrieval chapter needs it and it has the same remote, metered, failure-prone shape as completion. `EmbeddingClient` is a protocol with two attributes and two methods: `model`, `dimensions`, `embed(texts)` for documents, and `embed_query(text)` for queries, kept separate because some embedding models expect different instructions for the two sides. `OpenAICompatibleEmbeddings` sends inputs in batches, checks that the response holds exactly one vector per input and restores input order (a silent shift would pair every text with the wrong vector), and maps failures into the same error taxonomy. It does not retry: indexing jobs should wrap it with the retry and deadline primitives of Chapter 29, and query-time callers usually prefer one fast failure. `FakeEmbeddings` derives each vector deterministically from the text so tests run offline. `CachedEmbeddings` wraps any client so repeated texts are embedded once; its key includes a fingerprint of the embedding space, because vectors from two different spaces still produce cosine scores, just meaningless ones. Chapter 8 owns embedding spaces and what goes into that fingerprint.
 
 ## How it works
 
@@ -255,7 +313,7 @@ sequenceDiagram
 
 ## Implementation
 
-The library layout. Files marked with an asterisk are shown in full or in excerpt below; everything is on disk and tested.
+The library layout. Files marked with an asterisk are shown in excerpt below; every file is on disk and tested.
 
 ```
 book/projects/aie_core/
@@ -280,7 +338,7 @@ book/projects/aie_core/
         openai_compat.py     * OpenAI-dialect adapter
         anthropic.py         * Anthropic-dialect adapter
         fake.py              * FakeLLM
-  tests/                       118 offline tests
+  tests/                       offline test suite
 ```
 
 Runtime dependencies are `pydantic`, `pydantic-settings`, `httpx`, and `numpy`; `tiktoken` and `opentelemetry-sdk` are optional extras (`pyproject.toml` on disk). Integration tests are marked and excluded by default through `addopts`.
@@ -312,38 +370,10 @@ You do not need to read every excerpt with equal care. Read Types and Gateway cl
 
 ### Types
 
-Look for what is absent: no vendor field names anywhere, and `raw` as the only escape hatch to the provider's payload.
+The request, the response, and the stream event, with `Role`, `ContentPart`, `ToolSpec`, and the convenience methods on disk. Look for what is absent: no vendor field names anywhere, and `raw` as the only escape hatch to the provider's payload.
 
 ```python
-# path: book/projects/aie_core/aie_core/llm/types.py
-"""Provider-neutral request and response types.
-
-Every provider adapter translates *to* these types on the way in and *from* them on
-the way out, so application code never sees a vendor payload.
-"""
-from __future__ import annotations
-
-from enum import Enum
-from typing import Any, Literal
-
-from pydantic import BaseModel, Field
-
-
-class Role(str, Enum):
-    SYSTEM = "system"
-    USER = "user"
-    ASSISTANT = "assistant"
-    TOOL = "tool"
-
-
-class ContentPart(BaseModel):
-    """One piece of multimodal content. Text-only callers never build these by hand."""
-
-    type: Literal["text", "image_url"]
-    text: str | None = None
-    image_url: str | None = None
-
-
+# path: book/projects/aie_core/aie_core/llm/types.py (excerpt; full file on disk)
 class ToolCall(BaseModel):
     """A request from the model to run a tool. `arguments` is already parsed JSON."""
 
@@ -359,49 +389,13 @@ class Message(BaseModel):
     tool_call_id: str | None = None
     name: str | None = None
 
-    @classmethod
-    def system(cls, text: str) -> "Message":
-        return cls(role=Role.SYSTEM, content=text)
-
-    @classmethod
-    def user(cls, text: str) -> "Message":
-        return cls(role=Role.USER, content=text)
-
-    @classmethod
-    def assistant(cls, text: str) -> "Message":
-        return cls(role=Role.ASSISTANT, content=text)
-
-    @classmethod
-    def tool(cls, tool_call_id: str, content: str) -> "Message":
-        return cls(role=Role.TOOL, content=content, tool_call_id=tool_call_id)
-
-    @property
-    def text(self) -> str:
-        """Content flattened to a string (image parts are dropped)."""
-        if isinstance(self.content, str):
-            return self.content
-        return "".join(p.text or "" for p in self.content if p.type == "text")
-
-
-class ToolSpec(BaseModel):
-    """What the model is told about a tool. `parameters` is a JSON Schema object."""
-
-    name: str
-    description: str
-    parameters: dict[str, Any] = Field(default_factory=lambda: {"type": "object", "properties": {}})
+    # ... constructors system(), user(), assistant(), tool() and the text property on disk ...
 
 
 class Usage(BaseModel):
     input_tokens: int = 0
     output_tokens: int = 0
     cached_input_tokens: int = 0
-
-    def __add__(self, other: "Usage") -> "Usage":
-        return Usage(
-            input_tokens=self.input_tokens + other.input_tokens,
-            output_tokens=self.output_tokens + other.output_tokens,
-            cached_input_tokens=self.cached_input_tokens + other.cached_input_tokens,
-        )
 
 
 class CompletionRequest(BaseModel):
@@ -426,13 +420,7 @@ class Completion(BaseModel):
     latency_ms: float = 0.0
     raw: dict[str, Any] | None = None
 
-    @property
-    def text(self) -> str:
-        return self.message.text
-
-    @property
-    def tool_calls(self) -> list[ToolCall]:
-        return list(self.message.tool_calls or [])
+    # ... text and tool_calls properties on disk ...
 
     @property
     def truncated(self) -> bool:
@@ -443,33 +431,13 @@ class Completion(BaseModel):
 
 
 class StreamEvent(BaseModel):
-    """One incremental event from a streaming completion.
-
-    `text_delta` carries a text fragment. `tool_call_delta` carries one *complete* tool
-    call: argument JSON arrives in fragments that cannot be validated until the call is
-    closed, so adapters buffer and emit the call once. `usage` arrives at the end when the
-    provider reports it. `done` is always the last event of a successful stream.
-    """
-
+    # ... docstring on disk ...
     type: Literal["text_delta", "tool_call_delta", "usage", "done", "error"]
     text: str | None = None
     tool_call: ToolCall | None = None
     usage: Usage | None = None
     error: str | None = None
     finish_reason: str | None = None
-
-
-__all__ = [
-    "Role",
-    "ContentPart",
-    "ToolCall",
-    "Message",
-    "ToolSpec",
-    "Usage",
-    "CompletionRequest",
-    "Completion",
-    "StreamEvent",
-]
 ```
 
 ### Errors
@@ -477,7 +445,7 @@ __all__ = [
 The base class, one representative subclass (the other five differ only in name, docstring, and `default_retryable`), and the HTTP mapping. Transport-level mapping for timeouts and connection errors lives in `providers/_http.py` and follows the same pattern. Notice that only the status code and the message decide the class, and the retryable flag lives on the class.
 
 ```python
-# path: book/projects/aie_core/aie_core/llm/errors.py  (excerpt)
+# path: book/projects/aie_core/aie_core/llm/errors.py (excerpt; full file on disk)
 
 class LLMError(Exception):
     """Base class. `retryable` drives retry and fallback; `retry_after_s` is a provider hint."""
@@ -548,7 +516,7 @@ def map_http_error(
 The accumulator's `feed` is the whole format; the async variant on disk is identical with `async for`. Watch the blank-line branch: it is the only place `feed` emits an event, and `flush` handles a stream that ends without its final blank line.
 
 ```python
-# path: book/projects/aie_core/aie_core/llm/providers/_sse.py  (excerpt)
+# path: book/projects/aie_core/aie_core/llm/providers/_sse.py (excerpt; full file on disk)
 
 class _Accumulator:
     # ... other members omitted; full file on disk ...
@@ -590,10 +558,10 @@ def iter_sse(lines: Iterable[str]) -> Iterator[SSEEvent]:
 
 ### OpenAI-dialect adapter
 
-Request encoding and the stream state machine. The full file adds `parse_completion` (the inverse translation, which also raises `ContentFilterError` on that finish reason), `complete`, the async twins, and `close` methods. In the stream state machine, follow how tool-call argument fragments accumulate per index until the call closes.
+Request encoding and the stream state machine. The file on disk adds `_encode_message` (one message to the dialect's JSON), `parse_completion` (the inverse translation, which also raises `ContentFilterError` on that finish reason), `complete`, `stream` (which posts the payload, maps HTTP errors, and feeds each SSE `data` field to the state machine), the async twins, and `close`. In the state machine, follow how tool-call argument fragments accumulate per index until the call closes.
 
 ```python
-# path: book/projects/aie_core/aie_core/llm/providers/openai_compat.py  (excerpt)
+# path: book/projects/aie_core/aie_core/llm/providers/openai_compat.py (excerpt; full file on disk)
 
 class OpenAICompatibleClient:
     # ... other members omitted; full file on disk ...
@@ -632,40 +600,7 @@ class OpenAICompatibleClient:
             payload.setdefault(key, value)
         return payload
 
-    def _encode_message(self, m: Message) -> dict[str, Any]:
-        if m.role == Role.TOOL:
-            return {"role": "tool", "tool_call_id": m.tool_call_id or "", "content": m.text}
-        out: dict[str, Any] = {"role": m.role.value, "content": self._encode_content(m.content)}
-        if m.name:
-            out["name"] = m.name
-        if m.role == Role.ASSISTANT and m.tool_calls:
-            out["tool_calls"] = [
-                {
-                    "id": tc.id,
-                    "type": "function",
-                    "function": {"name": tc.name, "arguments": json.dumps(tc.arguments, ensure_ascii=False)},
-                }
-                for tc in m.tool_calls
-            ]
-            if out["content"] == "":
-                out["content"] = None
-        return out
-
-    def stream(self, req: CompletionRequest) -> Iterator[StreamEvent]:
-        payload = self.build_payload(req, stream=True)
-        state = _OpenAIStreamState(self.provider)
-        try:
-            with self._client.stream(
-                "POST", "/chat/completions", json=payload, timeout=timeout_for(req.timeout_s, self.timeout_s)
-            ) as resp:
-                if not resp.is_success:
-                    resp.read()
-                raise_for_status(resp, self.provider)
-                for sse in iter_sse(resp.iter_lines()):
-                    yield from state.handle(sse.data)
-        except httpx.HTTPError as exc:
-            raise map_transport_error(exc, self.provider) from exc
-        yield from state.finish()
+    # ... _encode_message, parse_completion, complete, stream, and the async twins on disk ...
 
 
 class _OpenAIStreamState:
@@ -710,7 +645,7 @@ class _OpenAIStreamState:
 Only the part that differs in kind rather than spelling: message merging. Structured-output emulation through a forced tool, response parsing, usage normalization, and the typed stream state machine are on disk with the same structure as above.
 
 ```python
-# path: book/projects/aie_core/aie_core/llm/providers/anthropic.py  (excerpt)
+# path: book/projects/aie_core/aie_core/llm/providers/anthropic.py (excerpt; full file on disk)
 
 class AnthropicClient:
     # ... other members omitted; full file on disk ...
@@ -751,7 +686,7 @@ class AnthropicClient:
 Policies and admission first. `cache_key` (on disk) hashes a canonical JSON of model, messages, tools, tool choice, response schema, temperature, max tokens, and stop list.
 
 ```python
-# path: book/projects/aie_core/aie_core/llm/gateway.py  (excerpt)
+# path: book/projects/aie_core/aie_core/llm/gateway.py (excerpt; full file on disk)
 
 class RetryPolicy(BaseModel):
     max_attempts: int = 3
@@ -796,10 +731,10 @@ class RateLimiter:
             return wait
 ```
 
-Then the gateway itself. Four small helpers are on disk and described in the walkthrough: `_with_remaining` copies the request with the time left, `_plan_retry` asks the policy for a delay, `_fits` checks that delay against the deadline, `_give_up` converts a deadline-driven stop into `TimeoutError`. `_open_stream` does admission and pulls the first event for `stream`. The async methods mirror the synchronous ones with `await`. In the code, find the two nested loops (clients outside, attempts inside) and the two places the remaining time is checked against `deadline`.
+Then the gateway itself. Four small helpers are on disk and described in the walkthrough: `_with_remaining` copies the request with the time left, `_plan_retry` asks the policy for a delay, `_fits` checks that delay against the deadline, `_give_up` converts a deadline-driven stop into `TimeoutError`. `_open_stream` does admission and pulls the first event for `stream`, and `_relay`, shown in part, forwards the remaining events and cleans up. The async methods mirror the synchronous ones with `await`. In the code, find the two nested loops (clients outside, attempts inside) and the two places the remaining time is checked against `deadline`.
 
 ```python
-# path: book/projects/aie_core/aie_core/llm/gateway.py  (excerpt)
+# path: book/projects/aie_core/aie_core/llm/gateway.py (excerpt; full file on disk)
 
 class ModelGateway:
     # ... other members omitted; full file on disk ...
@@ -855,27 +790,14 @@ class ModelGateway:
     def _relay(self, opened: _OpenStream, client: LLMClient, req: CompletionRequest, attempt: int) -> Iterator[StreamEvent]:
         usage, finish = Usage(), "stop"
         try:
-            events = opened.iterator
-            assert isinstance(events, Iterator)
-            for ev in _chain_first(opened.first, events):
-                if ev.type == "usage" and ev.usage is not None:
-                    usage = ev.usage
-                elif ev.type == "done" and ev.finish_reason:
-                    finish = ev.finish_reason
+            # ... forward each event, remembering usage and finish_reason ...
                 yield ev
         except BaseException as exc:
             opened.span.record_exception(exc)
             raise
         finally:
             self._sem.release()
-            model = self._model_for(client, req) or ""
-            summary = Completion(
-                message=req.messages[-1], usage=usage, finish_reason=finish, model=model, provider=client.provider,
-                latency_ms=(self._clock() - opened.started) * 1000,
-            )
-            self._fill_span(opened.span, self._annotate(summary, cache_hit=False, attempt=attempt), cache_hit=False)
-            opened.span.finish()
-            self.tracer.export(opened.span)
+            # ... build a summary Completion, fill the span, finish and export it ...
 
     def stream(self, req: CompletionRequest) -> Iterator[StreamEvent]:
         """Retries and fallbacks apply only until the first event has been yielded: once bytes
@@ -890,29 +812,17 @@ class ModelGateway:
                 try:
                     opened = self._open_stream(client, req, attempt, deadline)
                 except LLMError as err:
-                    last_error = err
-                    if not err.retryable:
-                        raise
-                    delay = self._plan_retry(err, attempt)
-                    if delay is None:
-                        break
-                    if not self._fits(delay, deadline):
-                        deadline_hit = True
-                        break
-                    self._sleep(delay)
+                    # ... same retry, deadline, and fallback decisions as complete() ...
                     continue
                 yield from self._relay(opened, client, req, attempt)
                 return
-            if self._clock() >= deadline:
-                deadline_hit = True
-                break
-        raise self._give_up(last_error, deadline_hit)
+            # ... deadline check and _give_up as in complete() ...
 ```
 
 ### Structured output
 
 ```python
-# path: book/projects/aie_core/aie_core/llm/structured.py  (excerpt)
+# path: book/projects/aie_core/aie_core/llm/structured.py (excerpt; full file on disk)
 
 def extract_json(text: str) -> str:
     """Strip Markdown fences and leading prose so `json.loads` sees the object itself."""
@@ -966,40 +876,10 @@ def complete_structured(
     )
 ```
 
-### Embedding cache keys
-
-```python
-# path: book/projects/aie_core/aie_core/embeddings.py  (excerpt)
-
-class CachedEmbeddings:
-    # ... other members omitted; full file on disk ...
-
-    def _compute_fingerprint(self) -> str:
-        real = self.innermost
-        dims = getattr(real, "dimensions", 0) or None
-        material = {
-            "provider": getattr(real, "provider", type(real).__name__),
-            "model": real.model,
-            "dimensions": dims if dims else "unknown",
-            "instruction": self.instruction,
-            "text_prep_version": self.text_prep_version,
-        }
-        blob = json.dumps(material, sort_keys=True, separators=(",", ":"))
-        return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]
-
-    @property
-    def space_fingerprint(self) -> str:
-        """Stable identifier of the embedding space these cached vectors belong to."""
-        return self._fingerprint
-
-    def _key(self, text: str) -> str:
-        return hashlib.sha256(f"{self._fingerprint}\x00{text}".encode("utf-8")).hexdigest()
-```
-
 ### Settings and factory
 
 ```python
-# path: book/projects/aie_core/aie_core/settings.py  (excerpt)
+# path: book/projects/aie_core/aie_core/settings.py (excerpt; full file on disk)
 
 def make_provider_client(settings: Settings | None = None, model: str | None = None) -> LLMClient:
     """The bare provider adapter for `settings`, with no gateway around it.
@@ -1059,7 +939,7 @@ The paragraphs below follow the excerpts in order.
 
 **Errors decide, payloads do not.** `map_http_error` is the only place that looks at status codes. It reads `Retry-After` case-insensitively, recognizes content-filter errors by their message, and treats every other 4xx as a programming error. The retryable flag lives on the class as a default so a caller can override it per instance (`RateLimitError(..., retryable=False)` for a hard quota).
 
-**Adapters are translations.** `build_payload` and `parse_completion` are pure functions of their inputs, which is what makes them easy to test against recorded payloads. Note what `_encode_message` does for an assistant message with tool calls: it serializes the already-parsed arguments back to a JSON string, because that dialect transports them as strings, and sets `content` to `None` when empty because some servers reject an empty string next to tool calls. The Anthropic `_encode_messages` merges adjacent same-role turns because that dialect requires strict alternation and wants all tool results for one assistant turn in one user message.
+**Adapters are translations.** `build_payload` and `parse_completion` are pure functions of their inputs, which is what makes them easy to test against recorded payloads. Note what `_encode_message` (on disk) does for an assistant message with tool calls: it serializes the already-parsed arguments back to a JSON string, because that dialect transports them as strings, and sets `content` to `None` when empty because some servers reject an empty string next to tool calls. The Anthropic `_encode_messages` merges adjacent same-role turns because that dialect requires strict alternation and wants all tool results for one assistant turn in one user message.
 
 **The gateway is a loop over clients wrapped around a loop over attempts.** `_attempt` is one traced attempt: compute the remaining budget, admit through the limiter, take a slot, call, annotate, fill the span. `complete` decides what to do with failures: non-retryable raises at once; a retryable failure consults `_plan_retry` for a delay and `_fits` for whether the delay respects the deadline; exhausting either moves to the next client. `_give_up` turns a deadline-driven stop into a `TimeoutError` whose cause is the last provider error, so callers can distinguish "the provider is broken" from "we ran out of time".
 
@@ -1070,6 +950,15 @@ The streaming span is built by hand because the span must outlive the function a
 **The repair loop.** `_prepare` picks the strongest mechanism the client supports. `complete_structured` tries, validates, and on failure appends the bad answer and the error as two new turns; a truncated answer is re-raised instead of repaired. Appending the bad answer matters: the model needs to see what it said to understand the correction. The function is deliberately provider-agnostic; it calls `client.complete`, so it works through the gateway and gets retries and tracing for free.
 
 **The factory is the only place that knows about environments.** `make_llm_client` returns a bare `FakeLLM` when the provider is `fake`, so tests can script it directly, and otherwise wraps the real adapter in a gateway configured from the same settings. Two keyword arguments cover composition. `tracer=` replaces the tracer built from `TRACE_SINK`, so an application passes the one tracer it uses for the whole request (Chapter 31) instead of getting a second one inside the gateway. `wrap=True` puts a gateway around the fake as well, which is how a test exercises retries, caching, and spans offline; `wrap=False` returns the bare adapter. `make_provider_client(settings, model=None)` is the public way to get that bare adapter when you build your own `ModelGateway`, for example one per routing target or with a custom fallback chain. Nothing else in the book constructs a provider client by hand.
+
+### Known limitations
+
+The gateway is a teaching implementation, and four of its edges are worth knowing before you rely on it.
+
+- **Queueing time is outside the per-attempt budget.** The remaining time is computed when an attempt starts, before it waits on the rate limiter and the concurrency semaphore, so under heavy queueing an attempt can run past the deadline by the time it spent queued. `queue_ms` on the span shows how much.
+- **One async semaphore per event loop.** An asyncio primitive is tied to the event loop that first uses it, and each `asyncio.run` creates a new loop, so code that calls `asyncio.run` repeatedly against a shared gateway (common in scripts and task workers) would fail with "bound to a different event loop". The gateway therefore keeps one `asyncio.Semaphore` per running loop. The semaphores do not share a count: a process can have up to `max_concurrency` calls in flight for sync callers plus `max_concurrency` per running event loop.
+- **Fallback answers are cached under the primary's key.** The response-cache key uses the primary model's name, so an answer produced by a fallback is later served as if the primary had produced it, until the entry expires. If that matters for a feature, set `metadata={"cache": False}` on its requests, or subclass the gateway to skip storing a completion whose `model` differs from the primary's.
+- **OpenTelemetry spans are flat.** `OTelTracer`, the OpenTelemetry (OTel) exporter, receives each span only after it has finished, too late to create it as a native OTel child of its parent, so it emits spans flat and carries the linkage as `aie.trace_id` and `aie.parent_span_id` attributes. Chapter 31's tracer replaces this one.
 
 ## Production considerations
 
@@ -1101,18 +990,14 @@ The gateway in this chapter is a teaching implementation that runs in one proces
 | `cost_usd`, `avoided_cost_usd`, `cache_hit` | Real spend and what the response cache saved | Spend per feature or tenant; cache value |
 | `finish_reason`, status, exception events | How the generation ended; error class on failure | `length` share, error-class mix, `InvalidRequestError` spikes |
 
-Three operational notes. `OTelTracer`, the OpenTelemetry (OTel) exporter, receives each span only after it has finished, too late to create it as a native OTel child of its parent, so it emits spans flat and carries the linkage as `aie.trace_id` and `aie.parent_span_id` attributes. Spans hold no prompt or response text, by design; Chapter 31 adds capture with redaction and sampling. And use one tracer per request path: Chapter 31's tracer replaces this one rather than running beside it.
+Two operational notes. Spans hold no prompt or response text, by design; Chapter 31 adds capture with redaction and sampling. And use one tracer per request path: Chapter 31's tracer replaces this one rather than running beside it.
 
 ## Common mistakes
 
 - **Retrying everything.** A loop that retries `InvalidRequestError` burns the attempt budget and the deadline on a request that can never succeed. Branch on `retryable`.
-- **Per-attempt timeouts without a deadline.** Three attempts of sixty seconds with backoff is more than three minutes. Compute one deadline and derive attempt timeouts from it.
-- **Jitterless backoff.** Synchronized retries after a shared failure produce a second, synchronized failure. Use full jitter.
 - **Parsing `completion.text` as JSON directly.** Models wrap JSON in code fences and prose, and a truncated object can still parse. Use `complete_structured`, or at least `extract_json` plus a check of `completion.truncated`.
 - **Caching nondeterministic calls.** Caching at temperature 0.8 freezes one random sample as the permanent answer. Cache only when the answer is supposed to be stable.
 - **Dropping the assistant tool-call message.** Replaying only the tool results makes the next request invalid. The assistant turn with `tool_calls` goes back verbatim.
-- **Falling back blind.** A fallback model with a smaller context or no tool support turns an availability incident into a correctness incident. Evaluate the fallback before relying on it.
-- **Mixing embedding spaces.** Changing an embedding model, dimension, or instruction while reusing cached or indexed vectors returns plausible numbers and wrong neighbors. Key caches and indexes on the space fingerprint.
 - **Configuring every replica with the full provider quota.** The limiter is per process; N replicas need N shares or a shared bucket.
 - **Letting an abandoned stream leak a slot.** Without a `finally`, a client that disconnects mid-stream leaves the semaphore one slot smaller forever. `_relay` releases in `finally`; test it.
 
@@ -1122,7 +1007,7 @@ Each failure below names what it looks like in telemetry and how to reproduce it
 
 **Retry storm.** Symptom: provider error rate climbs, your request rate to the provider climbs faster, cost spikes, and recovery is delayed because your retries keep the provider saturated. Telemetry: spans with `attempt > 1` dominate and `queue_ms` grows. Reproduce: `FakeLLM(responses=[ProviderUnavailableError(...)] * n)` behind a gateway with jitter off and inspect the injected sleep log. Prevention: bounded attempts, full jitter, a circuit breaker at the service level (Chapter 29).
 
-**Deadline overrun.** Symptom: callers time out at their own layer while the gateway is still retrying, so work completes that nobody reads and the bill grows. Telemetry: span end times after the caller's timeout; completions with `attempt` of two or three whose results were never used. Reproduce: a gateway with `timeout_s=5` and `base_delay_s=4`; the test `test_deadline_bounds_retries_and_propagates_remaining_budget` shows the second retry being skipped and the fallback getting the remaining budget.
+**Deadline overrun.** Symptom: callers time out at their own layer while the gateway is still retrying, so work completes that nobody reads and the bill grows. Telemetry: span end times after the caller's timeout; completions with `attempt` of two or three whose results were never used. Reproduce: a gateway with `timeout_s=5` and `base_delay_s=4`; the test `test_deadline_bounds_retries_and_propagates_remaining_budget` shows the second retry being skipped and the fallback getting the remaining budget. Prevention: one deadline per call, with every attempt timeout derived from what remains, never a fresh per-attempt timeout.
 
 **Duplicate side effects on retried timeouts.** Symptom: a tool action happens twice. Telemetry: two spans for one logical request with the same metadata and `attempt` 1 and 2, both with a `tool_calls` finish reason. Reproduce: a `FakeLLM` that raises `TimeoutError` once and then returns a tool call, behind a gateway with `retry_on_timeout=True`. Prevention: `retry_on_timeout=False` for calls whose results trigger actions, or idempotency keys downstream.
 
@@ -1130,11 +1015,11 @@ Each failure below names what it looks like in telemetry and how to reproduce it
 
 **Schema drift after a prompt change.** Symptom: `MalformedResponseError` rate jumps after a deploy. Telemetry: `complete_structured` making two or three calls per logical request (visible as consecutive spans with growing input token counts) before failing. Reproduce: script a `FakeLLM` with three invalid answers. Fix: the prompt test suite from Chapter 4.
 
-**Silent fallback degradation.** Symptom: answers get worse with no errors. Telemetry: the `provider` or `model` attribute changes on a growing share of spans. Reproduce: a primary `FakeLLM` scripted to fail with `ProviderUnavailableError` and a fallback that answers; assert on the span's `provider`. Fix: alert on fallback rate, and run the evaluation set against the fallback model.
+**Silent fallback degradation.** Symptom: answers get worse with no errors. Telemetry: the `provider` or `model` attribute changes on a growing share of spans. Reproduce: a primary `FakeLLM` scripted to fail with `ProviderUnavailableError` and a fallback that answers; assert on the span's `provider`. Fix: alert on fallback rate, and run the evaluation set against the fallback model before relying on it; a fallback with a smaller context or no tool support turns an availability incident into a correctness incident.
 
 **Cross-tenant cache hit.** Symptom: a user sees an answer, or a tool call, produced for someone in another tenant. Telemetry: a span with `cache_hit=True` whose trace belongs to a different tenant than the trace that stored the entry; in aggregate, a cache hit rate that rose when a second tenant was onboarded. Cause: permissions enforced outside the prompt and no scope in the key. Reproduce: two requests identical except for the caller's tenant through a cached gateway. Prevention: `cache_scope` on every request and `require_cache_scope=True` on any shared gateway.
 
-**Prompt-cache miss cascade.** Symptom: cost per request rises with no change in traffic. Telemetry: `cached_input_tokens / input_tokens` drops to near zero. Cause: volatile content moved ahead of the stable prefix, or the prefix changed byte-wise (a date, a request id). Fix: reorder; add a test that the first N bytes of the rendered prompt are identical across two requests.
+**Prompt-cache miss cascade.** Symptom: cost per request rises with no change in traffic. Telemetry: `cached_input_tokens / input_tokens` drops to near zero. Cause: volatile content moved ahead of the stable prefix, or the prefix changed byte-wise (a date, a request id). Fix: reorder; add a test that the first N bytes of the rendered prompt are identical across two requests (Chapter 5 builds layout checks for this).
 
 ## Tradeoffs
 
@@ -1147,6 +1032,13 @@ Each failure below names what it looks like in telemetry and how to reproduce it
 **Exact-match versus semantic caching.** Exact matching never serves the wrong answer; its hit rate on free text is low. Semantic caches raise the hit rate and add a failure mode: a confident cached answer to a question that only looked similar. Chapter 30 covers when the trade is worth it.
 
 **Fallback chains versus failing fast.** A fallback keeps the feature alive at the price of different behavior and a second vendor seeing the data. Failing fast keeps behavior uniform and lets the caller degrade in a controlled way (show cached content, queue the job). Interactive chat usually wants the fallback; a compliance-sensitive extraction job usually wants to fail fast.
+
+**When not to build this.** `aie_core` exists so that you can read every line of the layer between your application and the model. You do not have to own that layer in production, and often should not. Two kinds of off-the-shelf component cover much of it.
+
+- *Vendor SDKs.* The official client libraries of most providers, for example, already retry with backoff, honor `Retry-After`, set timeouts, and type their responses. If you use one provider, have no fallback requirement, and keep vendor types inside one module, the SDK plus a thin wrapper for cost and tracing may be all you need.
+- *LLM gateways and proxies.* Open-source proxies and managed gateway services, for example, sit between your services and many providers, expose one (usually OpenAI-dialect) endpoint, and centralize keys, fallback, rate limits, caching, and spend reporting across teams. They pay off when several services or teams share providers and someone must own quotas and spend in one place.
+
+Build your own thin layer, as this chapter does, when you need behavior those tools do not give you on your terms: deterministic offline tests with a fake client, a deadline that spans retries and fallbacks, tenant-scoped caching you can audit, or spans in your own tracing schema. Adopt when the main need is breadth (many providers, many teams) and an operations team can run the proxy. The two combine well: a proxy can be just another `base_url` behind the OpenAI-dialect adapter, with your gateway still enforcing the per-request deadline and recording usage. Whatever you adopt, check four things before trusting it: which errors it retries (a proxy that retries 400s wastes your budget), whether its timeouts compose into one deadline, what its cache keys include (tenant scope), and whether it reports cached and reasoning tokens separately. An adopted gateway is one more network hop and one more component that can be down, so it needs its own fallback story.
 
 ## Evaluation and testing
 
@@ -1164,7 +1056,24 @@ The LLM client is the one component you can test exhaustively without a model, a
 
 **Integration tests, rarely.** A few tests marked `@pytest.mark.integration`, skipped by default, can hit a real provider to catch wire-format drift. Run them on a schedule, never as a build dependency. What this suite cannot evaluate is answer quality; that is Chapter 24's job, and separating the two means client bugs and model behavior are diagnosed with different tools.
 
+## Before you ship
+
+- [ ] Application code obtains clients only through `make_llm_client` or `make_provider_client`; no module builds a provider payload or vendor client by hand.
+- [ ] Every request path sets `timeout_s` from its caller's budget, and structured calls budget for `max_repair_attempts + 1` gateway calls.
+- [ ] `RetryPolicy` has bounded attempts and jitter on, and `retry_on_timeout=False` is set for every call whose result triggers a side effect.
+- [ ] A test proves that `InvalidRequestError`, `ContentFilterError`, and `MalformedResponseError` are neither retried nor sent to a fallback.
+- [ ] The rate limiter is configured with this replica's share of the provider quota (or a shared bucket), and the share is revisited when autoscaling limits change.
+- [ ] `max_tokens` is set per task, sized to include reasoning tokens on reasoning models, and the share of `finish_reason == "length"` is on a dashboard.
+- [ ] Structured output goes through `complete_structured`, and the `MalformedResponseError` rate has an alert.
+- [ ] The response cache is limited to temperature zero or explicit opt-in, shared gateways use `require_cache_scope=True`, and a test shows two tenants with identical prompts cause two provider calls.
+- [ ] The fallback model has passed the evaluation set, the fallback path runs in CI and on a schedule, and data agreements allow the second vendor to see the prompts.
+- [ ] Prices load from configuration; `cost_usd` and `avoided_cost_usd` land on spans; cost per request is reported as percentiles per feature.
+- [ ] Alerts exist on fallback rate, `InvalidRequestError` rate, and the `cached_input_tokens / input_tokens` ratio.
+- [ ] The abandoned-stream test passes, API keys are `SecretStr` and absent from logs, and `Completion.raw` never reaches a user-facing response.
+
 ## Exercises
+
+**Start here:** K3, K7, E1, P2, D1 (about 3 hours). The rest go deeper.
 
 ### Knowledge questions
 
@@ -1174,6 +1083,7 @@ The LLM client is the one component you can test exhaustively without a model, a
 - **K4.** Which of the six error classes should trigger a fallback to another provider, and why is `MalformedResponseError` excluded even though the call failed?
 - **K5.** Why does the adapter buffer tool-call argument fragments instead of emitting them as they arrive, while it emits text fragments immediately?
 - **K6.** Streaming does not reduce total generation time. Name the two latency metrics it does change and explain which user-facing experience each one governs.
+- **K7.** A ticket classifier moves to a reasoning model and keeps `max_tokens=150`, sized for a 20-token visible answer. A few percent of responses now come back empty with `finish_reason` `length`, and the monthly bill rises far more than the price-per-token difference suggests. Explain both symptoms and name two fixes.
 
 ### Engineering questions
 
@@ -1184,10 +1094,10 @@ The LLM client is the one component you can test exhaustively without a model, a
 
 ### Practical exercises
 
-- **P1.** Implement `IdempotentGateway`, a thin wrapper around `ModelGateway` that accepts an idempotency key in `req.metadata`, stores in-flight and completed results keyed by it, and guarantees that concurrent or retried calls with the same key produce exactly one provider call. Write tests with `FakeLLM` and threads.
-- **P2.** Write a streaming tool-calling loop for Northwind Assist: stream text to stdout, collect tool calls, execute them against a dict of fake tools (`lookup_employee`, `search_tickets`), append results, and continue until the model stops calling tools or a step limit is hit. Use `FakeLLM(handler=...)` to script a two-step conversation.
-- **P3.** Add a `RedisResponseCache` that implements the `ResponseCache` protocol with TTLs, serializing `Completion` via pydantic. Provide an in-memory fake Redis for tests and verify the gateway behaves identically with both caches.
-- **P4.** Build a `PrefixStabilityCheck` test helper: given a function that renders a prompt for a request, call it twice with different user content and assert the leading N bytes are identical. Apply it to a Northwind system prompt that currently embeds the current date, and fix the prompt.
+- **P1.** (about 2 hours) Implement `IdempotentGateway`, a thin wrapper around `ModelGateway` that accepts an idempotency key in `req.metadata`, stores in-flight and completed results keyed by it, and guarantees that concurrent or retried calls with the same key produce exactly one provider call. Write tests with `FakeLLM` and threads.
+- **P2.** (about 90 min) Write a streaming tool-calling loop for Northwind Assist: stream text to stdout, collect tool calls, execute them against a dict of fake tools (`lookup_employee`, `search_tickets`), append results, and continue until the model stops calling tools or a step limit is hit. Use `FakeLLM(handler=...)` to script a two-step conversation.
+- **P3.** (about 90 min) Add a `RedisResponseCache` that implements the `ResponseCache` protocol with TTLs, serializing `Completion` via pydantic. Provide an in-memory fake Redis for tests and verify the gateway behaves identically with both caches.
+- **P4.** (about 45 min) Build a `PrefixStabilityCheck` test helper: given a function that renders a prompt for a request, call it twice with different user content and assert the leading N bytes are identical. Apply it to a Northwind system prompt that currently embeds the current date, and fix the prompt.
 
 ### Debugging exercises
 
@@ -1205,4 +1115,13 @@ The LLM client is the one component you can test exhaustively without a model, a
 - Retries are bounded, exponential, jittered, and subordinate to a single deadline that shrinks with every attempt and propagates into the HTTP timeout.
 - Exact-match response caching is safe only for deterministic requests with identity in the key; provider prompt caching is a prefix-stability discipline you measure through usage.
 - Fallbacks keep features alive and can silently change behavior; evaluate them before incidents and record which model answered.
+- Reasoning tokens are invisible output tokens: they consume `max_tokens`, bill at the output rate, and make cost per request long-tailed.
 - Record usage and cost on every call; it is the only ground truth about what the system is doing and spending.
+
+## Further reading
+
+- *Exponential Backoff and Jitter* (Brooker, AWS Architecture Blog): the simulation behind full jitter, and why synchronized retries make outages worse.
+- *Timeouts, retries, and backoff with jitter* (Amazon Builders' Library): how timeouts, retry budgets, and jitter compose across a call chain, which is the deadline idea of this chapter at service scale.
+- *RFC 9110, HTTP Semantics*: the meaning of the status codes the error taxonomy maps and of the `Retry-After` header.
+- *Server-sent events, HTML Living Standard*: the exact line format the SSE parser implements, including comments, multi-line `data:` fields, and event ids.
+- *Release It! Design and Deploy Production-Ready Software* (Nygard): timeouts, circuit breakers, and bulkheads as stability patterns, the background for this gateway and for Chapter 29.

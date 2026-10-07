@@ -163,7 +163,7 @@ flowchart LR
     SP -.-> I
 ```
 
-The second diagram shows a model migration. Because vectors cannot be translated between models, a new model means a new index built from the source text, evaluated in shadow (built and scored against the gold set of labeled queries while users still read from the old index), and swapped only when it passes. Chapter 28 models this with `index_versions` rows; Chapter 32 covers the deployment mechanics.
+The second diagram shows a model migration. Because vectors cannot be translated between models, a new model means a new index built from the source text, evaluated in shadow (built and scored against the gold set of labeled queries while users still read from the old index), and swapped only when it passes. Chapter 9 plans the migration, Chapter 28 records it in `index_versions` rows, and Chapter 32 covers shadow and canary rollout.
 
 ```mermaid
 stateDiagram-v2
@@ -862,12 +862,12 @@ The probe-set job is cheap and catches what nothing else does: embed the same fi
 ## Common mistakes
 
 - **Copying a threshold.** A 0.8 cosine threshold from another team or another model is a random number for yours. Derive thresholds from labeled pairs on your data and re-derive them on every model change.
-
-Mixing spaces in one index and caching by text alone are the two most expensive mistakes; they appear under Failure modes as silent space mismatch and stale cache.
 - **Forgetting the query prefix, or applying it to passages.** For asymmetric models this silently costs recall. Make prefixes configuration, applied in one function.
 - **Normalizing a model trained with unnormalized dot product, or not normalizing a cosine model's output before a dot-product index.** Check the model card and measure both.
 - **Evaluating on a public benchmark only.** Use it for the shortlist, then decide on 100 or more labeled queries from your own traffic.
 - **Using embedding similarity as an access-control or safety decision.** It is a relevance signal; permissions and guardrails are code.
+
+Mixing spaces in one index and caching by text alone are the two most expensive mistakes; they appear under Failure modes as silent space mismatch and stale cache.
 
 ## Failure modes
 

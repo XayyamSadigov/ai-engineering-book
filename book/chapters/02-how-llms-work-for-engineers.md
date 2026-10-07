@@ -58,7 +58,7 @@ The same statement costs 32 tokens in English, 42 in Russian, and 55 in Azerbaij
 
 **Numbers and identifiers shatter.** A ten-digit number becomes four pieces (`123 | 456 | 789 | 0`), an ISO timestamp thirteen, and 124 characters of UUIDs and hashes become 98 tokens. Beyond cost, fragmentation is one reason arithmetic and exact copying are weak: the model sees `1234567890` not as a quantity but as four arbitrary symbols whose grouping depends on digit count. When extraction must preserve an invoice number exactly, verify the copied value against the source rather than trusting it.
 
-**Count with the real tokenizer.** Character-based estimates are wrong by two to four times in exactly the cases that matter. Providers expose a counting endpoint or document the tokenizer; `aie_core.llm.tokens.count_tokens` (Chapter 3) wraps the exact tokenizer when available and a labeled heuristic otherwise. Use exact counts for budget enforcement and billing reconciliation, heuristics only for early estimates, and log which one you used. And because the tokenizer is part of the model, a prompt that fits a budget on one provider may overflow on another: when you switch models, re-measure.
+**Count with the real tokenizer.** Character-based estimates are wrong by two to four times in exactly the cases that matter. Providers expose a counting endpoint or document the tokenizer; `aie_core.llm.tokens.count_tokens` (Chapter 3) uses `tiktoken` when it is available and a characters-per-token heuristic otherwise; it returns a bare number, so treat it as an estimate. Use exact counts for budget enforcement and billing reconciliation, heuristics only for early estimates, and log which one you used. And because the tokenizer is part of the model, a prompt that fits a budget on one provider may overflow on another: when you switch models, re-measure.
 
 ### Two things called "embedding"
 
@@ -309,7 +309,7 @@ python kv_cache_calc.py --layers 32 --kv-heads 8 --head-dim 128 --tokens 16000 \
     --concurrency 16 --memory-gb 40 --query-heads 32
 ```
 
-Look for three things in the output: the UUID row's characters per token, the ' purple' row in the sampling table, and the GQA line from the calculator. Each answers one claim from the opening paragraph.
+Look for three things in the output: the UUID row's characters per token, the ' purple' row in the sampling table, and the GQA line from the calculator. Each replaces a guess with a measurement.
 
 `tiktoken` downloads a BPE merge table the first time an encoding is used. Behind a corporate proxy that may fail; the script then prints a table labeled `heuristic` instead of crashing, which is what you want from a token counter in CI. The counting core is shown here; the sample texts and table formatting are on disk.
 

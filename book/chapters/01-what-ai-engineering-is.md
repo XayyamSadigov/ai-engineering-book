@@ -173,7 +173,7 @@ The layers become concrete when you trace one request through Northwind Assist. 
 
 The request reaches a FastAPI service with an authenticated identity: user `emp-4471`, tenant `retail`, groups `all` and `retail`. Two access concepts appear here. A tenant is a business unit whose data must never mix with another's; every document carries a tenant tag, either one tenant or `shared`. Groups are finer-grained permissions such as `hr` or `it-oncall`, and every document lists the groups allowed to read it, its access-control list or ACL. Nothing model-related has happened, and already the most important security decision is made: identity is established in code and carried through every step. The model is never asked who the user is.
 
-**Context layer.** The service searches the knowledge base with a filter that admits only documents whose permission groups intersect the caller's and whose tenant tag is `shared` or `retail`. It retrieves a few dozen candidate passages, called chunks, scoring them two ways: lexical similarity counts shared words, and semantic similarity measures closeness of meaning (Chapter 8). A reranker, a second and more careful scoring pass, reorders the candidates (Chapter 12), and the service keeps the top few.
+**Context layer.** The service searches the knowledge base with a filter that admits only documents whose permission groups intersect the caller's and whose tenant tag is `shared` or `retail`. It retrieves a few dozen candidate passages, called chunks, scoring them two ways: lexical similarity counts shared words, and semantic similarity measures closeness of meaning (Chapters 8 and 12). A reranker, a second and more careful scoring pass, reorders the candidates (Chapter 12), and the service keeps the top few.
 
 It then renders the system prompt from the prompt registry, a versioned store of prompt templates, at a known version, attaches the chunks with their source identifiers, and counts tokens against the budget. Given a fixed index and query this stage is repeatable, unless the search or reranking step is itself approximate or model-based.
 
@@ -386,7 +386,7 @@ class RequestLineage:
         return problems
 ```
 
-The test file builds the parental-leave request from the worked example and then breaks it in each way the checks are designed to catch. Four of its nine tests are shown; the others (missing gates and usage, a missing index version, a tool called without being offered, a denied gate followed by a fallback) follow the same pattern.
+The test file builds the parental-leave request from the worked example and then breaks it in each way the checks are designed to catch. Four of its tests are shown; the others (missing gates and usage, evidence outside the caller's groups, a missing index version, a tool called without being offered, a denied gate followed by a fallback) follow the same pattern.
 
 ```python
 # path: book/projects/examples/ch01/test_lineage.py (excerpt; full file on disk)

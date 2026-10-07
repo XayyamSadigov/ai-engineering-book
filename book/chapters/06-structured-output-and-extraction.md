@@ -862,7 +862,7 @@ def expected_calibration_error(scores: list[float], correct: list[bool], bins: i
 
 ### Tests
 
-The tests run offline in well under a second. `FakeLLM` scripts the model per test; `ReplayLLM`, an adapter that answers from the labeled sample data, drives the end-to-end evaluation test and the local demo. Two service tests show the repair logic from both sides: `test_rule_repair_fixes_a_misread_value` (on disk) scripts a misread total that one repair fixes and asserts the repair prompt forbids balancing the totals; the test below pins a vendor's own arithmetic error.
+The tests run offline in about a second. `FakeLLM` scripts the model per test; `ReplayLLM`, an adapter that answers from the labeled sample data, drives the end-to-end evaluation test and the local demo. Two service tests show the repair logic from both sides: `test_rule_repair_fixes_a_misread_value` (on disk) scripts a misread total that one repair fixes and asserts the repair prompt forbids balancing the totals; the test below pins a vendor's own arithmetic error.
 
 ```python
 # path: book/projects/p1-extraction-api/tests/test_service.py  (excerpt; full file on disk)

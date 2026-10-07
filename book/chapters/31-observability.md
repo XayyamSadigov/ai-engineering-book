@@ -1,6 +1,17 @@
 # Chapter 31 — Observability for AI Systems
 
-After this chapter you will be able to instrument an AI application so that any single answer can be reconstructed and any population-level regression can be localized to a stage, a version, or a tenant. You will define a tracing schema for model calls, retrieval, tools, agent steps, guardrails, and evaluations. You will capture prompts and responses under an explicit privacy policy, wire the result into OpenTelemetry (the vendor-neutral standard and SDK for traces, metrics, and logs), and derive metrics, dashboards, and alerts from the same names. Then you will debug a real-looking quality incident with a small set of trace queries. The code lives in `book/projects/examples/ch31/`. It builds on `aie_core.observability` from Chapter 3, and every test runs offline.
+This chapter instruments an AI application so that any single answer can be reconstructed and any population-level regression can be localized to a stage, a version, or a tenant. AI systems mostly fail with HTTP 200 and a confident wrong answer, so ordinary request logs cannot see their most important failures.
+
+**You will be able to:**
+
+- Define a tracing schema for requests, retrieval, context building, model calls, tools, agent steps, guardrails, and evaluations, with every behavior-changing version on the trace.
+- Capture prompts and responses under an explicit privacy policy: keyed hashes by default, sampled and on-error redaction, per-tenant ceilings.
+- Wire the instrumentation into OpenTelemetry (the vendor-neutral standard and SDK for traces, metrics, and logs) so spans nest across libraries and services.
+- Derive metrics, dashboards, and sample-size-aware alert rules from the same names, and join evaluation results and user feedback to traces by id.
+- Diagnose a quality incident with a fixed playbook: scope, version diff, stage triage on the evidence funnel, exemplar traces.
+- Test an observability design for diagnostic power by injecting a known fault and checking that the tools localize it.
+
+**Prerequisites:** Chapter 3 (`aie_core.observability` and the model gateway), Chapters 10 and 14 (the RAG debugging tree and evidence metrics), Chapter 24 (failure taxonomies), and Chapter 29 (SLOs and burn rates). | **Code:** `book/projects/examples/ch31/` (run: `cd book/projects/examples/ch31 && pytest -q`) | **Builds:** the `ch31` observability toolkit: `AITracer` with a capture policy, an OpenTelemetry bridge, a trace store with debugging queries, a metric registry with alert rules, and a signal-join CLI.
 
 ## Why this matters
 
@@ -52,7 +63,9 @@ For Northwind Assist the span vocabulary is fixed in `semconv.py`:
 | `guardrail.check` | one policy or validator decision (Chapter 27) | name, stage, decision, reason, policy version |
 | `eval.score` | an evaluation run inline, such as an online judge | eval name, score, passed, source |
 
-The split between `llm.generate` and `llm.complete` is deliberate. A logical generation may take several provider attempts because of retries or fallbacks, each with its own latency, error, and possibly model. Cost belongs to the attempts. Prompt identity and the captured content belong to the logical call. Merging them either double-counts tokens or loses the record of retries. Two earlier chapters use their own names: Chapter 7's router emits `router.complete`, and Chapter 27's guardrail pipeline writes `guardrail.action`, `guardrail.blocked_by`, and `guardrail.errors`. `semconv.py` does not normalize these keys yet, so either emit this chapter's names from those components or extend `normalize()` to rename them (span names and non-gateway keys are not covered by the legacy map). Keep `guardrail.errors`, because Chapter 27 alerts on its rate.
+The split between `llm.generate` and `llm.complete` is deliberate. A logical generation may take several provider attempts because of retries or fallbacks, each with its own latency, error, and possibly model. Cost belongs to the attempts. Prompt identity and the captured content belong to the logical call. Merging them either double-counts tokens or loses the record of retries.
+
+One vocabulary means one owner of names. `normalize()` in `semconv.py` renames only the model gateway's keys. Components from earlier chapters that use their own names, such as Chapter 7's router (`router.complete`) and Chapter 27's guardrail pipeline (`guardrail.action`, `guardrail.blocked_by`), should emit this chapter's names at their boundary, or have their keys added to the rename map. Keep `guardrail.errors` as is, because Chapter 27 alerts on its rate.
 
 ### What to record, stage by stage
 
@@ -70,7 +83,7 @@ The question for every attribute is: which debugging question does it answer, an
 
 **Tokens, latency, cost.** Record these on the stage that spent them, so they can be attributed. Request-level totals are derivable. Stage-level attribution is not, if you only record totals.
 
-Cache hits need care. A hit costs nothing, but its value is real: the price of the call it replaced. The current `aie_core` gateway records `cost_usd=0` and `avoided_cost_usd=<price>` on a cache-hit span. Older versions put the original call's `cost_usd` on the hit, and logs written by them would bill every hit twice, so a better cache would look like a cost increase. The chapter's normalization handles those legacy logs. For any cache-hit span without an avoided-cost key, it moves the cost into `llm.avoided_cost_usd` and sets the spend to zero, both at export and at load. Chapter 30's `chargeback()` applies the same rule and reports avoided spend next to actual spend.
+Cache hits need care. A hit costs nothing, but its value is real: the price of the call it replaced. The `aie_core` gateway records `cost_usd=0` and `avoided_cost_usd=<price>` on a cache-hit span. If a hit ever carried the original call's cost as spend, every hit would be billed twice and a better cache would look like a cost increase. The normalization therefore enforces the rule defensively: a cache-hit span that reports a cost but no avoided cost has that cost moved into `llm.avoided_cost_usd` and its spend set to zero, both at export and at load. Chapter 30's `chargeback()` applies the same rule and reports avoided spend next to actual spend.
 
 **Evaluation results and feedback.** Offline evaluations, online judges, probe results, human reviews, and user feedback all carry the trace id or a client-visible response id that resolves to it. They arrive minutes to days later and are joined, not emitted inline. The exception is an inline judge running in the request path.
 
@@ -133,9 +146,9 @@ All of these join to traces through ids. The client never sees trace ids, so the
 
 The handler opens the root span with `trace_request`. `AITracer`, the chapter's tracer in `instrument.py`, keeps the current span in a context variable, so every span opened deeper in the call stack, in any module, becomes a child without anyone passing span objects around. Stage helpers open child spans and record each stage's decision. The gateway, built with the same tracer, nests one `llm.complete` span per provider attempt under the logical `llm.generate`.
 
-Three details make this composition work with code written before this chapter. The first is the tree itself. Older `aie_core` versions wrote spans with no trace id or parent id, and those spans cannot be assembled into requests. Chapter 30 attributes cost with `AttributingTracer` and `bind()`, which stamp tenant, request id, and feature onto every span. That is enough for chargeback, but not for a tree. The current `aie_core` links its spans through a context variable, and the trace store reads those ids directly. `AITracer` goes further: it propagates ids together with baggage and the capture policy, and under `OTelAITracer` it uses OpenTelemetry's ids, so they match auto-instrumented clients and cross-service `traceparent` propagation. Spans from older versions still load. Each becomes its own single-span trace, and `completeness()` reports them.
+Three details make this composition work with code from earlier chapters. The first is the tree itself. A span needs a trace id and a parent id to be assembled into a request. Chapter 30's `AttributingTracer` and `bind()` stamp tenant, request id, and feature onto every span, which is enough for chargeback but not for a tree. `aie_core` links its spans through a context variable, and the trace store reads those ids directly. `AITracer` goes further: it propagates ids together with baggage and the capture policy, and under `OTelAITracer` it uses OpenTelemetry's ids, so they match auto-instrumented clients and cross-service `traceparent` propagation. A span that arrives without ids still loads as its own single-span trace, and `completeness()` reports it as a gap.
 
-The second detail is key names. `aie_core`'s gateway writes unprefixed keys (`model`, `input_tokens`). The tracer normalizes them to the book's names when the span opens and again when it closes, because the gateway sets most of them after opening. The trace store normalizes once more at load, so JSONL files written before this chapter remain queryable.
+The second detail is key names. `aie_core`'s gateway writes unprefixed keys (`model`, `input_tokens`). The tracer normalizes them to the book's names when the span opens and again when it closes, because the gateway sets most of them after opening. The trace store normalizes once more at load, so any JSONL file the gateway wrote directly remains queryable.
 
 The third detail is lineage on provider attempts. The gateway's `llm.complete` span cannot see `CompletionRequest.metadata`. Chapter 4's `traced_complete` works around this with a parent `prompt.call` span. The tracer generalizes the fix. Lineage keys (the version manifest, prompt id, version and hash, tenant, route) are copied into baggage, a dictionary of key-value pairs that travels with the trace context, when a span sets them, children inherit the baggage, and every `llm.complete` span is stamped with them. A query over provider attempts alone can then group by prompt version or index version.
 
@@ -213,10 +226,10 @@ Configuration comes from environment variables, documented in the README and `.e
 
 ### Semantic conventions
 
-A semantic convention is an agreed name and meaning for each span and attribute, so that every tool reading the telemetry interprets it the same way. One module owns every name. Instrumentation, store, analysis, metrics, and alert rules import from it, so they cannot drift. The full file is on disk; the parts that matter are the vocabulary, the taxonomy, normalization of legacy keys, and the mapping to OpenTelemetry's GenAI semantic conventions, the standard's proposed attribute names for model calls:
+A semantic convention is an agreed name and meaning for each span and attribute, so that every tool reading the telemetry interprets it the same way. One module owns every name. Instrumentation, store, analysis, metrics, and alert rules import from it, so they cannot drift. The full file is on disk; the parts that matter are the span vocabulary, the attribute keys, the error taxonomy, and the mapping to OpenTelemetry's GenAI semantic conventions, the standard's proposed attribute names for model calls:
 
 ```python
-# path: book/projects/examples/ch31/semconv.py  (excerpt; full file on disk)
+# path: book/projects/examples/ch31/semconv.py (excerpt; full file on disk)
 class SpanName:
     REQUEST = "request"
     ROUTER = "router.decide"
@@ -267,8 +280,6 @@ class ErrorClass(str, Enum):
     # ... twenty classes in total
 
 
-# Conceptual equivalents in the OpenTelemetry GenAI semantic conventions. CHECK CURRENT
-# CONVENTIONS: these names were experimental at the time of writing and may have changed.
 GENAI_ALIASES: dict[str, str] = {
     Attr.LLM_PROVIDER: "gen_ai.provider.name",
     Attr.LLM_MODEL: "gen_ai.request.model",
@@ -279,14 +290,19 @@ GENAI_ALIASES: dict[str, str] = {
 }
 ```
 
-Why not adopt the GenAI conventions directly? You may, and for a new system you probably should check them first. At the time of writing they were marked experimental and had renamed keys between releases. A local vocabulary with one mapping table isolates you from that churn. `AITracer(emit_genai_aliases=True)` dual-writes both, so a backend that understands the GenAI keys gets them, and your own queries keep working.
+Why not adopt the GenAI conventions directly? You may, and for a new system you should check them first. As of 2026 they are still evolving: most GenAI attributes remain in development status rather than stable, and keys have been renamed between releases (the provider attribute, for example, replaced an earlier system attribute). The conventions cover model-call spans, token-usage metrics, events for prompt and completion content, and a growing set of agent and tool operations; many LLM observability tools and instrumentation libraries now read or emit them, which is the strongest argument for aligning. Opt-in environment variables in the OpenTelemetry SDKs select between old and new attribute sets during transitions, so pin the convention version you emit and record it on the resource.
+
+A local vocabulary with one mapping table isolates you from that churn. `AITracer(emit_genai_aliases=True)` dual-writes both, so a backend that understands the GenAI keys gets them, and your own queries keep working. When a key stabilizes, flip the mapping so the standard name becomes primary. Content capture is the one place to diverge deliberately: the conventions describe where prompt and completion text goes, but whether it is captured, and in what form, stays your capture policy's decision.
 
 ### The tracer and the capture policy
 
 `AITracer` subclasses `aie_core`'s `Tracer`, so it is accepted anywhere a `Tracer` is, including `ModelGateway(tracer=...)`. The core is the `span` context manager:
 
 ```python
-# path: book/projects/examples/ch31/instrument.py  (condensed excerpt; full file on disk)
+# path: book/projects/examples/ch31/instrument.py (excerpt; full file on disk)
+PROPAGATED_KEYS: tuple[str, ...] = (*VERSION_KEYS, "prompt.hash", Attr.TENANT, Attr.ROUTE)
+
+
 @dataclass
 class LinkedSpan(Span):
     """An aie_core Span plus the fields that make a tree: trace id, parent id, resource."""
@@ -298,22 +314,24 @@ class LinkedSpan(Span):
 
 
 _current: ContextVar[LinkedSpan | None] = ContextVar("ch31_current_span", default=None)
-PROPAGATED_KEYS: tuple[str, ...] = (*VERSION_KEYS, "prompt.hash", Attr.TENANT, Attr.ROUTE)
 
 
 class AITracer(Tracer):
+    # ...
     @contextmanager
     def span(self, name: str, **attributes: Any) -> Iterator[LinkedSpan]:
         parent = _current.get()
         s = LinkedSpan(
-            name=name, attributes=normalize(name, attributes), start=self.clock(),
+            name=name,
+            attributes=normalize(name, attributes),
+            start=self.clock(),
             span_id=self._hex(64),
             trace_id=parent.trace_id if parent else self._hex(128),
             parent_span_id=parent.span_id if parent else None,
             resource=dict(self.resource),
             baggage=dict(parent.baggage) if parent else {},
         )
-        self._propagate(s)                  # lineage keys: baggage down, onto llm.complete
+        self._propagate(s)
         handle = self._backend_start(s, parent)
         token = _current.set(s)
         try:
@@ -326,10 +344,12 @@ class AITracer(Tracer):
         finally:
             _current.reset(token)
             s.end = self.clock()
-            self._finalize(s)               # normalize, apply capture policy, GenAI aliases
-            self._backend_end(s, handle)    # OTelAITracer ends the real OTel span here
+            self._finalize(s)
+            self._backend_end(s, handle)
             self.sink.export(s)
 ```
+
+Each new span inherits the trace id and baggage of the current span, so nesting needs no span objects passed around. At the end, `_finalize` (on disk) normalizes keys, applies the capture policy, and writes GenAI aliases, and `_backend_end` is the hook where `OTelAITracer` ends the real OpenTelemetry span. The span is then exported to the sink.
 
 `_propagate` copies lineage keys found on a span into its baggage, and stamps every key in the baggage onto an `llm.complete` span that does not set it. It is a separate method because the gateway's streaming path does not use `span()`: it builds its span by hand, because the span must outlive the call that opened it, and hands it to `tracer.export()` when the stream ends. `export()` adopts that span into the current trace and calls `_propagate` too, so a streamed attempt carries tenant, prompt identity, and versions exactly like a non-streamed one. Without that call, streamed attempts could not be grouped by prompt version; `test_streamed_attempt_gets_the_same_propagated_attributes` pins the behavior with `ModelGateway.stream`.
 
@@ -338,7 +358,7 @@ Consume the stream inside the request's spans: a stream drained after its parent
 The capture policy decides how much content to keep when the span ends, which is why content is offered with `tracer.capture(span, key, value)` rather than written as an attribute:
 
 ```python
-# path: book/projects/examples/ch31/instrument.py  (excerpt)
+# path: book/projects/examples/ch31/instrument.py (excerpt; full file on disk)
 @dataclass
 class CapturePolicy:
     mode: CaptureMode = "hashed"
@@ -404,13 +424,20 @@ Tools get a context manager and a decorator. `@traced_tool(tracer, "search_ticke
 `otel_setup.py` builds a private `TracerProvider` with a resource, a parent-based ratio sampler, and an exporter: console for development, OTLP for a collector, in-memory for tests. Network exporters sit behind a batch processor, so the request path never waits on telemetry. `OTelAITracer` overrides two hooks. It starts a real OpenTelemetry span when ours starts, takes its trace and span ids, and attaches it to the OpenTelemetry context. That makes auto-instrumented HTTP and database clients inside the request nest under the current stage. When ours ends, it copies the final attributes, events, and status:
 
 ```python
-# path: book/projects/examples/ch31/otel_setup.py  (condensed excerpt; full file on disk)
-def build_provider(service_name: str, *, exporter: ExporterKind = "console",
-                   resource_attributes: dict[str, Any] | None = None, endpoint: str | None = None,
-                   sample_ratio: float = 1.0) -> tuple[TracerProvider, SpanExporter | None]:
+# path: book/projects/examples/ch31/otel_setup.py (excerpt; full file on disk)
+def build_provider(
+    service_name: str,
+    *,
+    exporter: ExporterKind = "console",
+    resource_attributes: dict[str, Any] | None = None,
+    endpoint: str | None = None,
+    sample_ratio: float = 1.0,
+) -> tuple[TracerProvider, SpanExporter | None]:
+    """A private TracerProvider (not the global one, so tests stay isolated)."""
     resource = Resource.create({"service.name": service_name, **(resource_attributes or {})})
     # ParentBased: a child follows its parent's decision, so a trace is never half-sampled
     provider = TracerProvider(resource=resource, sampler=ParentBased(TraceIdRatioBased(sample_ratio)))
+    span_exporter: SpanExporter | None
     if exporter == "memory":
         span_exporter = InMemorySpanExporter()
         provider.add_span_processor(SimpleSpanProcessor(span_exporter))
@@ -419,14 +446,14 @@ def build_provider(service_name: str, *, exporter: ExporterKind = "console",
         provider.add_span_processor(BatchSpanProcessor(span_exporter))
     elif exporter == "otlp":
         span_exporter = _otlp_exporter(endpoint)
-        provider.add_span_processor(BatchSpanProcessor(span_exporter, max_queue_size=4096,
-                                                       max_export_batch_size=512))
+        provider.add_span_processor(BatchSpanProcessor(span_exporter, max_queue_size=4096, max_export_batch_size=512))
     else:
         span_exporter = None
     return provider, span_exporter
 
 
 class OTelAITracer(AITracer):
+    # ...
     def _backend_start(self, span: LinkedSpan, parent: LinkedSpan | None) -> Any:
         otel_span = self._otel.start_span(span.name, start_time=int(span.start * 1e9))
         ctx = otel_span.get_span_context()
@@ -441,8 +468,7 @@ class OTelAITracer(AITracer):
             if value is not None:
                 otel_span.set_attribute(key, _otel_value(value))
         for ev in span.events:
-            otel_span.add_event(str(ev.get("type", "event")),
-                                {k: str(v) for k, v in ev.items() if k not in ("type", "time")})
+            otel_span.add_event(str(ev.get("type", "event")), {k: str(v) for k, v in ev.items() if k not in ("type", "time")})
         if span.status == "error":
             otel_span.set_status(Status(StatusCode.ERROR, str(span.attributes.get("error.class", ""))))
         otel_span.end(end_time=int((span.end or span.start) * 1e9))
@@ -456,7 +482,7 @@ Compare this with `aie_core`'s own `OTelTracer`, which creates OpenTelemetry spa
 `TraceStore` rebuilds trees from flat span records. That is the operation every tracing backend performs, and the one you need when debugging from a JSONL file on a laptop:
 
 ```python
-# path: book/projects/examples/ch31/trace_store.py  (condensed excerpt; full file on disk)
+# path: book/projects/examples/ch31/trace_store.py (excerpt; full file on disk)
 class TraceTree:
     def __init__(self, trace_id: str, spans: list[SpanRecord]) -> None:
         self.trace_id = trace_id
@@ -466,13 +492,13 @@ class TraceTree:
         self.orphans: list[SpanRecord] = []
         for s in self.spans:
             if s.parent_span_id is not None and s.parent_span_id not in self.by_id:
-                self.orphans.append(s)          # parent never arrived: a telemetry gap
+                self.orphans.append(s)
                 self.children[None].append(s)
             else:
                 self.children[s.parent_span_id].append(s)
         roots = self.children.get(None, [])
         real_roots = [s for s in roots if s.parent_span_id is None]
-        self.root = (real_roots or roots or [None])[0]
+        self.root: SpanRecord | None = (real_roots or roots or [None])[0]
         self.evals: list[dict[str, Any]] = []
         self.feedback: list[dict[str, Any]] = []
 
@@ -494,7 +520,7 @@ class TraceTree:
 The most useful single query in this chapter is the evidence funnel. For every labeled trace, it asks whether the gold evidence survived each stage. Survival is cumulative, because a stage cannot recover evidence an earlier stage lost:
 
 ```python
-# path: book/projects/examples/ch31/analysis.py  (condensed excerpt; full file on disk)
+# path: book/projects/examples/ch31/analysis.py (excerpt; full file on disk)
 def evidence_path(tree: TraceTree) -> dict[str, bool] | None:
     gold = set(tree.gold_ids or [])
     if not gold:
@@ -504,23 +530,25 @@ def evidence_path(tree: TraceTree) -> dict[str, bool] | None:
     reranked = gold <= _ids(rerank.attributes.get(Attr.RERANK_IDS)) if rerank else retrieved
     in_context = gold <= _ids(context.attributes.get(Attr.CONTEXT_IDS)) if context else reranked
     cited = bool(gold & _ids(tree.get(Attr.CITATION_IDS)))
+    passed = bool(tree.eval_passed)
+    # survival is cumulative: a stage cannot recover evidence an earlier stage lost
     path = {"retrieved": retrieved}
     path["reranked"] = path["retrieved"] and reranked
     path["in_context"] = path["reranked"] and in_context
     path["cited"] = path["in_context"] and cited
-    path["answer_passed"] = bool(tree.eval_passed)
+    path["answer_passed"] = passed
     return path
 
 
 def triage_by_stage(baseline: TraceStore, candidate: TraceStore, *, tolerance: float = 0.05) -> TriageReport:
     fb, fc = gold_funnel(baseline), gold_funnel(candidate)
-    cb, cc = _conditional(fb), _conditional(fc)     # P(survive stage | survived previous)
+    cb, cc = _conditional(fb), _conditional(fc)
     drop = {s: cb[s] - cc[s] for s in FUNNEL_STAGES}
     first = next((s for s in FUNNEL_STAGES[:-1] if drop[s] > tolerance), None)
-    ...
+    # ...
 ```
 
-The comparison uses conditional survival rates, not absolute ones. An absolute drop propagates downstream: if retrieval loses evidence, every later stage looks worse too. The conditional rate isolates the stage where loss begins. The other queries follow the same shape:
+`_conditional` (on disk) turns the funnel into the probability of surviving each stage given survival of the previous one. The comparison uses these conditional survival rates, not absolute ones. An absolute drop propagates downstream: if retrieval loses evidence, every later stage looks worse too. The conditional rate isolates the stage where loss begins. The other queries follow the same shape:
 
 - **`compare_versions`** splits a store on any version key and reports request count, labeled count, pass rate, negative-feedback rate, p50 and p95 latency, tokens, and cost per request. It adds bootstrap confidence intervals for the differences.
 - **`retrieved_not_cited`** lists labeled traces whose gold evidence was retrieved but not cited. For each, it gives the gold rank and whether the context packer dropped it.
@@ -533,7 +561,7 @@ The comparison uses conditional survival rates, not absolute ones. An absolute d
 `metrics.py` holds a registry of named metrics computed from a store, plus the parametric family `errors.class_rate:<class>`. Each metric also declares its sample size. A pass rate over 300 requests of which 12 are labeled is a 12-sample estimate, and `min_samples` must see 12, not 300. The alert evaluator reads `alerts.yaml`. Each rule names a metric, a window, either an absolute threshold or a ratio to the same metric over a baseline window just before, a minimum sample count, an optional group-by dimension, a severity, and a runbook pointer:
 
 ```yaml
-# path: book/projects/examples/ch31/alerts.yaml  (excerpt; full file on disk)
+# path: book/projects/examples/ch31/alerts.yaml (excerpt; full file on disk)
 rules:
   - name: answer_quality_drop
     metric: quality.eval_pass_rate          # probe + sampled-judge traffic only (labeled traces)
@@ -570,7 +598,7 @@ rules:
 Service-level objectives get burn-rate rules rather than plain thresholds (Chapter 29 owns the arithmetic). A burn rate measures how fast you are spending the error budget, the share of requests the objective allows to fail. `slo.availability_burn_rate` is the share of failed requests divided by that budget, so 1.0 spends a 30-day budget in exactly 30 days. A rule with a `confirm_window` fires only when a short window breaches as well as the long one: the hour proves it is not a blip, the last five minutes prove it is still happening, and the page stops by itself once the incident ends.
 
 ```yaml
-# path: book/projects/examples/ch31/alerts.yaml  (excerpt)
+# path: book/projects/examples/ch31/alerts.yaml (excerpt; full file on disk)
   - name: availability_fast_burn
     metric: slo.availability_burn_rate
     window: 1h
@@ -598,7 +626,7 @@ python join_signals.py --traces traces.jsonl --evals eval_results.jsonl \
 
 The tests run offline in about three seconds. `test_instrument.py` checks the core mechanics:
 
-- tree construction across the gateway boundary, and legacy key normalization;
+- tree construction across the gateway boundary, and gateway key normalization;
 - propagation of prompt identity and the version manifest to `llm.complete`, including from a Chapter 4 style `prompt.call` parent;
 - recovered retries, and the mapping from exceptions to error classes;
 - every capture mode, the tenant ceiling, capture-on-error, and deterministic sampling;
@@ -616,7 +644,7 @@ The tests run offline in about three seconds. `test_instrument.py` checks the co
 `test_slo_alerts.py` checks the burn-rate arithmetic and that a fast-burn rule pages while failures continue and stays quiet once the last five minutes are healthy.
 
 ```python
-# path: book/projects/examples/ch31/tests/test_analysis.py  (excerpt; full file on disk)
+# path: book/projects/examples/ch31/tests/test_analysis.py (excerpt; full file on disk)
 def test_stage_triage_points_at_context_build(store):
     before, after = windows(store)
     report = triage_by_stage(before, after)
@@ -636,13 +664,23 @@ Run them from the project directory:
 
 ```bash
 cd book/projects/examples/ch31
-../../../../.venv/bin/python -m pytest -q        # 54 passed
+../../../../.venv/bin/python -m pytest -q
 ../../../../.venv/bin/python incident_walkthrough.py
 ```
 
 ## Code walkthrough
 
-Follow one request through `incident_sim.py`, which plays the application. The root span carries the version manifest. `retrieval_span` hashes the query (and keeps a redacted copy on the 5% of traces the capture policy samples) and records ids, scores, and per-item tenants. `context_span` records what fit the 3,000-token budget and what was dropped. `traced_generation` opens `llm.generate` and calls the gateway. The gateway's `llm.complete` span nests under it. Its legacy keys are renamed at span end, and it is stamped with the inherited prompt and index versions. On the one percent of calls where the scripted model raises a rate limit, the trace shows two attempts, the first one recovered. The simulator then writes probe evals with gold ids, deliberately imperfect judge verdicts, and feedback keyed by `response.id`. The analysis functions never see the simulator's state. Every conclusion comes from spans and joined labels, so the same conclusions must be reachable from production telemetry.
+Follow one request through `incident_sim.py`, which plays the application, and then through the offline tools. The point of the walk is that every conclusion in the playbook comes from spans and joined labels alone, never from the simulator's internal state.
+
+**The request.** `_rag` opens the root with `trace_request`, passing the tenant, a user id (hashed on the way in), the traffic source, the client-visible `response_id`, and the version manifest: index, chunker, prompt id and version, model. `retrieval_span` hashes the query, keeps a redacted copy only on the 5% of traces the capture policy samples, and records ids, scores, and the tenant of every returned item. A returned tenant that is neither the requester's nor `shared` would be marked `retrieval_contamination` at that moment. `rerank_span` records the kept ids. `context_span` records what fit the 3,000-token budget and what was dropped; this one attribute is what the incident later turns on.
+
+**The model call.** `traced_generation` opens `llm.generate`, records prompt identity, offers the rendered prompt and the response to `tracer.capture`, and calls the gateway. The gateway's `llm.complete` span nests under it through the context variable. Its unprefixed keys are renamed at span end, and `_propagate` stamps it with the tenant, prompt, and index versions inherited from the root's baggage. When the scripted model raises a rate limit, the trace shows two attempts under one `llm.generate`; the trace store reports the first as a recovered error, not an outcome failure. The citation guardrail then records `allow`, or `block` with `citation_mismatch`, and the root receives the citation ids.
+
+**The agent request.** `_agent` wraps the same pattern in `agent_run` and `agent_step`: each step holds one `llm.generate` and one `tool.call`, and the run ends with `run.stop("done")` or, for the scripted looping runs, `run.stop("max_steps", error_class=ErrorClass.LOOP)`. Tool arguments become a keyed fingerprint, which is all the trajectory check needs.
+
+**Labels.** `_label` writes three kinds of late signal: probe evals carrying gold ids, a sampled judge that is wrong on purpose about 8% of the time, and feedback keyed by `response.id`. `join_signals.join` attaches them to trees. It generalizes Chapter 25's `join_feedback`: the same id-based attachment and unmatched-label accounting, extended from feedback to every label source (offline evals, judges, probes, delayed outcomes) and resolving either a trace id or a response id.
+
+**The analysis.** `incident_walkthrough.py` loads the store either from the simulator's in-memory spans or from the JSONL files it wrote, runs the joins, and drives the playbook: the alert evaluator over `alerts.yaml`, `summarize` per tenant and route, `compare_versions` on the prompt canary, `triage_by_stage`, `retrieved_not_cited`, a rendered exemplar tree, `cost_by_tenant`, and `trajectory_view`. Because the tests run both load paths and assert the same answers, a production team can point the same functions at an exported trace file and expect the same behavior.
 
 ## Production considerations
 
@@ -664,13 +702,9 @@ Follow one request through `incident_sim.py`, which plays the application. The r
 
 **Totals only.** A trace that records total tokens and total latency cannot attribute either to a stage. Record per stage and derive totals.
 
-**Capturing full content by default.** It feels safe during development and becomes a breach surface in production. Start at hashed, sample redacted, and gate full capture behind an approval and a time limit.
-
-**Plain hashes of personal data.** Unkeyed hashes of emails and user ids can be reversed by hashing a list of guesses; the keyed hash described under privacy cannot.
+**Capturing full content, or plain-hashing it, by default.** Full capture feels safe during development and becomes a breach surface in production; an unkeyed hash of an email is reversible by hashing guesses. Use the policy under Privacy: keyed hashes by default, sampled redaction, and full capture only behind an approval and a time limit.
 
 **Treating thumbs-down rate as quality.** It is a biased, sparse trend signal. Probes and calibrated judges carry the quality measurement, and feedback corroborates it.
-
-**Counting recovered retries as failures.** Keep `recovered_errors` separate from `error_classes`, as described under errors as a taxonomy; otherwise the error panel trains people to ignore it.
 
 **Tuning prompts before reading traces.** The RAG debugging tree from Chapters 10 and 14 exists to prevent this. Most "the model ignored the evidence" reports turn out to be evidence that never reached the model.
 
@@ -706,7 +740,7 @@ A vendor platform for LLM tracing is a reasonable choice. Instrument through you
 
 Observability code is tested at three levels.
 
-**Mechanics.** Unit tests assert that spans form one tree across library boundaries, that required keys appear, that legacy keys normalize, that the capture policy produces exactly what each mode promises, that the tenant ceiling cannot be exceeded, and that redaction removes the patterns it claims to remove. `test_hardening.py` adds the edge cases: exception text under the capture ceiling, current API-key shapes, completeness that requires keys on the root, telemetry alerts that see rootless traces, thin baselines that never decide an alert, and a completion burn over served requests only. These are the tests in `test_instrument.py` and `test_otel.py`.
+**Mechanics.** Unit tests assert that spans form one tree across library boundaries, that required keys appear, that gateway keys normalize, that the capture policy produces exactly what each mode promises, that the tenant ceiling cannot be exceeded, and that redaction removes the patterns it claims to remove. `test_hardening.py` adds the edge cases: exception text under the capture ceiling, current API-key shapes, completeness that requires keys on the root, telemetry alerts that see rootless traces, thin baselines that never decide an alert, and a completion burn over served requests only. These are the tests in `test_instrument.py` and `test_otel.py`.
 
 **Schema contracts.** A contract test runs a representative request of each route, through the real service boundaries where possible, and asserts the schema. Every request root has the required keys, every `llm.complete` has prompt and index versions, and no content key appears above the configured mode. Run it in CI. It is the cheapest protection against telemetry gaps.
 
@@ -859,7 +893,24 @@ issues: loop: search_tickets called 6x with identical arguments (8b29dbc4f1a1); 
 
 The arguments appear only as a keyed hash, because logistics has a `hashed` capture ceiling. The loop is still unambiguous, because identical fingerprints mean identical arguments. Recording structure, such as tool names, argument fingerprints, and step counts, is what keeps traces useful under a strict privacy policy.
 
+## Before you ship
+
+- [ ] Every route's root span carries tenant, hashed user, route, traffic source, `response.id`, and every version key (prompt, model, index, chunker, policy); a schema contract test per route asserts it in CI.
+- [ ] Every `llm.complete` span carries prompt id, prompt version, and index version through propagation, including streamed attempts; a test drives `ModelGateway.stream` and checks it.
+- [ ] A representative request of each route produces exactly one trace id across every service and queue hop it crosses, and the orphan rate in `completeness()` is zero in staging.
+- [ ] The capture policy is explicit per environment: default `hashed`, a stated sample rate for `redacted`, on-error mode set, and a tenant ceiling for every tenant with a contractual or residency limit.
+- [ ] `CAPTURE_SALT` lives in the secret store, differs from the default, and is not readable by everyone who can read traces.
+- [ ] The collector deletes `*.content` attributes before the shared store, and a scheduled scan of sampled exported spans alerts on any unredacted email, phone, card, or key pattern.
+- [ ] Content-bearing traces and content-free metrics have separate retention and access lists, reads of content are audited, and a deletion request can find every trace by `user.hash`.
+- [ ] Probe traffic runs on a schedule with gold evidence ids, is tagged `traffic.source=probe`, and is excluded from user-facing metrics and billing; its rate yields at least `min_samples` labeled traces per tenant per quality-alert window.
+- [ ] Every alert rule names a metric that exists in the registry, has `min_samples` and a runbook pointer, and has been replayed against a quiet period (nothing fires) and an incident (the right rules fire).
+- [ ] The exporter's dropped-span counter and the `telemetry_gaps` alert are on the telemetry-health dashboard, and the error panel separates `recovered_errors` from `error_classes`.
+- [ ] Sampled judge verdicts record the judge version, and judge-human agreement is tracked on a small labeled stream.
+- [ ] The evidence funnel runs on probe traces for every index build and context-budget change before traffic moves to it.
+
 ## Exercises
+
+**Start here:** K2, K4, E1, P1, D2 (about 4 hours). The rest go deeper.
 
 ### Knowledge questions
 
@@ -887,13 +938,13 @@ The arguments appear only as a keyed hash, because logistics has a `hashed` capt
 
 ### Practical exercises
 
-**P1.** Add a `retrieval_miss` semantic check: when a probe trace's gold ids are absent from the retrieval results, the joined record should carry `error.class=retrieval_miss`. Then add an alert rule for its rate.
+**P1.** (about 90 min) Add a `retrieval_miss` semantic check: when a probe trace's gold ids are absent from the retrieval results, the joined record should carry `error.class=retrieval_miss`. Then add an alert rule for its rate.
 
-**P2.** Extend `analysis.py` with `compare_index_versions_by_replay`. It takes the labeled traces from before an index change, and a function that re-runs retrieval and packing against a candidate index, and reports the funnel for both. Show that it would have caught the chapter's incident before the release.
+**P2.** (about 3 hours) Extend `analysis.py` with `compare_index_versions_by_replay`. It takes the labeled traces from before an index change, and a function that re-runs retrieval and packing against a candidate index, and reports the funnel for both. Show that it would have caught the chapter's incident before the release.
 
-**P3.** Implement tail-sampling logic as a function over completed trees: keep every trace with an error class, negative feedback, or probe traffic, plus a configurable uniform fraction of the rest. Measure what fraction of the simulated incident's diagnostic findings survive at 1%, 5%, and 20% uniform rates.
+**P3.** (about 2 hours) Implement tail-sampling logic as a function over completed trees: keep every trace with an error class, negative feedback, or probe traffic, plus a configurable uniform fraction of the rest. Measure what fraction of the simulated incident's diagnostic findings survive at 1%, 5%, and 20% uniform rates.
 
-**P4.** Add time-to-first-token to the instrumentation for streamed generations, without modifying `aie_core`. Add a `latency.ttft_p95_ms` metric and a dashboard row.
+**P4.** (about 2 hours) Add time-to-first-token to the instrumentation for streamed generations, without modifying `aie_core`. Add a `latency.ttft_p95_ms` metric and a dashboard row.
 
 ### Debugging exercises
 
@@ -913,3 +964,11 @@ The arguments appear only as a keyed hash, because logistics has a `hashed` capt
 - Metrics carry alerts, traces carry debugging, and labels from probes, judges, users, and delayed outcomes join to traces by id. Probes are the only production signal with stage-level ground truth.
 - Debug by narrowing: scope, timeline, version diff, stage triage with conditional survival rates, exemplar traces, collateral effects, then close the loop with eval cases and alerts. Do not edit prompts first.
 - Test observability for diagnostic power. Inject a known fault and assert that the tools localize it. Test schema completeness in CI, because telemetry gaps are silent too.
+
+## Further reading
+
+- **OpenTelemetry Semantic Conventions for Generative AI.** The standard attribute names this chapter's alias map targets; check the current status of each key before making it primary.
+- **W3C Trace Context.** The `traceparent` header that keeps one trace id across services, queues, and tool executors.
+- **OpenTelemetry for Python.** The SDK behind `otel_setup.py`: providers, samplers, batch processors, and exporters.
+- **Beyer et al. (eds.), *Site Reliability Engineering*.** SLOs, error budgets, and the alerting philosophy behind burn-rate rules and runbook pointers.
+- **Sculley et al., *Hidden Technical Debt in Machine Learning Systems*.** Why monitoring versioned data and configuration, not only code, is the hard part of operating ML systems.

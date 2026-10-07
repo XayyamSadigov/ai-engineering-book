@@ -3,6 +3,8 @@
 Solutions: `../solutions/ch34-solutions.md`
 
 
+**Start here:** K3, K7, E2, P3, D2 (about 4 hours). The rest go deeper.
+
 ### Knowledge questions
 
 **K1.** Define queue time, TTFT, TPOT, end-to-end latency, throughput, and goodput. For an interactive chat product and for a nightly batch classification job, name the one metric each cares about most and explain why the other metrics matter less for that product.
@@ -17,6 +19,8 @@ Solutions: `../solutions/ch34-solutions.md`
 
 **K6.** State Little's Law and give one example of using it in each direction: deriving in-flight requests from traffic, and deriving a sustainable arrival rate from a fixed concurrency budget.
 
+**K7.** An illustrative mixture-of-experts model has 48B total and 8B active parameters, 32 layers, 8 KV heads, and head dimension 128. (a) Compute its weight memory at BF16 and at FP8, and, with the chapter's 10 percent headroom and 2 GiB runtime allowance on an 80 GiB device, the KV budget left in each case. (b) How much KV cache does one 8k-token sequence need, and how many fit? (c) Would you expect its TPOT at concurrency 1 and at concurrency 32 to resemble a dense 8B model or a dense 48B model, and why? (d) If 24 of its 32 layers used sliding-window attention with a 4,096-token window, what would one 32k-token sequence cost in KV memory?
+
 ### Engineering questions
 
 **E1.** Northwind's logistics tenant requires that incident reports never leave the corporate network, while the retail tenant has no such constraint. Design the routing so both tenants use the same application code and the same gateway. Which `aie_core` components are involved, what does the `ServingTarget` list look like, and what must appear in every trace?
@@ -29,13 +33,13 @@ Solutions: `../solutions/ch34-solutions.md`
 
 ### Practical exercises
 
-**P1.** Extend `loadtest.py` to record the engine's Prometheus-style metrics (queue depth, KV utilization, running sequences) at the end of each concurrency level, add the columns to `LevelSummary` and the report, and extend `fake_server.py` to expose a `/metrics` endpoint so the feature is tested offline.
+**P1.** (about 2 hours) Extend `loadtest.py` to record the engine's Prometheus-style metrics (queue depth, KV utilization, running sequences) at the end of each concurrency level, add the columns to `LevelSummary` and the report, and extend `fake_server.py` to expose a `/metrics` endpoint so the feature is tested offline.
 
-**P2.** Write `plot_sweep.py` that reads a list of `LevelSummary` objects (serialize them to JSON from `sweep`) and produces the two protocol plots: p50 and p95 TTFT against requests per second, and output tokens per second against p95 E2E. Mark the SLO lines and the operating point.
+**P2.** (about 90 min) Write `plot_sweep.py` that reads a list of `LevelSummary` objects (serialize them to JSON from `sweep`) and produces the two protocol plots: p50 and p95 TTFT against requests per second, and output tokens per second against p95 E2E. Mark the SLO lines and the operating point.
 
-**P3.** Build an admission-control function on top of `kv_cache.tokens_that_fit` that, given free KV bytes reported by the engine and a request's input tokens plus `max_tokens`, decides between admit, queue (with a bounded wait), and reject with a retryable error. Test it with a sequence of mixed-length requests against a fixed budget and assert that it never admits more tokens than fit.
+**P3.** (about 2 hours) Build an admission-control function on top of `kv_cache.tokens_that_fit` that, given free KV bytes reported by the engine and a request's input tokens plus `max_tokens`, decides between admit, queue (with a bounded wait), and reject with a retryable error. Test it with a sequence of mixed-length requests against a fixed budget and assert that it never admits more tokens than fit.
 
-**P4.** Run the load generator against a real local OpenAI-compatible server of your choice, once with the default configuration and once with a quantized variant of the same model. Record the full configuration from the protocol section, find both operating points, and run the same small structured-output evaluation against both. Write a one-page comparison that reports goodput at the SLO and the quality deltas by slice.
+**P4.** (about half a day, needs a local GPU or a capable CPU) Run the load generator against a real local OpenAI-compatible server of your choice, once with the default configuration and once with a quantized variant of the same model. Record the full configuration from the protocol section, find both operating points, and run the same small structured-output evaluation against both. Write a one-page comparison that reports goodput at the SLO and the quality deltas by slice.
 
 ### Debugging exercises
 

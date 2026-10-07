@@ -3,6 +3,8 @@
 Solutions: `../solutions/ch21-solutions.md`
 
 
+**Start here:** K1, K5, E1, P2, D2 (about 4 hours). The rest go deeper.
+
 ### Knowledge questions
 
 **K1.** Name the six memory types in this chapter, and for each give its typical writer and a reasonable default lifetime.
@@ -27,15 +29,17 @@ Solutions: `../solutions/ch21-solutions.md`
 
 **E4.** Product wants the assistant to "remember everything automatically, no confirmation prompts". Write the argument you would make, and the compromise you would propose, in terms of measurable outcomes.
 
+**E5.** The platform team wants Northwind's incident agent to keep a `runbook-notes.md` file that it reads at the start of every run and edits when it learns something. Design how edits reach the file, what may and may not be written there, and how you would detect a poisoned note.
+
 ### Practical exercises
 
-**P1.** Add a `PostgresStore` implementing `MemoryStore` with psycopg and a pgvector column, plus row-level security on `tenant`. Make the existing store contract tests run against it when `DATABASE_URL` is set, and skip otherwise.
+**P1.** (about 4 hours) Add a `PostgresStore` implementing `MemoryStore` with psycopg and a pgvector column, plus row-level security on `tenant`. Make the existing store contract tests run against it when `DATABASE_URL` is set, and skip otherwise.
 
-**P2.** Extend `WritePolicy` with per-key validity: a fact extracted as "on parental leave until 2027-03-01" should get `expires_at` from its value, capped by the kind TTL. Add tests.
+**P2.** (about 90 min) Extend `WritePolicy` with per-key validity: a fact extracted as "on parental leave until 2027-03-01" should get `expires_at` from its value, capped by the kind TTL. Add tests.
 
-**P3.** Build a "what I remember about you" endpoint in FastAPI with list, edit, and delete operations on profile and semantic memories for the authenticated user. Deletion must cascade and must return the tombstones. Test that one user cannot edit another's memory.
+**P3.** (about 3 hours) Build a "what I remember about you" endpoint in FastAPI with list, edit, and delete operations on profile and semantic memories for the authenticated user. Deletion must cascade and must return the tombstones. Test that one user cannot edit another's memory.
 
-**P4.** Build a memory-on versus memory-off evaluation over five synthetic multi-session Northwind scenarios, including one stale-fact scenario and one override scenario. Report task success and repeated-information counts for both arms.
+**P4.** (about 3 hours) Build a memory-on versus memory-off evaluation over five synthetic multi-session Northwind scenarios, including one stale-fact scenario and one override scenario. Report task success and repeated-information counts for both arms.
 
 ### Debugging exercises
 

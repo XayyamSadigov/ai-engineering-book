@@ -3,6 +3,8 @@
 Solutions: `../solutions/ch10-solutions.md`
 
 
+**Start here:** K2, K6, K7, P1, P3, D2 (about 4 hours). The rest go deeper.
+
 ### Knowledge questions
 
 **K1.** Give the four reasons a model's weights are a poor knowledge store for an internal assistant, and for each, the property of retrieval that addresses it.
@@ -17,6 +19,8 @@ Solutions: `../solutions/ch10-solutions.md`
 
 **K6.** What does "RAG is two systems" let you conclude when retrieval recall is 72 percent and answer correctness is 70 percent? What if recall is 98 percent and correctness is 70 percent?
 
+**K7.** A question requires documents P and Q; document F is acceptable. The retriever returns `[F, Z, P, Y, W]`. Compute hit@1, hit@3, recall@3, precision@5, MRR, and nDCG@5 with the chapter's gain convention. Which one of these numbers would you report for a pipeline that packs three results, and why is it not enough on its own?
+
 ### Engineering questions
 
 **E1.** Northwind HR wants the assistant to answer from the PTO policy only once a revision is approved, while drafts are already in the document system. Design the ingestion and retrieval changes, including what metadata the chunk carries and where the filter lives.
@@ -29,13 +33,13 @@ Solutions: `../solutions/ch10-solutions.md`
 
 ### Practical exercises
 
-**P1.** Add a zero-hit guard to `MinimalRAG.answer`: when the filtered search returns no chunks, skip the model call and return an abstention with a reason. Write tests for the zero-hit path under an identity with no matching groups.
+**P1.** (about 45 min) Add a zero-hit guard to `MinimalRAG.answer`: when the filtered search returns no chunks, skip the model call and return an abstention with a reason. Write tests for the zero-hit path under an identity with no matching groups.
 
-**P2.** Extend `pack_evidence` to include `version` and `updated_at` attributes, and extend the system prompt with a conflict rule. Write a test with two synthetic documents that disagree, a scripted model that follows the rule, and an assertion that the prompt exposes both versions.
+**P2.** (about 60 min) Extend `pack_evidence` to include `version` and `updated_at` attributes, and extend the system prompt with a conflict rule. Write a test with two synthetic documents that disagree, a scripted model that follows the rule, and an assertion that the prompt exposes both versions.
 
-**P3.** Implement `evaluate_retrieval(rag, gold_path, k)` that loads `retrieval_gold.jsonl`, searches each question with its `user_groups`, and reports hit rate at k (any required document in the top k) overall and per tag. Run it at k of 1, 4, and 10 and record the numbers.
+**P3.** (about 90 min) Implement `evaluate_retrieval(rag, gold_path, k)` that loads `retrieval_gold.jsonl`, searches each question with its `user_groups`, and reports hit rate at k (any required document in the top k) overall and per tag. Run it at k of 1, 4, and 10 and record the numbers.
 
-**P4.** Implement a chunker that splits on Markdown headings first and falls back to fixed-size windows only for sections longer than the limit, copying the heading path into each chunk's text. Compare it with `chunk_fixed` using your P3 evaluator.
+**P4.** (about 2 hours) Implement a chunker that splits on Markdown headings first and falls back to fixed-size windows only for sections longer than the limit, copying the heading path into each chunk's text. Compare it with `chunk_fixed` using your P3 evaluator.
 
 ### Debugging exercises
 

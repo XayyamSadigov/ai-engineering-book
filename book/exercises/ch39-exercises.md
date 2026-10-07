@@ -3,6 +3,8 @@
 Solutions: `../solutions/ch39-solutions.md`
 
 
+**Start here:** K1, K3, E1, P1, D2 (about 6 hours). The rest go deeper.
+
 ### Knowledge questions
 
 K1. Why does `prepare` run before the response stream starts, and what would a client observe if admission rejections were sent as `error` events inside a `200` stream?
@@ -29,15 +31,15 @@ E4. The service desk wants the assistant to send routine "your ticket was resolv
 
 ### Practical exercises
 
-P1. **Durable approvals.** Replace toolkit's in-memory `ApprovalManager` with Chapter 38's `InterruptManager` (SQLite) for `send_reply`, with a 15-minute expiry and escalation to a second lead after 10 minutes, and persist the requester's context (user, tenant, scopes, groups) with each approval. Acceptance: a pending approval survives an API restart and can be approved afterwards, with policy re-checked against the persisted requester context (the restored approval executes under the persisted scopes and groups, never under defaults); an expired approval cannot be executed; escalation is visible in `GET /v1/approvals`; all existing tests pass.
+P1. (about 4 hours) **Durable approvals.** Replace toolkit's in-memory `ApprovalManager` with Chapter 38's `InterruptManager` (SQLite) for `send_reply`, with a 15-minute expiry and escalation to a second lead after 10 minutes, and persist the requester's context (user, tenant, scopes, groups) with each approval. Acceptance: a pending approval survives an API restart and can be approved afterwards, with policy re-checked against the persisted requester context (the restored approval executes under the persisted scopes and groups, never under defaults); an expired approval cannot be executed; escalation is visible in `GET /v1/approvals`; all existing tests pass.
 
-P2. **Real-provider integration suite.** Add `@pytest.mark.integration` tests that run the grounded-answer, agent and extraction paths against one real provider configured with `LLM_PROVIDER` and `NA_MODEL_MAP`, plus an eval run whose report is compared with the offline reference. Acceptance: skipped by default; with credentials, all pass; the report shows per-stage latency and cost from real spans; no test asserts exact model text.
+P2. (about 3 hours, plus provider credentials) **Real-provider integration suite.** Add `@pytest.mark.integration` tests that run the grounded-answer, agent and extraction paths against one real provider configured with `LLM_PROVIDER` and `NA_MODEL_MAP`, plus an eval run whose report is compared with the offline reference. Acceptance: skipped by default; with credentials, all pass; the report shows per-stage latency and cost from real spans; no test asserts exact model text.
 
-P3. **Intent classifier with a baseline.** Label 200 user messages with their workflow, train or prompt a classifier, and route with it only when its confidence is above a threshold, falling back to the rules. Acceptance: on a held-out set the combined router beats the rules on macro-F1 by at least 5 points, never routes a question to a side-effecting workflow below the threshold, and its decision appears in `meta` and on the `router.decide` span.
+P3. (about 5 hours) **Intent classifier with a baseline.** Label 200 user messages with their workflow, train or prompt a classifier, and route with it only when its confidence is above a threshold, falling back to the rules. Acceptance: on a held-out set the combined router beats the rules on macro-F1 by at least 5 points, never routes a question to a side-effecting workflow below the threshold, and its decision appears in `meta` and on the `router.decide` span.
 
-P4. **Calibrated online judge.** Sample 1 percent of production answers into an evaluation job that runs ragkit's faithfulness judge with a separate model, writes scores as `eval.score` spans joined by `response.id`, and reports agreement with 50 human labels. Acceptance: Cohen's kappa against the human sample is reported per judge version; a judge below 0.6 cannot be used to gate; the dashboard shows faithfulness by version fingerprint.
+P4. (about 4 hours) **Calibrated online judge.** Sample 1 percent of production answers into an evaluation job that runs ragkit's faithfulness judge with a separate model, writes scores as `eval.score` spans joined by `response.id`, and reports agreement with 50 human labels. Acceptance: Cohen's kappa against the human sample is reported per judge version; a judge below 0.6 cannot be used to gate; the dashboard shows faithfulness by version fingerprint.
 
-P5. **Compose end to end.** Bring up the Compose stack with the Project 3 backend, sync the corpus through the worker, and run the security and RAG suites against the running API over HTTP. Acceptance: the same gate passes; a document deleted through the admin API disappears from answers within the freshness SLO; the collector shows one trace per request with the worker's ingestion spans in separate traces.
+P5. (about 4 hours) **Compose end to end.** Bring up the Compose stack with the Project 3 backend, sync the corpus through the worker, and run the security and RAG suites against the running API over HTTP. Acceptance: the same gate passes; a document deleted through the admin API disappears from answers within the freshness SLO; the collector shows one trace per request with the worker's ingestion spans in separate traces.
 
 ### Debugging exercises
 

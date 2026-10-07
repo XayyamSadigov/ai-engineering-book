@@ -3,6 +3,8 @@
 Solutions: `../solutions/ch01-solutions.md`
 
 
+**Start here:** K3, K4, E1, P2, D2 (about 2 hours). The rest go deeper.
+
 ### Knowledge questions
 
 **K1.** State in two sentences how AI engineering differs from ML engineering, naming the primary lever and the primary artifact of each.
@@ -29,13 +31,13 @@ Solutions: `../solutions/ch01-solutions.md`
 
 ### Practical exercises
 
-**P1.** Extend `RequestLineage` with per-stage latencies (retrieval, rerank, model, gates) and a method that returns the stage that consumed the largest share. Add a test with a record whose total latency is dominated by retrieval and assert the method names it.
+**P1.** (about 60 min) Extend `RequestLineage` with per-stage latencies (retrieval, rerank, model, gates) and a method that returns the stage that consumed the largest share. Add a test with a record whose total latency is dominated by retrieval and assert the method names it.
 
-**P2.** Write a function that takes a list of `RequestLineage` records and produces a completeness report: for each lineage question, the fraction of records that cannot answer it. Test it with a mix of complete and incomplete records.
+**P2.** (about 45 min) Write a function that takes a list of `RequestLineage` records and produces a completeness report: for each lineage question, the fraction of records that cannot answer it. Test it with a mix of complete and incomplete records.
 
-**P3.** Add a consistency check for tools: a `ToolEvent` with outcome `pending_approval` must not coexist with a `PolicyGate` decision of `allow` for an approval gate on the same request. Write the failing case first, then make it pass.
+**P3.** (about 45 min) Add a consistency check for tools: a `ToolEvent` with outcome `pending_approval` must not coexist with a `PolicyGate` decision of `allow` for an approval gate on the same request. Write the failing case first, then make it pass.
 
-**P4.** Draw (in Mermaid) the five-layer data flow for a ticket-classification endpoint with no retrieval and no tools. Mark which layers are present, which are degenerate, and where the trust boundary is.
+**P4.** (about 30 min) Draw (in Mermaid) the five-layer data flow for a ticket-classification endpoint with no retrieval and no tools. Mark which layers are present, which are degenerate, and where the trust boundary is.
 
 ### Debugging exercises
 

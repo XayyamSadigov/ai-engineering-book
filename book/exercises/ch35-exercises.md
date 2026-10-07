@@ -3,6 +3,8 @@
 Solutions: `../solutions/ch35-solutions.md`
 
 
+**Start here:** K2, K3, E1, P2, D3 (about 4 hours). The rest go deeper.
+
 ### Knowledge questions
 
 **K1.** Why does the method require correctness to be defined in step 1 before architecture in step 2? Give one concrete consequence of skipping it for each of the four cases.
@@ -16,6 +18,8 @@ Solutions: `../solutions/ch35-solutions.md`
 **K5.** In the voice latency table, which stage is most often the true bottleneck in practice, and why does optimizing model time to first token alone fail to reach a one-second target?
 
 **K6.** Explain why the review rate, not the token price, is the dominant cost term in Case 3, and compute the daily cost change if the review rate falls from 15 percent to 10 percent with the chapter's assumptions.
+
+**K7.** Name three things the text in the middle of a cascaded voice pipeline gives the Case 2 design, and explain what a design built on a speech-to-speech model must add to keep each of them.
 
 ### Engineering questions
 
@@ -31,13 +35,13 @@ Solutions: `../solutions/ch35-solutions.md`
 
 Each is a design exercise. Deliver the completed worksheet (all ten rows), one Mermaid diagram with the trust boundary marked, the arithmetic for step 9 using `back_of_envelope.py`, and a failure table with at least six rows.
 
-**P1.** Design an HR onboarding assistant for Northwind that answers new-hire questions, pre-fills forms from HR data, and schedules required training sessions. Acceptance criteria: side-effect classes identified for every tool; at least one tool requires confirmation bound to arguments; cost per new hire computed; degraded mode defined for the scheduling system being down.
+**P1.** (about 2 hours) Design an HR onboarding assistant for Northwind that answers new-hire questions, pre-fills forms from HR data, and schedules required training sessions. Acceptance criteria: side-effect classes identified for every tool; at least one tool requires confirmation bound to arguments; cost per new hire computed; degraded mode defined for the scheduling system being down.
 
-**P2.** Design the voice channel of Case 2 for a 3,000-calls-per-hour peak with a 1.2 s p95 time-to-first-audio target. Acceptance criteria: latency table whose total meets the target with named overlaps; concurrency computed for audio, STT, TTS, and model streams; barge-in cancellation path described; a written rule stating which tool calls may use partial transcripts (expected: none that write).
+**P2.** (about 2 hours) Design the voice channel of Case 2 for a 3,000-calls-per-hour peak with a 1.2 s p95 time-to-first-audio target. Acceptance criteria: latency table whose total meets the target with named overlaps; concurrency computed for audio, STT, TTS, and model streams; barge-in cancellation path described; a written rule stating which tool calls may use partial transcripts (expected: none that write).
 
-**P3.** Design a contract-renewal alerting pipeline on top of Case 3: extract renewal dates and notice periods, then notify owners 60 days before notice deadlines. Acceptance criteria: field-level evaluation plan with critical-field weighting; idempotent notification design; an explicit decision, with numbers, on whether fine-tuning is justified for the two largest contract families.
+**P3.** (about 2 hours) Design a contract-renewal alerting pipeline on top of Case 3: extract renewal dates and notice periods, then notify owners 60 days before notice deadlines. Acceptance criteria: field-level evaluation plan with critical-field weighting; idempotent notification design; an explicit decision, with numbers, on whether fine-tuning is justified for the two largest contract families.
 
-**P4.** Extend Case 4 with a "fix the failing CI build" mode triggered by a CI failure webhook. Acceptance criteria: Definition of Done written as deterministic checks; the forbidden-path list; budget per task in steps, tokens, time, and cost; the evaluation suite's source of historical tasks and the clarification-or-stop cases it must include.
+**P4.** (about 90 min) Extend Case 4 with a "fix the failing CI build" mode triggered by a CI failure webhook. Acceptance criteria: Definition of Done written as deterministic checks; the forbidden-path list; budget per task in steps, tokens, time, and cost; the evaluation suite's source of historical tasks and the clarification-or-stop cases it must include.
 
 ### Debugging exercises
 

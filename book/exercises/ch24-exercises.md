@@ -3,6 +3,8 @@
 Solutions: `../solutions/ch24-solutions.md`
 
 
+**Start here:** K4, K6, E5, P3, D1 (about 5 hours). The rest go deeper.
+
 ### Knowledge questions
 
 **K1.** Name the four questions every evaluation should keep separate, and give one Northwind Assist failure that affects each without necessarily affecting the others.
@@ -29,15 +31,17 @@ Solutions: `../solutions/ch24-solutions.md`
 
 **E4.** Design the calibration study for a groundedness judge that will gate releases of the RAG assistant: sample, raters, guidelines, metrics, acceptance criteria, and recalibration triggers.
 
+**E5.** You join a team whose meeting-summary feature has been in production for three months with no evaluation at all; changes ship after a playground check. Write the plan for its first week of evaluation: where the cases come from and how many, which checks are deterministic, which single dimension gets a judge and how you will check that judge, what the CI gate blocks on and what it only reports, and the first two upgrades you expect to need after that.
+
 ### Practical exercises
 
-**P1.** Add a `JudgeCache` to `evalkit` that stores `JudgeResult` objects keyed by judge version, case id, and a hash of the candidate output, with an in-memory and a JSONL backend. Show with a test that re-scoring an unchanged run makes no judge calls.
+**P1.** (about 2 hours) Add a `JudgeCache` to `evalkit` that stores `JudgeResult` objects keyed by judge version, case id, and a hash of the candidate output, with an in-memory and a JSONL backend. Show with a test that re-scoring an unchanged run makes no judge calls.
 
-**P2.** Extend `run_target` with a per-case timeout for async targets that records a `TimeoutError` as a target error, and add a gate rule for a maximum timeout rate.
+**P2.** (about 90 min) Extend `run_target` with a per-case timeout for async targets that records a `TimeoutError` as a target error, and add a gate rule for a maximum timeout rate.
 
-**P3.** Write a `tools/label_sample.py` script that draws a stratified calibration sample from a run (at least five cases per slice where available), exports it as a CSV for two raters with system identity hidden and order randomized, imports the labels, and prints a `calibrate_judge` report including the human-human kappa.
+**P3.** (about 3 hours) Write a `tools/label_sample.py` script that draws a stratified calibration sample from a run (at least five cases per slice where available), exports it as a CSV for two raters with system identity hidden and order randomized, imports the labels, and prints a `calibrate_judge` report including the human-human kappa.
 
-**P4.** Add an embedding-based near-duplicate check to `check_leakage` using `aie_core` embeddings, with a similarity threshold parameter. Test it with `FakeEmbeddings(vocabulary=...)` so that a paraphrase pair is caught and an unrelated pair is not.
+**P4.** (about 2 hours) Add an embedding-based near-duplicate check to `check_leakage` using `aie_core` embeddings, with a similarity threshold parameter. Test it with `FakeEmbeddings(vocabulary=...)` so that a paraphrase pair is caught and an unrelated pair is not.
 
 ### Debugging exercises
 

@@ -3,6 +3,8 @@
 Solutions: `../solutions/ch23-solutions.md`
 
 
+**Start here:** K1, K5, E1, P4, D2 (about 4 hours). The rest go deeper.
+
 ### Knowledge questions
 
 **K1.** For each of the following, name the chapter and primitive it maps to and one thing the
@@ -21,12 +23,19 @@ the four evaluation requirements the chapter attaches to it.
 **K5.** State the four things a framework typically adds and the three it typically hides. For each
 hidden item, name the telemetry that would reveal it.
 
+**K6.** A vendor offers a hosted agent runtime: you upload tools and instructions, and it runs the
+loop, stores sessions, and executes code in its sandbox. Which rows of the primitive ledger does it
+absorb, which selection criterion is it most likely to score 0 on, and which three responsibilities
+stay with you regardless?
+
 ### Engineering questions
 
-**E1.** Northwind's incident-research agent (Project 5) must pause for approval before any
-`create_ticket` call and survive a pod restart mid-run. Using the scoring table, score plain primitives
-(Chapters 16, 17, 19) against an orchestration framework with a hosted checkpointer. State your weights
-and justify the two criteria you weighted highest.
+**E1.** Northwind's HR knowledge assistant (Project 3) must never show a passage to a user outside
+its ACL, must cite every claim, and must support Chapter 14's stage-isolated evaluation. Using the
+scoring table, score three candidates: plain `ragkit` primitives (Chapters 10 to 15), a retrieval
+framework with a query engine, and a hosted agent runtime with built-in file search. State your
+weights, justify the two criteria you weighted highest, and name the one finding that would change
+your conclusion.
 
 **E2.** A team uses a framework's query engine for the HR knowledge base. Retrieval quality is good
 but answers sometimes include facts not in the evidence. Propose a diagnosis path using this chapter's
@@ -43,20 +52,20 @@ and say which attributes must never be dropped.
 
 ### Practical exercises
 
-**P1.** Extend `runnable.py` with a stream-aware `Sequence.stream` that propagates chunks through
+**P1.** (about 90 min) Extend `runnable.py` with a stream-aware `Sequence.stream` that propagates chunks through
 steps that declare themselves stream-safe and joins before steps that do not. Add tests showing a
 model-like step streaming three chunks through an upper-casing step and being joined before a JSON
 parsing step.
 
-**P2.** Extend `signature.py` with a `ChainOfThought` module that adds a `reasoning` output field
+**P2.** (about 60 min) Extend `signature.py` with a `ChainOfThought` module that adds a `reasoning` output field
 before the first declared output, and show with a fake model and the existing optimizer whether it
 improves the dev score on the triage signature. Keep the signature object unchanged.
 
-**P3.** Write an adapter that makes Chapter 17's `Graph` implement the `Workflow` port from E3, and a
+**P3.** (about 2 hours) Write an adapter that makes Chapter 17's `Graph` implement the `Workflow` port from E3, and a
 second adapter over a hand-written stand-in for a compiled state graph (do not install the framework).
 Write one contract test suite that both adapters pass, including pause and resume.
 
-**P4.** Build a `RecordingRetriever` / `ReplayRetriever` pair in the style of `ports.py`, record a
+**P4.** (about 60 min) Build a `RecordingRetriever` / `ReplayRetriever` pair in the style of `ports.py`, record a
 fixture over the `FrameworkRetrieverLike` stand-in, then change the stand-in's default `k` and show
 the replay test detecting the change.
 

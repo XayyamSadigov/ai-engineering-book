@@ -3,6 +3,8 @@
 Solutions: `../solutions/ch09-solutions.md`
 
 
+**Start here:** K3, K4, E2, P3, D1 (about 4 hours). The rest go deeper.
+
 ### Knowledge questions
 
 **K1.** Explain why vectors produced by two different embedding models cannot share an index, even when the two models output vectors of the same dimension. What does Project 2 do to make mixing impossible?
@@ -29,13 +31,13 @@ Solutions: `../solutions/ch09-solutions.md`
 
 ### Practical exercises
 
-**P1.** Add a `SearchFilter.updated_after: date | None` field that filters on the `updated_at` value from the front matter. Implement it in `matches`, in `build_where` (using the JSONB metadata or a new column, your choice, justified), and add contract tests, including one where the filter is highly selective.
+**P1.** (about 90 min) Add a `SearchFilter.updated_after: date | None` field that filters on the `updated_at` value from the front matter. Implement it in `matches`, in `build_where` (using the JSONB metadata or a new column, your choice, justified), and add contract tests, including one where the filter is highly selective.
 
-**P2.** Implement a minimal single-layer navigable graph index in `semsearch/domain/` (each vector linked to its M nearest neighbors, greedy best-first search with a candidate list of size `ef`). Extend `bench.py` with a sweep over `ef` that reports recall@10 against exact search and vectors scored per query, and compare the curve with the IVF sweep at similar work.
+**P2.** (about 3 hours) Implement a minimal single-layer navigable graph index in `semsearch/domain/` (each vector linked to its M nearest neighbors, greedy best-first search with a candidate list of size `ef`). Extend `bench.py` with a sweep over `ef` that reports recall@10 against exact search and vectors scored per query, and compare the curve with the IVF sweep at similar work.
 
-**P3.** Add a selectivity-aware search path to `NumpyVectorStore`: when an approximate index (your P2 graph or the IVF index) is attached, use it for unfiltered or weakly filtered queries, and fall back to exact pre-filtered search when the filter allows fewer than a configurable number of rows. Prove with tests that results never underfill when matches exist.
+**P3.** (about 2 hours) Add a selectivity-aware search path to `NumpyVectorStore`: when an approximate index (your P2 graph or the IVF index) is attached, use it for unfiltered or weakly filtered queries, and fall back to exact pre-filtered search when the filter allows fewer than a configurable number of rows. Prove with tests that results never underfill when matches exist.
 
-**P4.** Add a `semsearch reindex --to-version v2` command that builds a new namespace from the source documents, runs the evaluator and `ann-check` against it, refuses to proceed if any leak occurs or recall@5 drops by more than a configured margin against the active namespace, and otherwise writes the new active version to a small state file that `make_store` and the API read.
+**P4.** (about 3 hours) Add a `semsearch reindex --to-version v2` command that builds a new namespace from the source documents, runs the evaluator and `ann-check` against it, refuses to proceed if any leak occurs or recall@5 drops by more than a configured margin against the active namespace, and otherwise writes the new active version to a small state file that `make_store` and the API read.
 
 ### Debugging exercises
 

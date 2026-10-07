@@ -3,6 +3,8 @@
 Solutions: `../solutions/ch20-solutions.md`
 
 
+**Start here:** K1, K3, E2, P2, D1 (about 5 hours). The rest go deeper.
+
 ### Knowledge questions
 
 **K1.** For each of the nine patterns, name who owns the "what happens next" decision and give the number of sequential model calls on the critical path in the best case.
@@ -29,13 +31,13 @@ Solutions: `../solutions/ch20-solutions.md`
 
 ### Practical exercises
 
-**P1.** Add plan-driven parallelism to `IncidentResearchAgent`: add a `depends_on` field to its `PlanStep`, then execute steps whose dependencies are satisfied concurrently, with a configurable worker limit, keeping the trajectory recorded in plan order. Add a test asserting the same evidence ledger as the sequential version and fewer sequential rounds.
+**P1.** (about 3 hours) Add plan-driven parallelism to `IncidentResearchAgent`: add a `depends_on` field to its `PlanStep`, then execute steps whose dependencies are satisfied concurrently, with a configurable worker limit, keeping the trajectory recorded in plan order. Add a test asserting the same evidence ledger as the sequential version and fewer sequential rounds.
 
-**P2.** Implement memoization for read-only tools in `patterns/evaluator_optimizer.py` so that round two of `agent_generator` reuses round one's observations for identical calls. Show with `Meter` and tool counters that tool calls drop while answers are unchanged.
+**P2.** (about 90 min) Implement memoization for read-only tools in `patterns/evaluator_optimizer.py` so that round two of `agent_generator` reuses round one's observations for identical calls. Show with `Meter` and tool counters that tool calls drop while answers are unchanged.
 
-**P3.** Add a four-eyes rule to `IncidentService.decide` (the approver must differ from the requester) and an audit field recording both. Cover it in the service, CLI, and API tests.
+**P3.** (about 60 min) Add a four-eyes rule to `IncidentService.decide` (the approver must differ from the requester) and an audit field recording both. Cover it in the service, CLI, and API tests.
 
-**P4.** Record a cassette from a real provider for both sample alerts, commit it, and add a CI test that replays it. Then change the planner prompt and capture the miss report.
+**P4.** (about 2 hours, needs a provider key) Record a cassette from a real provider for both sample alerts, commit it, and add a CI test that replays it. Then change the planner prompt and capture the miss report.
 
 ### Debugging exercises
 

@@ -3,6 +3,8 @@
 Solutions: `../solutions/ch16-solutions.md`
 
 
+**Start here:** K1, K3, E1, P1, D1 (about 4 hours). The rest go deeper.
+
 ### Knowledge questions
 
 **K1.** Why is tool calling described as a protocol rather than a capability of the model, and what does that imply about where authorization lives?
@@ -27,15 +29,17 @@ Solutions: `../solutions/ch16-solutions.md`
 
 **E4.** The model is supposed to call `get_service_status` before `create_ticket`, but in 30% of conversations it skips the status check. Describe how you would diagnose and fix this without changing the model.
 
+**E5.** A product team wants to enable the provider's hosted web search and a remote MCP connector to a third-party CRM for Northwind Assist, which also retrieves HR policies and tickets. For each, decide whether to allow it, under which conditions (which sessions, which configuration, which approval mode), and what you would log. Explain which of this chapter's controls each one bypasses.
+
 ### Practical exercises
 
-**P1.** Add a `close_ticket(ticket_id, resolution)` tool to Project 4 as a reversible write that only the ticket's creator or a lead may use. Include the args model, handler with tenant scoping, policy rule, and tests for allowed, denied, and duplicate calls.
+**P1.** (about 2 hours) Add a `close_ticket(ticket_id, resolution)` tool to Project 4 as a reversible write that only the ticket's creator or a lead may use. Include the args model, handler with tenant scoping, policy rule, and tests for allowed, denied, and duplicate calls.
 
-**P2.** Implement `RedisIdempotencyStore` satisfying the `IdempotencyStore` protocol using `SET key value NX EX ttl` for `begin`, and run the existing duplicate-suppression test against it with a fake Redis or a local server marked `integration`.
+**P2.** (about 90 min) Implement `RedisIdempotencyStore` satisfying the `IdempotencyStore` protocol using `SET key value NX EX ttl` for `begin`, and run the existing duplicate-suppression test against it with a fake Redis or a local server marked `integration`.
 
-**P3.** Add a `fetch_url(url)` read tool with an egress allowlist of hosts, a response-size cap, and a timeout, using `httpx` with a mock transport in tests. Show that a URL carrying data to a non-allowlisted host is denied before any request is made.
+**P3.** (about 90 min) Add a `fetch_url(url)` read tool with an egress allowlist of hosts, a response-size cap, and a timeout, using `httpx` with a mock transport in tests. Show that a URL carrying data to a non-allowlisted host is denied before any request is made.
 
-**P4.** Build a selection evaluation set of 30 Northwind requests labeled with the expected first tool (or none). Write a runner that replays them through `ToolLoop` with `max_rounds=1` and reports accuracy and a confusion matrix. Run it with `FakeLLM` handlers to test the runner, and with a real model behind `@pytest.mark.integration`.
+**P4.** (about 3 hours) Build a selection evaluation set of 30 Northwind requests labeled with the expected first tool (or none). Write a runner that replays them through `ToolLoop` with `max_rounds=1` and reports accuracy and a confusion matrix. Run it with `FakeLLM` handlers to test the runner, and with a real model behind `@pytest.mark.integration`.
 
 ### Debugging exercises
 

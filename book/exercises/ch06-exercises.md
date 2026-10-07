@@ -3,6 +3,8 @@
 Solutions: `../solutions/ch06-solutions.md`
 
 
+**Start here:** K1, K4, E4, P2, D4 (about 3 hours). The rest go deeper.
+
 ### Knowledge questions
 
 **K1.** Give two examples of output that passes a JSON Schema validator and is still wrong for Northwind's accounts-payable system, and name the gate in this chapter's pipeline that catches each.
@@ -17,6 +19,8 @@ Solutions: `../solutions/ch06-solutions.md`
 
 **K6.** Name the three levels at which Project 1 can abstain, and explain why an infrastructure failure is deliberately not one of them.
 
+**K7.** A colleague proposes isotonic recalibration of Project 1's document score before the accept threshold is applied, to "make the threshold more accurate". What does recalibration change, what does it leave unchanged, and when is it worth doing? Separately, how many error-free accepted documents would a held-out run need before you could claim a false-accept rate below 0.5%?
+
 ### Engineering questions
 
 **E1.** Northwind's legal team wants to extract renewal dates, notice periods, and liability caps from supplier contracts of 20 to 80 pages. Sketch the wire schema and domain model, explain how evidence should reference pages, and describe how you would split the document so that output is never truncated.
@@ -29,13 +33,13 @@ Solutions: `../solutions/ch06-solutions.md`
 
 ### Practical exercises
 
-**P1.** Add a reference-check port, `PurchaseOrderDirectory`, with an in-memory adapter seeded from a small fixture. Extend invoice processing so that a PO that does not exist, or belongs to a different vendor, produces a non-repairable error violation. Add tests for both cases and for a valid PO.
+**P1.** (about 2 hours) Add a reference-check port, `PurchaseOrderDirectory`, with an in-memory adapter seeded from a small fixture. Extend invoice processing so that a PO that does not exist, or belongs to a different vendor, produces a non-repairable error violation. Add tests for both cases and for a valid PO.
 
-**P2.** Handle truncated output better. Today a truncated extraction raises `TruncatedOutputError` and goes to review as `SCHEMA_FAILURE`; never re-ask with the same limit. Retry once with a higher `max_tokens`, and if that also truncates, route to review with reason `TRUNCATED`. Write a test with a scripted truncated completion.
+**P2.** (about 90 min) Handle truncated output better. Today a truncated extraction raises `TruncatedOutputError` and goes to review as `SCHEMA_FAILURE`; never re-ask with the same limit. Retry once with a higher `max_tokens`, and if that also truncates, route to review with reason `TRUNCATED`. Write a test with a scripted truncated completion.
 
-**P3.** Replace the single accept threshold with per-field thresholds for critical fields. Extend `run_eval` to choose each threshold from data for a target precision on that field, and make the routing policy load them from configuration.
+**P3.** (about 3 hours) Replace the single accept threshold with per-field thresholds for critical fields. Extend `run_eval` to choose each threshold from data for a target precision on that field, and make the routing policy load them from configuration.
 
-**P4.** Make `/extract/batch` idempotent per document: compute a content hash, and if a document with the same hash and `document_id` was already processed, return the stored result instead of calling the model or creating a second review item. Write tests for a resubmitted batch.
+**P4.** (about 2 hours) Make `/extract/batch` idempotent per document: compute a content hash, and if a document with the same hash and `document_id` was already processed, return the stored result instead of calling the model or creating a second review item. Write tests for a resubmitted batch.
 
 ### Debugging exercises
 

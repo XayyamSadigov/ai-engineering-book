@@ -3,6 +3,8 @@
 Solutions: `../solutions/ch17-solutions.md`
 
 
+**Start here:** K1, K3, E2, P2, D2 (about 4 hours). The rest go deeper.
+
 ### Knowledge questions
 
 **K1.** Define the five positions on the spectrum in one sentence each, using only the question "who decides the next step." Give one Northwind example per position that is not in this chapter.
@@ -27,15 +29,17 @@ Solutions: `../solutions/ch17-solutions.md`
 
 **E4.** The team wants to parallelize `retrieve_policy` and a new `lookup_customer_history` node. Rewrite the relevant part of the graph using fan-out and fan-in and specify what the fan-in does when one branch raises `TransientError`.
 
+**E5.** The triage workflow is to move onto a code-first durable workflow engine because refund approvals now wait up to three days. Say which of the seven nodes become activities and which logic stays in the workflow function, how `approval` and its `ResumeHandle` check are expressed, what the engine's history will contain and what that implies for retention, and what `send` still needs that the engine does not provide.
+
 ### Practical exercises
 
-**P1.** Add a `fallback_model` to `build_triage_graph`: when `draft` exhausts its retries with `TransientError`, run the draft once more against a second model callable before failing. Add a test with a primary that always raises and a secondary that succeeds, and assert the trace shows the attempts.
+**P1.** (about 90 min) Add a `fallback_model` to `build_triage_graph`: when `draft` exhausts its retries with `TransientError`, run the draft once more against a second model callable before failing. Add a test with a primary that always raises and a secondary that succeeds, and assert the trace shows the attempts.
 
-**P2.** Implement `JsonlCheckpointer` that appends checkpoints to a file and reconstructs `latest` and `history` from it. Replace `InMemoryCheckpointer` in the crash test so the two "processes" share only the file.
+**P2.** (about 90 min) Implement `JsonlCheckpointer` that appends checkpoints to a file and reconstructs `latest` and `history` from it. Replace `InMemoryCheckpointer` in the crash test so the two "processes" share only the file.
 
-**P3.** Add a `path` attribute to `RunResult` (the list of node names visited) and extend `compare.py` to print the path distribution over a set of twenty mixed tickets (shipping, refund, account, and one with a scripted `escalate` verdict). Write a golden-path test that asserts the expected path for each ticket.
+**P3.** (about 2 hours) Add a `path` attribute to `RunResult` (the list of node names visited) and extend `compare.py` to print the path distribution over a set of twenty mixed tickets (shipping, refund, account, and one with a scripted `escalate` verdict). Write a golden-path test that asserts the expected path for each ticket.
 
-**P4.** Build a miniature "deterministic workflow versus agent graph" comparison: implement a bounded three-step agent node (Chapter 19 style, with the fake model choosing between "retrieve more" and "draft") and run both designs over the same twenty tickets, reporting success rate, average model calls, and total simulated latency.
+**P4.** (about 3 hours) Build a miniature "deterministic workflow versus agent graph" comparison: implement a bounded three-step agent node (Chapter 19 style, with the fake model choosing between "retrieve more" and "draft") and run both designs over the same twenty tickets, reporting success rate, average model calls, and total simulated latency.
 
 ### Debugging exercises
 

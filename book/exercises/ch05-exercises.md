@@ -3,6 +3,8 @@
 Solutions: `../solutions/ch05-solutions.md`
 
 
+**Start here:** K2, K5, E2, P1, D1 (about 3 hours). The rest go deeper.
+
 ### Knowledge questions
 
 **K1.** List the four costs of an input token named in this chapter, and give one production metric that observes each.
@@ -17,6 +19,8 @@ Solutions: `../solutions/ch05-solutions.md`
 
 **K6.** The builder's prefix hash stays constant across requests, but the provider reports almost no cached input tokens. Give two plausible causes.
 
+**K7.** Your provider caches only up to explicit markers, and you may set up to three per request. For a multi-turn RAG conversation rendered in this chapter's layout, where do you place them, and what does each one let the next request reuse?
+
 ### Engineering questions
 
 **E1.** Northwind's incident-research agent (Project 5) makes up to 30 tool calls per task. Its largest tool result is a log search that returns up to 4,000 tokens. Design the compaction policy for tool output: what is kept as facts, what is summarized, what is kept verbatim, and when compaction fires. Estimate input tokens per step before and after, with your assumptions labeled.
@@ -29,13 +33,13 @@ Solutions: `../solutions/ch05-solutions.md`
 
 ### Practical exercises
 
-**P1.** Add a `tool_result` compactor: a function that takes a JSON tool result and a list of field paths the next step reads, and returns a trimmed `ContextItem` with a `metadata["full_ref"]` pointer to the original. Test that the required fields survive, that the token count drops, and that the original can be rehydrated from the reference.
+**P1.** (about 90 min) Add a `tool_result` compactor: a function that takes a JSON tool result and a list of field paths the next step reads, and returns a trimmed `ContextItem` with a `metadata["full_ref"]` pointer to the original. Test that the required fields survive, that the token count drops, and that the original can be rehydrated from the reference.
 
-**P2.** Extend `ContextBuilder` with a `restate` option. When the rendered prompt exceeds a configurable token count, it appends a one-line constraint reminder from the system contract just before the request. Keep the stable prefix hash unchanged, and test that it is.
+**P2.** (about 60 min) Extend `ContextBuilder` with a `restate` option. When the rendered prompt exceeds a configurable token count, it appends a one-line constraint reminder from the system contract just before the request. Keep the stable prefix hash unchanged, and test that it is.
 
-**P3.** Implement a leave-one-out attribution script. Given an evaluation set and a scripted `FakeLLM` handler that answers from specific source ids, it builds each request, removes each included evidence item in turn, and reports items whose removal never changes the answer.
+**P3.** (about 2 hours) Implement a leave-one-out attribution script. Given an evaluation set and a scripted `FakeLLM` handler that answers from specific source ids, it builds each request, removes each included evidence item in turn, and reports items whose removal never changes the answer.
 
-**P4.** Add a length sweep to `context/experiments/`: vary the number of distractors at a fixed needle position, report accuracy and mean prompt tokens per length, and test it with a simulated reader whose accuracy declines with length.
+**P4.** (about 90 min) Add a length sweep to `context/experiments/`: vary the number of distractors at a fixed needle position, report accuracy and mean prompt tokens per length, and test it with a simulated reader whose accuracy declines with length.
 
 ### Debugging exercises
 

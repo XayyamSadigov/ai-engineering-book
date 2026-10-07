@@ -3,6 +3,8 @@
 Solutions: `../solutions/ch08-solutions.md`
 
 
+**Start here:** K1, K3, E1, P1, D2 (about 4 hours). The rest go deeper.
+
 ### Knowledge questions
 
 **K1.** Explain why cosine similarity, dot product, and Euclidean distance produce identical rankings for unit vectors, and give a concrete case where dot product and cosine disagree for unnormalized vectors.
@@ -29,13 +31,13 @@ Solutions: `../solutions/ch08-solutions.md`
 
 ### Practical exercises
 
-**P1.** Add a `dimensions` parameter to the experiment: using `truncation_report`, find the smallest prefix size at which recall@3 on the Northwind labeled queries stays within 0.03 of full-dimension recall. Then extend `VectorIndex` so a truncated space can be searched with a two-stage strategy: truncated vectors for top-50 candidates, full vectors to rescore.
+**P1.** (about 2 hours) Add a `dimensions` parameter to the experiment: using `truncation_report`, find the smallest prefix size at which recall@3 on the Northwind labeled queries stays within 0.03 of full-dimension recall. Then extend `VectorIndex` so a truncated space can be searched with a two-stage strategy: truncated vectors for top-50 candidates, full vectors to rescore.
 
-**P2.** Extend the labeled retrieval set with 15 queries containing identifiers (error codes, ticket numbers, endpoint names) and report recall@3 on that slice separately. Add a minimal lexical boost (for example, exact token overlap on identifier-like tokens) and show its effect on the slice and on the rest of the set.
+**P2.** (about 90 min) Extend the labeled retrieval set with 15 queries containing identifiers (error codes, ticket numbers, endpoint names) and report recall@3 on that slice separately. Add a minimal lexical boost (for example, exact token overlap on identifier-like tokens) and show its effect on the slice and on the rest of the set.
 
-**P3.** Implement a `CentroidClassifier` variant with several centroids per class (k-means within each class) and compare it with the single-centroid and kNN classifiers using `leave_one_out` on the tickets. Report accuracy on answered items and coverage at a fixed abstention rule.
+**P3.** (about 2 hours) Implement a `CentroidClassifier` variant with several centroids per class (k-means within each class) and compare it with the single-centroid and kNN classifiers using `leave_one_out` on the tickets. Report accuracy on answered items and coverage at a fixed abstention rule.
 
-**P4.** Back the embedding cache with Redis by passing a Redis-like mapping as the `store` to `EmbeddingPipeline`. Add a TTL, a per-namespace key count metric, and a test that a space change produces zero hits on the first pass.
+**P4.** (about 90 min) Back the embedding cache with Redis by passing a Redis-like mapping as the `store` to `EmbeddingPipeline`. Add a TTL, a per-namespace key count metric, and a test that a space change produces zero hits on the first pass.
 
 ### Debugging exercises
 

@@ -3,6 +3,8 @@
 Solutions: `../solutions/ch14-solutions.md`
 
 
+**Start here:** K1, K4, E2, P2, D3 (about 4 hours). The rest go deeper.
+
 ### Knowledge questions
 
 **K1.** A question requires two documents. The retriever returns ten chunks: chunks of the first required document at ranks 3 and 4, an acceptable document at rank 1, and nothing from the second required document. Compute hit@5, recall@5, precision@5 (chunk level), reciprocal rank, and nDCG@5 with required = 2 and acceptable = 1.
@@ -11,7 +13,7 @@ Solutions: `../solutions/ch14-solutions.md`
 
 **K3.** Explain the difference between faithfulness and correctness for a RAG answer, and give a Northwind example that scores high on one and low on the other.
 
-**K4.** List four biases of LLM-generated synthetic questions and state, for each, whether a mechanical filter can reduce it.
+**K4.** Name the five parts of a day-one RAG evaluation and, for each, a failure it catches that an end-to-end "answer quality" score from an LLM judge would miss.
 
 **K5.** Why does stage isolation report the earliest stage that lost evidence rather than the last, and why does a permission leak override every other label?
 
@@ -29,13 +31,13 @@ Solutions: `../solutions/ch14-solutions.md`
 
 ### Practical exercises
 
-**P1.** Add span-level labels to `RagExpectation` (`required_spans: list[str]`) and a `span_recall_at_k` metric that counts a required span as found when it occurs (whitespace-insensitive) in any of the top k chunks. Label five gold cases and show where span recall and document recall disagree.
+**P1.** (about 2 hours) Add span-level labels to `RagExpectation` (`required_spans: list[str]`) and a `span_recall_at_k` metric that counts a required span as found when it occurs (whitespace-insensitive) in any of the top k chunks. Label five gold cases and show where span recall and document recall disagree.
 
-**P2.** Add a `first_stage_recall` evaluator that reads each candidate list from the trace and reports recall@50 per list and for their union, so a report can show coverage before fusion and reranking.
+**P2.** (about 90 min) Add a `first_stage_recall` evaluator that reads each candidate list from the trace and reports recall@50 per list and for their union, so a report can show coverage before fusion and reranking.
 
-**P3.** Implement a judge cache for `FaithfulnessJudge` keyed by judge version, a hash of the answer, and the packed chunk ids, with a JSONL backend. Show with a test that re-scoring a stored run makes no judge calls.
+**P3.** (about 90 min) Implement a judge cache for `FaithfulnessJudge` keyed by judge version, a hash of the answer, and the packed chunk ids, with a JSONL backend. Show with a test that re-scoring a stored run makes no judge calls.
 
-**P4.** Extend `synthesize_questions` with an embedding-based dedupe using `aie_core` embeddings and a multi-chunk mode that shows the model two chunks from different documents and asks for a question requiring both. Report how the difficulty distribution changes.
+**P4.** (about 3 hours) Extend `synthesize_questions` with an embedding-based dedupe using `aie_core` embeddings and a multi-chunk mode that shows the model two chunks from different documents and asks for a question requiring both. Report how the difficulty distribution changes.
 
 ### Debugging exercises
 

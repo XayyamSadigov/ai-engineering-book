@@ -3,6 +3,8 @@
 Solutions: `../solutions/ch13-solutions.md`
 
 
+**Start here:** K1, K3, E2, P2, D2 (about 3.5 hours). The rest go deeper.
+
 ### Knowledge questions
 
 **K1.** Why does the packer assign short evidence ids such as `E1` instead of passing chunk ids to the model? Give three reasons.
@@ -29,13 +31,13 @@ Solutions: `../solutions/ch13-solutions.md`
 
 ### Practical exercises
 
-**P1.** Add a regenerate-once path to `GroundedQA`: when the validator reports `stale_source_preferred`, or drops every claim while evidence is non-empty, call the generator again with the issues appended as feedback, validate again, and keep the better answer. Write tests with scripted models for both triggers, and assert the second call's request contains the feedback.
+**P1.** (about 2 hours) Add a regenerate-once path to `GroundedQA`: when the validator reports `stale_source_preferred`, or drops every claim while evidence is non-empty, call the generator again with the issues appended as feedback, validate again, and keep the better answer. Write tests with scripted models for both triggers, and assert the second call's request contains the feedback.
 
-**P2.** Implement a `NegationGuard` judge hook that flags a claim when it contains a negation (not, never, no longer, except) that the cited evidence does not contain near the same content words, or vice versa. Test it with "Employees may not carry over unused PTO days" citing the PTO block.
+**P2.** (about 90 min) Implement a `NegationGuard` judge hook that flags a claim when it contains a negation (not, never, no longer, except) that the cited evidence does not contain near the same content words, or vice versa. Test it with "Employees may not carry over unused PTO days" citing the PTO block.
 
-**P3.** Add an `effective_date` field to the shared fixture by giving the PTO chunk metadata `effective_date: 2026-01-01` and the FAQ none. Write tests showing that conflict notes use the effective date when present, and design a case where `updated_at` and `effective_date` disagree on which document is newer.
+**P3.** (about 60 min) Add an `effective_date` field to the shared fixture by giving the PTO chunk metadata `effective_date: 2026-01-01` and the FAQ none. Write tests showing that conflict notes use the effective date when present, and design a case where `updated_at` and `effective_date` disagree on which document is newer.
 
-**P4.** Build a small FastAPI endpoint `POST /answer` that runs `GroundedQA` and returns the envelope, plus `POST /answer/stream` that returns server-sent events from `GroundedStreamer`. Include a test that consumes the stream with an HTTP test client and asserts that no text event contains an unknown evidence id.
+**P4.** (about 2 hours) Build a small FastAPI endpoint `POST /answer` that runs `GroundedQA` and returns the envelope, plus `POST /answer/stream` that returns server-sent events from `GroundedStreamer`. Include a test that consumes the stream with an HTTP test client and asserts that no text event contains an unknown evidence id.
 
 ### Debugging exercises
 

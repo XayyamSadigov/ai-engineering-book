@@ -3,6 +3,8 @@
 Solutions: `../solutions/ch25-solutions.md`
 
 
+**Start here:** K1, K2, E1, P2, D1 (about 3 hours). The rest go deeper.
+
 ### Knowledge questions
 
 **K1.** Why must `traj_success` require `traj_safe`, and what would a dashboard of task-completion rates show for an agent whose runtime silently skipped approvals?
@@ -29,13 +31,15 @@ Solutions: `../solutions/ch25-solutions.md`
 
 ### Practical exercises
 
-**P1.** Add a live-sandbox mode to the agent suite: run the candidate planner in a real `agentkit.AgentRuntime` over scripted, deterministic `FunctionTool`s (including a degraded service and a tool that raises a transient error once), selected per case when replay fidelity on that case falls below the gate threshold. Export the resulting event log with `trajectory_from_events`, and report which mode each case used in the run metadata.
+**P1.** (about 3 hours) Add a live-sandbox mode to the agent suite: run the candidate planner in a real `agentkit.AgentRuntime` over scripted, deterministic `FunctionTool`s (including a degraded service and a tool that raises a transient error once), selected per case when replay fidelity on that case falls below the gate threshold. Export the resulting event log with `trajectory_from_events`, and report which mode each case used in the run metadata.
 
-**P2.** Extend `evidence_status` to verify the quote's label as well as its value (for example, a total's quote must contain "total" and must not contain "subtotal"), and add test cases from the untaxed statements that the current check passes incorrectly.
+**P2.** (about 60 min) Extend `evidence_status` to verify the quote's label as well as its value (for example, a total's quote must contain "total" and must not contain "subtotal"), and add test cases from the untaxed statements that the current check passes incorrectly.
 
-**P3.** Add a `summarization` suite to `suites.py` over the incident reports in `shared-data/docs/` (the two incident postmortems, `incident-2025-11-pos-outage.md` and `incident-2026-02-tracking-latency.md`), with key facts written by hand, a stand-in summarizer with baseline and regressed versions, and a gate section that requires coverage, faithfulness, qualifiers, and compression together.
+**P3.** (about 3 hours) Add a `summarization` suite to `suites.py` over the incident reports in `shared-data/docs/` (the two incident postmortems, `incident-2025-11-pos-outage.md` and `incident-2026-02-tracking-latency.md`), with key facts written by hand, a stand-in summarizer with baseline and regressed versions, and a gate section that requires coverage, faithfulness, qualifiers, and compression together.
 
-**P4.** Implement a nightly job that runs the classification suite three times with a nondeterministic stand-in (seeded noise on confidence and occasional label flips), reports pass^3 and the flaky cases, and fails the gate when the flaky rate exceeds a configured limit. Add the rule to `gates.toml` through a new aggregate.
+**P4.** (about 2 hours) Implement a nightly job that runs the classification suite three times with a nondeterministic stand-in (seeded noise on confidence and occasional label flips), reports pass^3 and the flaky cases, and fails the gate when the flaky rate exceeds a configured limit. Add the rule to `gates.toml` through a new aggregate.
+
+**P5.** (about 2 hours) Write a perturbation generator for the extraction suite: from each gold invoice, derive variants that move the total to a different line, add a distracting second amount, and reword the field labels, with the gold record inherited or adjusted by rule. Add the variants as an `origin:synthetic` slice with a slice rule in `gates.toml`, and report how the baseline and candidate extractors do on it compared with the original invoices.
 
 ### Debugging exercises
 

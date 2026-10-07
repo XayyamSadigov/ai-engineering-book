@@ -3,6 +3,8 @@
 Solutions: `../solutions/ch04-solutions.md`
 
 
+**Start here:** K1, K3, E4, P1, D4 (about 3 hours). The rest go deeper.
+
 ### Knowledge questions
 
 **K1.** Name the six parts of a production prompt contract described in this chapter and, for each, the failure you would expect if it were missing.
@@ -27,15 +29,17 @@ Solutions: `../solutions/ch04-solutions.md`
 
 **E4.** Your router suite has 40 cases and the gate blocks any regression. Engineers complain that every prompt change is blocked by one or two flaky cases. Propose a gate policy and suite changes that keep real regressions blocked without training engineers to override the gate.
 
+**E5.** Your team proposes running an automated prompt optimizer over `ticket.classify` and `assist.answer` before the next model upgrade. The router suite has 17 cases; the answer suite has 24 cases with one assertion per dimension. For each prompt, decide whether to adopt the optimizer now, what must exist first, and how its output enters the release process.
+
 ### Practical exercises
 
-**P1.** Create `ticket.classify@1.3.0` that fixes TCK-2026-0007 and TCK-2026-0023 without regressing any case, run `compare` against 1.2.0, and update the lock. Then add two new cases that would have caught each of those bugs before they shipped.
+**P1.** (about 90 min) Create `ticket.classify@1.3.0` that fixes TCK-2026-0007 and TCK-2026-0023 without regressing any case, run `compare` against 1.2.0, and update the lock. Then add two new cases that would have caught each of those bugs before they shipped.
 
-**P2.** Add a `max_regressions_by_tag` option to `Comparison.gate` that allows, for example, at most one regression among `pos_payments` cases and zero among `critical`, and report the per-tag regression counts in `render_report`. Add tests.
+**P2.** (about 60 min) Add a `max_regressions_by_tag` option to `Comparison.gate` that allows, for example, at most one regression among `pos_payments` cases and zero among `critical`, and report the per-tag regression counts in `render_report`. Add tests.
 
-**P3.** Extend `PromptTemplate` with an optional datamarking mode for a variable (declared in front matter as `marking = "datamark"`), in which whitespace inside the value is replaced by a marker character inside the data block. Add tests that show the marking is applied, that delimiter escaping still holds, and that prefix stability is unaffected.
+**P3.** (about 2 hours) Extend `PromptTemplate` with an optional datamarking mode for a variable (declared in front matter as `marking = "datamark"`), in which whitespace inside the value is replaced by a marker character inside the data block. Add tests that show the marking is applied, that delimiter escaping still holds, and that prefix stability is unaffected.
 
-**P4.** Write `assist.answer@1.1.0` that asks for one supporting quote per citation and add a deterministic assertion type that verifies each quote occurs in the cited document's text. Run the answer suite with scripted `FakeLLM` outputs covering a correct quote, a quote from the wrong document, and an invented quote.
+**P4.** (about 2 hours) Write `assist.answer@1.1.0` that asks for one supporting quote per citation and add a deterministic assertion type that verifies each quote occurs in the cited document's text. Run the answer suite with scripted `FakeLLM` outputs covering a correct quote, a quote from the wrong document, and an invented quote.
 
 ### Debugging exercises
 

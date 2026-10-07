@@ -3,6 +3,8 @@
 Solutions: `../solutions/ch38-solutions.md`
 
 
+**Start here:** K2, K3, E4, P2, D1 (about 4 hours). The rest go deeper.
+
 ### Knowledge questions
 
 **K1.** Why must an idempotency key be derived from the event log rather than generated when the tool executes? What exactly goes wrong with a fresh key per attempt?
@@ -25,17 +27,17 @@ Solutions: `../solutions/ch38-solutions.md`
 
 **E3.** Your agents run on Kubernetes with rolling deploys every hour, and the slowest tool call takes up to four minutes. Choose a lease TTL and heartbeat strategy, and explain the recovery-time and duplicate-execution consequences of your choice.
 
-**E4.** The support team wants the voice agent to begin creating a ticket as soon as the caller says "open a ticket" to save time. Propose a design that captures most of the latency benefit without acting on unstable transcripts.
+**E4.** Northwind's platform team proposes moving the incident agent onto a replay-based durable execution engine. Sketch the port: which parts of the agent loop become steps and which stay in the workflow function, what replaces `DurableRunner`, `LeaseManager`, and the timer table, what `ReconcilingTool` still has to do, and how you would deploy a new policy check while runs are paused on approvals. Name two things that would break silently if done naively.
 
 ### Practical exercises
 
-**P1.** Add `DurableRunner.reopen(run_id, outcome)` for runs stopped on an unknown outcome: an operator records the true outcome in the ledger, and the run continues with that outcome as the observation. Write the tests.
+**P1.** (about 2 hours) Add `DurableRunner.reopen(run_id, outcome)` for runs stopped on an unknown outcome: an operator records the true outcome in the ledger, and the run continues with that outcome as the observation. Write the tests.
 
-**P2.** Extend `InterruptManager` with four-eyes approval for tools tagged `irreversible`: two distinct approvers from the chain, either of whom may reject. Include escalation and expiry behavior in the tests.
+**P2.** (about 2 hours) Extend `InterruptManager` with four-eyes approval for tools tagged `irreversible`: two distinct approvers from the chain, either of whom may reject. Include escalation and expiry behavior in the tests.
 
-**P3.** Replace `digest_observation` for prose-heavy tools with an LLM summarizer through `aie_core`, keeping literal extraction, and add an identifier-recall evaluation comparing it with the extractive digest on a scripted 30-step run.
+**P3.** (about 3 hours) Replace `digest_observation` for prose-heavy tools with an LLM summarizer through `aie_core`, keeping literal extraction, and add an identifier-recall evaluation comparing it with the extractive digest on a scripted 30-step run.
 
-**P4.** Add a `run_linter` tool and a "no new lint errors" check to `coding_dod`, computed against the baseline, so pre-existing lint errors do not block the task but new ones do.
+**P4.** (about 90 min) Add a `run_linter` tool and a "no new lint errors" check to `coding_dod`, computed against the baseline, so pre-existing lint errors do not block the task but new ones do.
 
 ### Debugging exercises
 

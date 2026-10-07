@@ -3,6 +3,8 @@
 Solutions: `../solutions/ch36-solutions.md`
 
 
+**Start here:** K1, K3, E3, P2, D2 (about 3 hours). The rest go deeper. The design cases themselves are the main practice: if you have not yet done the Try it first boxes, do at least one before these exercises.
+
 ### Knowledge questions
 
 **K1.** For each of the five cases, name the architecture class and the one step of the ten where most of the design effort went. Explain in a sentence why that step dominated.
@@ -27,13 +29,13 @@ Solutions: `../solutions/ch36-solutions.md`
 
 ### Practical exercises
 
-**P1.** Extend `sql_guard.py` with a `max_joins` check and an `EXPLAIN`-based plan check that takes a callable `explain(sql) -> dict` and rejects plans whose estimated rows exceed a cap. Acceptance: tests for both engines; a query with a missing join condition is rejected; an existing passing query still passes; the plan check is skipped with a recorded violation code when `explain` is not provided.
+**P1.** (about 2 hours) Extend `sql_guard.py` with a `max_joins` check and an `EXPLAIN`-based plan check that takes a callable `explain(sql) -> dict` and rejects plans whose estimated rows exceed a cap. Acceptance: tests for both engines; a query with a missing join condition is rejected; an existing passing query still passes; the plan check is skipped with a recorded violation code when `explain` is not provided.
 
-**P2.** Build the result-equivalence checker for the analytics assistant: given two result sets as lists of dicts, decide equivalence with column-name normalization, multiset row comparison, and relative numeric tolerance. Acceptance: tests for reordered rows, reordered columns, `revenue` versus `REVENUE`, floating-point differences at 1e-7, and a genuine mismatch; a function that explains the first difference found.
+**P2.** (about 60 min) Build the result-equivalence checker for the analytics assistant: given two result sets as lists of dicts, decide equivalence with column-name normalization, multiset row comparison, and relative numeric tolerance. Acceptance: tests for reordered rows, reordered columns, `revenue` versus `REVENUE`, floating-point differences at 1e-7, and a genuine mismatch; a function that explains the first difference found.
 
-**P3.** Implement the vendor-onboarding state machine on the Chapter 17 workflow engine with a fake ERP that fails on the first call 30 percent of the time and a fake approver. Acceptance: no run creates two vendors for one workflow (checked by the fake ERP's store); every transition appears in an append-only audit log with actor and step; an approval timeout moves the case to the exception state; a resumed exception continues from the failing step.
+**P3.** (about 3 hours) Implement the vendor-onboarding state machine on the Chapter 17 workflow engine with a fake ERP that fails on the first call 30 percent of the time and a fake approver. Acceptance: no run creates two vendors for one workflow (checked by the fake ERP's store); every transition appears in an append-only audit log with actor and step; an approval timeout moves the case to the exception state; a resumed exception continues from the failing step.
 
-**P4.** Design the data model of the evaluation platform as pydantic models and write a migration-free in-memory store. Acceptance: a run can be compared with a baseline run producing per-case deltas and per-slice aggregates; a judge version change is visible in the comparison output; a suite is immutable once a run references it (an attempt to modify raises).
+**P4.** (about 2 hours) Design the data model of the evaluation platform as pydantic models and write a migration-free in-memory store. Acceptance: a run can be compared with a baseline run producing per-case deltas and per-slice aggregates; a judge version change is visible in the comparison output; a suite is immutable once a run references it (an attempt to modify raises).
 
 ### Debugging exercises
 

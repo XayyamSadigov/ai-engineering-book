@@ -3,6 +3,8 @@
 Solutions: `../solutions/ch11-solutions.md`
 
 
+**Start here:** K2, K6, E2, P3, D1 (about 4 hours). The rest go deeper.
+
 ### Knowledge questions
 
 **K1.** Name the three identity fields of a `Document` and explain, for each, a change that alters it while leaving the other two unchanged.
@@ -17,6 +19,8 @@ Solutions: `../solutions/ch11-solutions.md`
 
 **K6.** What does span integrity measure that recall@k does not, and why can recall@3 exceed span integrity?
 
+**K7.** Name the three levels of contextual chunk header in increasing cost. For each, give a corpus where it is enough and one sign that you need the next level.
+
 ### Engineering questions
 
 **E1.** Northwind wants to index 30,000 support tickets alongside its policies. Design the JSONL parser configuration (text fields, metadata fields, title, ACL source) and state which ticket questions should be answered by metadata filters, by retrieval, or by SQL against the ticket system.
@@ -29,13 +33,13 @@ Solutions: `../solutions/ch11-solutions.md`
 
 ### Practical exercises
 
-**P1.** Add an `HtmlParser` option `content_selector` that, when set to an element id or class, keeps only content inside the matching element. Write tests with a page whose article sits inside `<div id="content">` and whose sidebar contains decoy text.
+**P1.** (about 60 min) Add an `HtmlParser` option `content_selector` that, when set to an element id or class, keeps only content inside the matching element. Write tests with a page whose article sits inside `<div id="content">` and whose sidebar contains decoy text.
 
-**P2.** Add `RecursiveChunker.for_python()`, a preset whose separators split Python source on class and function boundaries first, and a `CodeContextChunker` wrapper that prefixes each chunk's `embedding_text()` with the file path and enclosing class name. Test it on a 200-line module and assert no function is split when it fits the budget.
+**P2.** (about 2 hours) Add `RecursiveChunker.for_python()`, a preset whose separators split Python source on class and function boundaries first, and a `CodeContextChunker` wrapper that prefixes each chunk's `embedding_text()` with the file path and enclosing class name. Test it on a 200-line module and assert no function is split when it fits the budget.
 
-**P3.** Implement a `RowSentenceTableChunker` that serializes each table row as "Column: value." sentences, keeps non-table blocks as the section chunker does, and add it to the evaluation grid. Report its span integrity and recall on the table questions only.
+**P3.** (about 2 hours) Implement a `RowSentenceTableChunker` that serializes each table row as "Column: value." sentences, keeps non-table blocks as the section chunker does, and add it to the evaluation grid. Report its span integrity and recall on the table questions only.
 
-**P4.** Extend `chunk_size.py` with a `--slice` option that reports metrics per question tag (table, code, prose), add tags to the gold file, and write five new questions with evidence spans over `incident-2025-11-pos-outage.md`. Report which configuration wins each slice.
+**P4.** (about 90 min) Extend `chunk_size.py` with a `--slice` option that reports metrics per question tag (table, code, prose), add tags to the gold file, and write five new questions with evidence spans over `incident-2025-11-pos-outage.md`. Report which configuration wins each slice.
 
 ### Debugging exercises
 

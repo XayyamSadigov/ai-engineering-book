@@ -13,6 +13,11 @@ a chapter in the middle can find where each piece was built.
 metrics with a significance test. For AI changes it complements offline evaluation, because a prompt or
 model that wins on the golden set can still lose on real users. (Ch 32)
 
+**A2A (Agent2Agent protocol)**: An open agent-interop protocol that connects an agent to another
+autonomous agent rather than to a tool: the remote side receives a task and runs its own loop with its own
+model, tools, and policy. Unlike MCP, control passes to the other side, so its results are untrusted
+input. (Ch 18, 22)
+
 **Abstention**: The system's explicit decision not to answer, usually because the evidence is missing,
 conflicting, or below a confidence threshold. A grounded system needs a tested abstention path; without
 one, the model fills gaps with plausible fabrication. (Ch 13, 14)
@@ -20,6 +25,11 @@ one, the model fills gaps with plausible fabrication. (Ch 13, 14)
 **Access control list (ACL)**: Permission metadata attached to each document and chunk, such as the
 groups or tenants allowed to read it. In RAG the ACL must be applied as a filter at retrieval time,
 never after generation, or restricted text has already reached the model. (Ch 9, 11, 15)
+
+**Action selector pattern**: An injection-containing design in which the model maps a request to one
+action from a fixed menu and the result goes to the user, never back into the model. With no tool output
+re-entering the context, an indirect injection has nothing to ride in on; the cost is that it is barely
+an agent. (Ch 26)
 
 **Adapter (fine-tuning)**: A small set of trainable weights added to a frozen base model, for example by
 LoRA. Adapters are cheap to train, store, and swap, so one base model can serve several fine-tuned
@@ -41,6 +51,10 @@ the book treats them as the last rung of the decision ladder. (Ch 1, 19)
 **Agent loop**: The repeated cycle of model call, tool proposal, policy check, execution, and
 observation that drives an agent. Implemented as an explicit state machine with budgets, it becomes
 debuggable and replayable instead of an opaque `while True`. (Ch 19)
+
+**Agent-managed memory**: Memory that the agent writes itself, either through memory tools (save, search,
+delete) or by editing a file it reads every session. Every write is model-inferred, so it goes through
+the same write policy as any other memory, and edits to instruction files are review-gated. (Ch 21)
 
 **Agent Skills**: A packaging format for procedural knowledge: a folder with instructions, scripts, and
 resources that an agent loads on demand when a task matches the skill's description. Skills keep
@@ -122,6 +136,11 @@ non-English languages cost more tokens per character. (Ch 2)
 
 ## C
 
+**Cache break-even**: The reuse rate at which provider prompt caching starts saving money, given a
+write multiplier on the first use of a prefix and a read multiplier on later hits within the TTL.
+Every distinct prefix divides the traffic, so low-traffic prefixes can fall below break-even and
+should leave explicit caching off. (Ch 30)
+
 **Cache key (correctness key)**: The set of inputs a cached result depends on, such as prompt version,
 model, user permissions, tenant, and index version. A key that omits any of them serves wrong or
 unauthorized answers. (Ch 15, 30)
@@ -137,6 +156,11 @@ version and comparing its metrics with the stable version before widening the ro
 hybrid retrieval, 20 after reranking, 5 packed into context. Sizing each stage is a recall, latency,
 and cost decision. (Ch 12, 31)
 
+**Capability tracking (CaMeL-style)**: A refinement of the dual LLM pattern in which the privileged
+model writes a small program and an interpreter runs it while tracking the provenance (taint) of every
+value. Per-tool policies then decide on provenance, for example refusing or requiring approval when a
+recipient derives from untrusted data. (Ch 26)
+
 **Cascade**: Routing that tries a cheap model first and escalates to a stronger one only when a
 confidence or validation check fails. It saves cost when the check is reliable and adds latency to
 escalated requests. (Ch 7)
@@ -151,6 +175,10 @@ account of how the answer was produced. (Ch 4)
 
 **Chaos testing**: Deliberately injecting faults (provider outages, slow responses, rate limits,
 malformed output) to verify that retries, fallbacks, and degraded modes actually work. (Ch 29)
+
+**Chat template**: The model-specific format, with reserved role tokens, that serializes a list of
+messages into the single token sequence the model actually reads. Serving an instruction-tuned model
+with the wrong template fails silently as lower quality. (Ch 2, 7)
 
 **Checkpoint**: A persisted snapshot of workflow or agent state at a step boundary, from which execution
 can resume after a crash, an approval wait, or a deploy. (Ch 17, 23, 38)
@@ -178,6 +206,10 @@ citations before the user sees them. (Ch 13)
 
 **Clean architecture**: Layering code into domain (pure logic), application, and adapters (providers,
 databases, frameworks) so that business rules can be tested without models or infrastructure. (Ch 32)
+
+**Client ID metadata document**: An MCP authorization mechanism in which a client's ID is an HTTPS URL
+that serves a JSON description of the client, so an authorization server can trust a client it has
+never seen without a separate registration step. (Ch 18)
 
 **Cohen's kappa**: An agreement statistic between two raters that corrects for agreement expected by
 chance. It is how the book checks whether an LLM judge agrees with human labels beyond what a constant
@@ -213,6 +245,11 @@ what labels, and within what token budget. It is the main lever on answer qualit
 **Context isolation**: Giving a subagent or worker a fresh, narrow context instead of the parent's full
 history. It reduces distraction and limits what an injected instruction can reach. (Ch 20, 22)
 
+**Context minimization**: Giving each step only the context it needs and dropping untrusted content once
+it has served its purpose, for example composing an answer from the structured query rather than the
+raw request. It shrinks both the injection surface and what an injection could exfiltrate, and is cheap
+enough to apply almost everywhere. (Ch 26)
+
 **Context relevance**: The share of retrieved context that is actually relevant to the question. Low
 context relevance wastes tokens and distracts the generator even when recall is high. (Ch 14)
 
@@ -221,6 +258,10 @@ Quality often degrades well before the hard limit. (Ch 2, 5)
 
 **ContextBuilder**: The book's component that assembles context under a token budget with priorities,
 ordering, source labels, and compaction. (Ch 5)
+
+**Contextual chunk header**: A short prefix added to a chunk's indexed text that restores context the
+chunk lost when cut from its document, such as a heading breadcrumb or a document summary. It lets
+lexical and dense search match a chunk that never names its own subject. (Ch 11, 37)
 
 **Contextual retrieval**: Prepending a short, model-written description of where a chunk sits in its
 document before indexing it, so terse chunks become findable by both lexical and dense search. (Ch 12)
@@ -245,6 +286,10 @@ relevance score. Too slow to run over a whole corpus, ideal for reranking a shor
 **Data/instruction separation**: Marking untrusted content (retrieved documents, tool results, user
 uploads) as data with delimiters or datamarking, and instructing the model never to follow instructions
 found inside it. It lowers injection success rates but is not a security control on its own. (Ch 4, 27)
+
+**Day-one RAG evaluation**: A judge-free starter evaluation for a RAG prototype: about 30 questions
+with required documents and an asker, hit@k run as each user, a leak check on every case, citation
+validity, and abstention on trap questions. It can be built in an afternoon and grown later. (Ch 14)
 
 **Dead-letter queue (DLQ)**: A queue where jobs go after exhausting retries, so they can be inspected
 and replayed instead of being lost or retried forever. (Ch 29)
@@ -273,6 +318,11 @@ termination. (Ch 19, 20, 38)
 **Dense retrieval**: Retrieval by embedding similarity between query and chunks. Good at paraphrase and
 meaning, weak on exact identifiers and rare terms. (Ch 12)
 
+**Determinism rule (durable workflows)**: The requirement that a replay-based durable workflow
+function take the same path every time it is re-run from its history. Model and tool calls must be
+recorded steps, and control code must not read the wall clock, draw random numbers, or generate fresh
+ids; a violation surfaces only when a recovered run diverges. (Ch 17, 23, 38)
+
 **Deterministic evaluation**: Scoring with code: exact match, schema validity, regex, set overlap,
 numeric tolerance. Cheap, repeatable, and preferred wherever the property can be checked without a
 judge. (Ch 24)
@@ -285,18 +335,34 @@ task at lower latency and cost. (Ch 33)
 
 **DPO (Direct Preference Optimization)**: A preference-tuning method that trains directly on pairs of
 preferred and rejected responses without a separate reward model or reinforcement learning loop.
-(Ch 33)
+(Ch 2, 33)
 
 **DSPy**: A framework that treats prompts as programs with typed signatures and optimizes them
 automatically against a metric. (Ch 23)
 
+**Dual LLM pattern**: An injection-containing design with a privileged model that plans and calls tools
+but never sees untrusted content, and a quarantined model that reads untrusted content but has no
+tools. Code stores the quarantined outputs under symbolic names and substitutes the values only when
+rendering an answer or filling a tool argument. (Ch 26)
+
 **Durable execution**: Running long workflows so that each completed step is recorded and the workflow
 resumes from the last step after a crash, with side effects not repeated. (Ch 38)
+
+**Durable execution engine**: A separate service that owns long-running workflow runs: it records
+progress in an event history, schedules steps onto your workers, fires timers, and delivers external
+signals. It takes over crash recovery at the price of determinism rules, versioning rules, and payload
+size limits; very long runs use a "continue as new" operation to start a fresh history. (Ch 17, 23,
+38)
 
 ## E
 
 **Egress control**: Restricting which external destinations a system or tool may contact, usually with
 an allowlist. It closes the most common exfiltration channels from an injected agent. (Ch 26, 27)
+
+**Elicitation (MCP)**: An MCP feature that lets a server ask the user a question through the host,
+either as structured input against a small schema or, in URL mode, by sending the user to a URL. URL
+mode keeps sensitive input such as a third-party sign-in or payment out of the host and the
+model. (Ch 18)
 
 **Embedding**: A fixed-length vector representing the meaning of a text (or image) so that similar items
 are close in vector space. The foundation of semantic search, clustering, deduplication, and routing.
@@ -383,6 +449,11 @@ capacity you can promise users. (Ch 34)
 **Graceful degradation**: Continuing to serve a reduced but useful response (smaller model, cached
 answer, retrieval-only results) when a dependency fails, along pre-tested plans. (Ch 29)
 
+**Grader**: A scoring function from a prompt, a response, and an optional reference to a number,
+usually between 0 and 1, used as the reward in reinforcement fine-tuning. Graders can be string match,
+field-level comparison, code that runs tests, or a model judge; they must be tested like code because
+the model learns whatever they reward. (Ch 33)
+
 **GraphRAG**: Retrieval over an entity graph extracted from the corpus, often with summaries of graph
 communities, aimed at questions that span many documents. Expensive to build and maintain. (Ch 37)
 
@@ -395,6 +466,10 @@ abstain when it is insufficient. Used interchangeably with faithfulness in many 
 
 **Grouped-query attention (GQA)**: An attention variant in which several query heads share one key and
 value head, shrinking the KV cache and speeding decode. (Ch 2, 34)
+
+**Guard model**: A classifier model, hosted or self-hosted, that scores inputs or outputs for safety
+or injection categories. It is a probabilistic sensor plugged into a guardrail pipeline, not a
+boundary that replaces allowlists and tool policy. (Ch 27)
 
 **Guardrail**: A check that runs around a model or tool call (input, context, output, or tool stage) and
 allows, flags, redacts, or blocks. Guardrails are layered because each one has gaps. (Ch 27)
@@ -412,8 +487,12 @@ unsupported claims and invented citations, which is why citation validation and 
 control, sandboxing, and feedback such as test results. Most agent quality differences come from the
 harness. (Ch 19, 38)
 
-**Hit rate**: In retrieval evaluation, the share of questions for which at least one relevant document
-appears in the top k. In caching, the share of lookups served from cache. (Ch 14, 30)
+**Hierarchical summaries**: Section and document summaries written at ingestion and indexed alongside
+chunks, optionally clustered into higher-level summaries. They answer corpus-wide questions by
+retrieving a handful of summaries, without the entity extraction a graph needs. (Ch 37)
+
+**Hit rate (hit@k)**: In retrieval evaluation, the share of questions for which at least one relevant
+document appears in the top k. In caching, the share of lookups served from cache. (Ch 10, 14, 30)
 
 **HNSW (Hierarchical Navigable Small World)**: A graph-based ANN index with layered proximity graphs.
 Strong recall and latency; memory-heavy; tuned with parameters such as `M` and `ef_search`. (Ch 9)
@@ -447,8 +526,16 @@ Ingestion quality bounds retrieval quality. (Ch 11, 15)
 **Insecure output handling**: Passing model output into an interpreter (browser, SQL engine, shell)
 without encoding or validation, enabling XSS or injection through the model. (Ch 26, 27)
 
+**Instruction file**: A human-readable file, such as an `AGENTS.md` at a repository root, that an agent
+reads at the start of every session and may edit as it works. Because an injected edit becomes a
+standing instruction, edits are diffed, checked against the write policy, and review-gated. (Ch 21)
+
 **Instruction hierarchy**: The precedence order among instruction sources: system, developer, user, then
 data. Prompts and policies are designed so that lower levels cannot override higher ones. (Ch 4)
+
+**Instruction tuning**: Supervised fine-tuning of a pretrained model on curated conversations so that
+it follows a chat format and answers after the assistant marker. It teaches task-following and style,
+not much new knowledge. (Ch 2)
 
 **IVF (Inverted File index)**: An ANN index that clusters vectors and searches only the clusters nearest
 the query. Tuned by the number of clusters probed. (Ch 9)
@@ -491,6 +578,15 @@ interrupts. (Ch 17, 23)
 **Latency budget**: An allocation of the end-to-end latency target across stages such as retrieval,
 reranking, prefill, decode, and tools. A stage that overspends is visible immediately. (Ch 12, 30, 35)
 
+**Latent attention (MLA)**: An attention variant, multi-head latent attention, that caches one compressed
+latent vector per token per layer instead of separate keys and values for every head. It shrinks the KV
+cache well below the grouped-query formula, so KV sizing must follow the model's configuration.
+(Ch 34)
+
+**Learned sparse retrieval**: Retrieval with a transformer that outputs a weight per vocabulary term,
+including related terms absent from the text; SPLADE is the best-known example. The result is still a
+sparse vector served from an inverted index, sitting between BM25 and dense retrieval. (Ch 12, 37)
+
 **Least privilege**: Granting each tool, agent, and credential only the permissions its task needs.
 (Ch 16, 26)
 
@@ -527,6 +623,11 @@ long context better than information in the middle. It motivates careful orderin
 
 ## M
 
+**Managed open-weight endpoint**: A cloud or inference provider serving open-weight models for you,
+billed per token or per reserved GPU-hour. It gives model choice, portability, and often your own
+adapters without running GPUs, with engine and quantization changes on the provider's schedule.
+(Ch 7, 34)
+
 **Map-reduce**: Processing many items or chunks independently (map) and combining the partial results
 (reduce). Used for long-document summarization and parallel research. (Ch 17, 37)
 
@@ -542,8 +643,16 @@ remains your responsibility. (Ch 18)
 **MCP host**: The AI application (assistant, IDE, agent runtime) that the user interacts with and that
 runs MCP clients. The host owns policy and user consent. (Ch 18)
 
+**MCP registry**: The MCP project's public catalog of server metadata (name, version, package or
+remote endpoint), which hosts and private subregistries can consume. An entry is provenance, not
+approval: it says who published a server, not that its descriptions or code were reviewed. (Ch 18)
+
 **MCP server**: A program that exposes tools, resources, and prompts over MCP, locally over stdio or
 remotely over HTTP. Its descriptions are untrusted input. (Ch 18)
+
+**MCP tasks**: An experimental MCP feature in which a request runs as a task: the requester gets a task
+handle at once and polls for status and the eventual result, or cancels it. It fits long-running tool
+calls that a single waiting request does not. (Ch 18)
 
 **Memory poisoning**: Getting false or malicious content written into an agent's long-term memory so
 it influences future sessions. Write policies and provenance are the defenses. (Ch 21, 26)
@@ -558,6 +667,15 @@ provenance, confidence, expiry, tenant scope, write policy, and hard deletion. (
 document type. Pre-filtering applies the restriction during search; post-filtering applies it after and
 can return too few results. (Ch 9)
 
+**Minimum viable evaluation**: The week-one evaluation a team can build from nothing: 30 to 50 real
+cases, deterministic checks first, and one judge calibrated on about 30 labels that reports but does not
+gate. Every later evaluation practice upgrades one part of it. (Ch 24)
+
+**Mixture of experts (MoE)**: An architecture whose blocks hold many feed-forward "experts" plus a
+router that sends each token through only a few. Total parameters (every expert) set memory; active
+parameters (what one token passes through) set compute per token, so the two must not be
+confused when sizing. (Ch 2, 34)
+
 **ModelGateway**: The `aie_core` component that wraps a primary client with retries, fallbacks,
 rate limiting, caching, concurrency limits, cost accounting, and tracing. Every model call in the book
 goes through it. (Ch 3)
@@ -570,6 +688,10 @@ similarity, or confidence. It balances quality, latency, and cost. (Ch 7)
 
 **MRR (Mean Reciprocal Rank)**: The average of 1 divided by the rank of the first relevant result. It
 rewards putting a relevant document at the top. (Ch 14)
+
+**Multi-adapter serving**: Loading one base model once and keeping many LoRA adapters resident, applying
+each request's adapter within the same batch. Each adapter looks like a separate model on one endpoint,
+so many low-traffic fine-tunes cost roughly one replica. (Ch 34)
 
 **Multi-agent system**: Several agents with separate contexts and roles coordinated by a supervisor,
 pipeline, or shared log. Justified by parallelism, isolation, independent verification, or permission
@@ -594,12 +716,21 @@ tenants, `retail` and `logistics`, built across the projects and assembled in th
 **Online evaluation**: Measuring quality on live traffic through user feedback, corrections, sampled
 judging, and canary comparisons. (Ch 25, 32)
 
+**Opaque reasoning items**: Encrypted, signed, or server-referenced reasoning blocks that some provider
+APIs return alongside tool calls and expect back unchanged on the next turn. A loop that rebuilds its
+transcript without them quietly degrades or fails, so they need their own field in the recorded
+event. (Ch 19)
+
 **OpenTelemetry (OTel)**: A vendor-neutral standard and SDK for traces, metrics, and logs. The book's
 tracer can export to it so AI spans join the rest of the system's telemetry. (Ch 28, 31)
 
 **Outbox pattern**: Writing an intended side effect to a durable table in the same transaction as the
 state change, then delivering it separately. It prevents lost or duplicated actions when a process
 crashes between steps. (Ch 16)
+
+**OWASP Top 10 for LLM Applications**: A widely used list of the main security risks of LLM
+applications, such as prompt injection and excessive agency. Reviewers and questionnaires use its
+vocabulary, so a threat model should map onto it. (Ch 26)
 
 ## P
 
@@ -622,6 +753,10 @@ lets one database hold documents, metadata, ACLs, and embeddings. (Ch 9, 28)
 phone numbers. It must be detected and redacted before it reaches models, logs, or memory where policy
 forbids it. (Ch 21, 27)
 
+**Plan-then-execute**: An injection-containing design in which the model commits to a plan before it
+reads any untrusted content and code executes that plan. Injected content can no longer add steps, but
+it can still corrupt the arguments and content of planned steps. (Ch 26)
+
 **Planner-executor**: An architecture in which one step produces an explicit plan and an executor
 carries it out step by step, replanning when observations contradict the plan. (Ch 20)
 
@@ -629,6 +764,10 @@ carries it out step by step, replanning when observations contradict the plan. (
 two. Controlled by randomizing or swapping order. (Ch 24)
 
 **Precision@k**: The share of the top k results that are relevant. (Ch 14)
+
+**Preference tuning**: Training that shapes which of several acceptable answers a model prefers, from
+compared pairs of answers, through RLHF or DPO-style methods. Refusal habits and sycophancy are among
+the tendencies it instills. (Ch 2, 33)
 
 **Prefill**: The phase in which the model processes all input tokens in parallel and builds the KV cache.
 Prefill is compute-bound and dominates time to first token for long prompts. (Ch 2, 34)
@@ -659,11 +798,18 @@ which prompt version produced it and changes are tested and reviewed. (Ch 4)
 **Prompt template**: A parameterized prompt rendered with request data, with escaping so that inserted
 data cannot break the prompt's structure. (Ch 4)
 
+**Protected resource metadata**: A document a remote MCP server points to in its `401` response that
+names the authorization servers it trusts. It is the first step of the MCP authorization flow. (Ch 18)
+
 **Provenance**: The recorded origin of a piece of content or memory: source, author, time, and how it was
 derived. It drives trust decisions, citation, and deletion. (Ch 21, 26)
 
 **Provider abstraction**: A provider-neutral interface such as `LLMClient` behind which vendor SDKs sit,
 so applications can switch or combine providers. (Ch 3, 32)
+
+**Provider-hosted tools**: Tools the model provider runs mid-generation, such as web search, code
+execution, file search, and remote MCP connectors, enabled in the request. They bypass your tool
+policy, idempotency, and audit, so enabling one is a per-request policy decision. (Ch 16, 18, 23)
 
 ## Q
 
@@ -698,7 +844,7 @@ loop. The simplest agent architecture and the baseline for others. (Ch 20)
 
 **Reasoning model**: A model that spends additional generated tokens on internal reasoning before
 answering, trading latency and cost for accuracy on multi-step problems. Many expose a reasoning-effort
-setting. (Ch 2, 7)
+setting, and some return opaque reasoning items a tool loop must preserve. (Ch 2, 7, 19)
 
 **Recall@k**: The share of relevant documents that appear in the top k results. The primary retrieval
 metric, because evidence that is not retrieved cannot be used. (Ch 9, 14)
@@ -718,6 +864,11 @@ evidence, self-critique tends to reinforce the original mistake. (Ch 20)
 
 **Regression suite**: A set of cases that previously passed and must keep passing after every prompt,
 model, or code change. (Ch 4, 24, 25)
+
+**Reinforcement fine-tuning (RFT)**: Fine-tuning in which a provider samples several responses per
+prompt, scores them with your grader, and moves the weights toward the higher-scoring ones. It suits
+tasks whose answers are checkable but hard to demonstrate, and its typical failure is reward
+hacking. (Ch 33)
 
 **Release gate**: An automated CI check that blocks a change unless evaluation metrics meet configured
 thresholds, compared with the current baseline. (Ch 24, 25)
@@ -739,6 +890,10 @@ request. (Ch 1, 31)
 **Reranking**: Re-scoring a short list of retrieval candidates with a more precise model, usually a
 cross-encoder. It often gives the largest precision gain per unit of effort in RAG. (Ch 12)
 
+**Resource indicator**: A parameter in an OAuth token request naming the target server's canonical
+URL, so the issued token is bound to that server as its audience. In MCP it makes a token stolen from
+one server useless against another. (Ch 18)
+
 **Response cache**: A cache of complete model responses keyed on the exact request and its correctness
 inputs. Safe only when the key includes everything the answer depends on. (Ch 3, 30)
 
@@ -753,7 +908,7 @@ traffic on an already struggling dependency. (Ch 29)
 request or a content-filter refusal. The book's error types carry a `retryable` flag. (Ch 3, 29)
 
 **RLHF (Reinforcement Learning from Human Feedback)**: Training a reward model on human preference
-comparisons and optimizing the language model against it with reinforcement learning. (Ch 33)
+comparisons and optimizing the language model against it with reinforcement learning. (Ch 2, 33)
 
 **Router**: A component that chooses the model, prompt, or path for a request. Also an agent
 architecture in which a classifier step dispatches to specialized handlers. (Ch 7, 20)
@@ -780,7 +935,7 @@ Driven by data control, cost at scale, or latency, and paid for in operations wo
 previous query. It risks answering a question nobody asked when the threshold is loose. (Ch 15, 30)
 
 **Semantic conventions (GenAI)**: OpenTelemetry's standard attribute names for model calls, such as
-model, token counts, and operation. Using them keeps traces portable across tools. (Ch 31)
+model, token counts, and operation. Using them keeps traces portable across tools. (Ch 23, 31)
 
 **Semantic layer**: A curated model of business metrics and entities over raw tables. Text-to-SQL
 against a semantic layer is safer and more accurate than against raw schemas. (Ch 36, 37)
@@ -806,6 +961,10 @@ or external. The class determines retries, approval, and idempotency requirement
 
 **Slice analysis**: Breaking evaluation results down by segment (language, tenant, document type, tag).
 Aggregate scores hide regressions on important slices. (Ch 14, 24)
+
+**Sliding-window attention**: Attention layers that attend only to the last W tokens and so keep at most
+W tokens of KV cache regardless of context length. Models interleaving local and global layers need
+far less cache than the naive formula, if the engine implements the window. (Ch 34)
 
 **SLO (Service Level Objective)**: A target for a measured indicator, such as p95 time to first token
 under 2 seconds for 99 percent of minutes. SLOs turn reliability into budgets and alerts. (Ch 29, 34)
@@ -845,6 +1004,10 @@ tool calling, or constrained decoding, then validated in code. (Ch 3, 6)
 **Supervisor-worker**: An architecture in which a supervisor decomposes a task, delegates parts to
 worker agents, and integrates their results. (Ch 20, 22)
 
+**Sycophancy**: A model's learned tendency to agree with the user and sound confident, accepting false
+premises and abandoning correct answers under pushback. It comes from preference tuning and is
+countered with grounding, neutral prompts, and evaluation cases that push back. (Ch 2, 20)
+
 **Synthetic data**: Evaluation or training examples generated by a model, for example questions written
 from chunks. Fast to produce, biased toward what the generator finds easy, and in need of validation.
 (Ch 14, 25)
@@ -869,6 +1032,10 @@ timeout, repeated state, no progress, or approval required. (Ch 19)
 
 **Text-to-SQL**: Translating a natural-language question into a SQL query. Needs read-only credentials,
 query validation, and result verification. (Ch 36, 37)
+
+**Thinking tokens**: The intermediate tokens a reasoning model generates before its answer. They are
+decoded like any other output, occupy KV cache, and are usually billed as output, so they must be
+counted from the provider's usage field. (Ch 2)
 
 **Threat model**: A structured account of assets, actors, trust boundaries, and threats for a system, used
 to choose controls. (Ch 26)

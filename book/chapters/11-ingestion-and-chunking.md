@@ -287,7 +287,7 @@ sequenceDiagram
 
 ## Implementation
 
-The package layout:
+The ingestion half of the package (Chapters 12 to 14 add `retrieval/`, `generation/`, and more of `eval/`):
 
 ```
 book/projects/ragkit/
@@ -958,7 +958,7 @@ PDF tests need no binary fixtures: `tests/pdf_fixtures.py` writes a valid PDF wi
 
 **Running headers dominate similarity.** Symptom: queries about one topic retrieve pages from unrelated sections of the same PDF. Telemetry: the top chunks share a repeated first line ("Northwind Employee Handbook 2026"). Test: the repeated-line test, plus a check that no single line appears in more than a set fraction of a document's chunks.
 
-**Duplicate crowding.** Symptom: the top five results are the same paragraph from five wiki copies, and the answer misses a second relevant source. Telemetry: high pairwise similarity among retrieved chunks; many distinct document ids with near-identical content hashes. Test: the near-duplicate test, and a retrieval-level diversity metric in Chapter 14.
+**Duplicate crowding.** Symptom: the top five results are the same paragraph from five wiki copies, and the answer misses a second relevant source. Telemetry: high pairwise similarity among retrieved chunks; many distinct document ids with near-identical content hashes. Test: the near-duplicate test; at query time, Chapter 12's MMR diversity stage limits the crowding that slips through.
 
 **Re-embedding storms.** Symptom: embedding spend spikes after a routine edit to a large document set. Telemetry: `diff_chunks` reports most chunks as added and removed for documents whose content barely changed. Causes: positional ids, a chunker whose boundaries shift with every insertion, or a normalization or parser version change that altered every hash. Test: the id-stability test under insertion and version bump.
 

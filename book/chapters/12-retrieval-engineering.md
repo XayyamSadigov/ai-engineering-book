@@ -189,7 +189,7 @@ It helps most on corpora with terse sections that do not repeat their subject: "
 
 Two engineering details make it affordable and safe. The cache key is a content hash of everything that determines the output: prompt version, model, the chunk's content hash, and a hash of the document title and the window the model saw. The window is the chunk's neighborhood (a few thousand characters), not the whole document, so an edit far from a chunk does not invalidate its context, and an unchanged chunk in a re-ingested document costs nothing. Failures are not cached: a chunk whose context generation failed keeps its breadcrumb and is retried on the next run. And because the prefix is model output generated from untrusted text, it is stripped of markup and capped in length before it enters an index.
 
-One subtle consequence: the chunk id from Chapter 11 is derived from the chunk's content, not its index text, so a new context prefix does not change the id. An indexing pipeline that decides what to re-embed by comparing chunk ids would miss the change. `ContextualEnricher` records a `context_key` in metadata precisely so the indexer can compare it; Chapter 15's indexing worker includes it in the record fingerprint.
+One subtle consequence: the chunk id from Chapter 11 is derived from the chunk's content, not its index text, so a new context prefix does not change the id. An indexing pipeline that decides what to re-embed by comparing chunk ids would miss the change. `ContextualEnricher` records a `context_key` in metadata precisely so the indexer can compare it; Chapter 15's indexing worker stores the key per chunk and re-embeds a chunk whose key moved.
 
 ### Parent-document retrieval
 
@@ -309,7 +309,7 @@ flowchart TD
 
 ## Implementation
 
-The retrieval package sits inside ragkit so that Chapters 13 to 15 import one library. Only `types.py` predates this chapter; it is the fixed contract every stage speaks.
+The retrieval package sits inside ragkit so that Chapters 13 to 15 import one library. `types.py` is the fixed contract every stage speaks.
 
 ```text
 book/projects/ragkit/
@@ -755,7 +755,7 @@ def score_question(q: GoldQuestion, chunk_docs: Sequence[str], ks: Sequence[int]
 
 **Authorization is tested as a property.** The tests assert the property rather than the mechanism: for every gold `forbidden-doc` question, no chunk of the restricted document appears in any stage's candidate ids, even when a multi-query expansion names the restricted runbook, and a deliberately leaky retriever is caught and reported by id.
 
-**The motivating cases are tests.** On the shared corpus, BM25 ranks the incident report first for "INC-2025-1142" while the dense retriever prefers the POS overview that mentions it, and for "SH-201" dense returns five confident results without the code. (The offline dense retriever embeds only shared content words, deliberately mimicking a dense model's weakness on rare tokens; the test checks the mechanism, not a specific model.) `naive_dense()` approximates Chapter 10's naive setup with fixed 200-token chunks without breadcrumbs, under which the Returns API ranks first for the laptop question. The lexical reranker and the LLM reranker (driven by a scripted grader in `FakeLLM`) both put the runbook first. The LLM test also checks batching, `<untrusted_data>` fencing, schema repair of an out-of-range grade, and degradation when the provider is down.
+**The motivating cases are tests.** On the shared corpus, BM25 ranks the incident report first for "INC-2025-1142" while the dense retriever prefers the POS overview that mentions it, and for "SH-201" dense returns five confident results without the code. (The offline dense retriever embeds only shared content words, deliberately mimicking a dense model's weakness on rare tokens; the test checks the mechanism, not a specific model.) `naive_dense()` (on disk, in `tests/test_retrieval_rerank.py`) approximates Chapter 10's naive setup with fixed 200-token chunks without breadcrumbs, under which the Returns API ranks first for the laptop question. The lexical reranker and the LLM reranker (driven by a scripted grader in `FakeLLM`) both put the runbook first. The LLM test also checks batching, `<untrusted_data>` fencing, schema repair of an out-of-range grade, and degradation when the provider is down.
 
 **Transformers never lose the question, and the trace proves what was searched.** Every failure path in `query.py` (rate limit, malformed output, implausible rewrite) returns the original with `fallback=True`. The pipeline tests confirm HyDE passages reach `dense#hyde0` and never a BM25 job, that the reranker judges the rewritten standalone question, and that the trace lists stages in order with k values, candidate ids, latencies, and the subset relations a stage-isolation report needs: final hits within the fused list, fused list within the union of retriever lists.
 

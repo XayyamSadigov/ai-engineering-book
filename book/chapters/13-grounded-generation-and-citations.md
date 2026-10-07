@@ -40,7 +40,7 @@ The contract is the set of rules the model must follow and the shape it must ret
 
 **Data, not instructions.** Evidence arrives inside labeled blocks, and the system prompt says that text inside them is information to cite, never instructions to follow, even when it claims authority. This reuses Chapter 5's `<untrusted_data>` convention so prompts look the same across the book. Labels are not a security boundary (Chapter 26 explains why). They reduce the success rate of injection and make traces readable. The boundary itself is code: what the model's output is allowed to cause.
 
-**Cite or abstain.** Every factual statement cites at least one evidence id that directly supports it, or it is left out. Background knowledge is not allowed for facts about the organization. This one rule converts the open question "is this answer faithful?" into a set of narrow, checkable questions: does this id exist, and does this block support this claim?
+**Cite or abstain.** Every factual statement cites at least one evidence id that directly supports it, or it is left out. Background knowledge is not allowed for facts about the organization. This one rule converts the open question "is this answer grounded?" into a set of narrow, checkable questions: does this id exist, and does this block support this claim?
 
 **Explicit abstention.** The model needs a legitimate way to say "the evidence does not answer this." Without one, helpfulness fills the gap. The contract defines the abstention as a status value (`insufficient_evidence`) plus a description of what is missing, so code can branch on it without parsing prose.
 
@@ -48,7 +48,7 @@ The contract is the set of rules the model must follow and the shape it must ret
 
 **Shape.** The answer is a structured object, validated by schema. Schema validity is not factual correctness, but it is the precondition for every check that follows.
 
-The contract is a versioned prompt. It has an id (`rag.grounded_answer`), a version, and a hash that goes into every request's metadata, exactly as Chapter 4's registry does for other prompts. In Project 3 (Chapter 15) it moves into that registry; here it lives as a constant so the package has no dependency on the examples directory.
+The contract is a versioned prompt. It has an id (`rag.grounded_answer`), a version, and a hash that goes into every request's metadata, exactly as Chapter 4's registry does for other prompts. Here it lives as a constant so the package has no dependency on the examples directory; Project 3 (Chapter 15) puts the prompt version into its answer-cache key, so a contract change never serves an answer built under the old one.
 
 ### Evidence packing
 
@@ -923,7 +923,7 @@ Count each mode separately; otherwise provider outages inflate the abstention ra
 
 **Stale source preferred.** The answer cites the older side of a detected conflict. *Telemetry:* `stale_source_preferred` and the conflict-note rate; gold questions tagged `conflicting-versions` (RQ-001, RQ-002). *Test:* naive scripted model citing only the FAQ. *Fix beyond code:* supersession metadata and content cleanup.
 
-**Silent conflict blending.** The answer cites both sides and reports `answered`, sometimes averaging ("5 to 10 days"). *Telemetry:* `conflict_unreported` warnings. *Test:* both-sides answer without conflict status produces the warning. Chapter 14's faithfulness judge measures blended answers on the gold set.
+**Silent conflict blending.** The answer cites both sides and reports `answered`, sometimes averaging ("5 to 10 days"). *Telemetry:* `conflict_unreported` warnings. *Test:* both-sides answer without conflict status produces the warning. Chapter 14's groundedness judge (`FaithfulnessJudge`) measures blended answers on the gold set.
 
 **Injection followed.** The answer repeats or acts on instructions from a document. *Telemetry:* flagged-source events, `support_only_flagged` errors, output scans for email addresses and URLs not in clean evidence. *Test:* the compromised model that echoes the newsletter's request must have that claim dropped while the legitimate delivery claim survives.
 
@@ -1046,4 +1046,4 @@ Finally, keep regression cases from production. Every answer a user flags as wro
 - *Self-Consistency Improves Chain of Thought Reasoning in Language Models* (Wang et al., 2023): the sampling-and-voting idea this chapter applies at the claim level, and its cost.
 - *Not What You've Signed Up For: Compromising Real-World LLM-Integrated Applications with Indirect Prompt Injection* (Greshake et al., 2023): how retrieved documents become an attack channel, the threat behind the data-not-instructions clause.
 - *Defending Against Indirect Prompt Injection Attacks With Spotlighting* (Hines et al., 2024): delimiting and marking untrusted input, the technique behind labeled evidence blocks, and its limits.
-- *RAGAS: Automated Evaluation of Retrieval Augmented Generation* (Es et al., 2024): reference-free faithfulness and answer-relevance metrics to compare with this chapter's validator signals.
+- *RAGAS: Automated Evaluation of Retrieval Augmented Generation* (Es et al., 2024): reference-free faithfulness (what this book calls groundedness) and answer-relevance metrics to compare with this chapter's validator signals.

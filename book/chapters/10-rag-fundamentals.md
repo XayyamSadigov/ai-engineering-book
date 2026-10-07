@@ -556,7 +556,7 @@ Every naive RAG pipeline exhibits these seven failures. Each entry gives the dem
 
 **Why naive RAG allows it.** The tutorial prompt has no abstention path, so helpfulness fills the gap. Real models routinely produce a plausible answer in the style of related but insufficient evidence.
 
-**Signal.** The grounding check finds "11 weeks" in the answer and in no evidence. It does not flag "7 years", which happens to appear in an unrelated retrieved chunk: number-and-unit matching is a cheap tripwire; real faithfulness checking is covered in Chapters 13 and 24.
+**Signal.** The grounding check finds "11 weeks" in the answer and in no evidence. It does not flag "7 years", which happens to appear in an unrelated retrieved chunk: number-and-unit matching is a cheap tripwire; real groundedness checking is covered in Chapters 13 and 24.
 
 **Fix.** A machine-detectable abstention token, a grounding check before returning, and an application branch that makes abstention useful (Chapter 13). The contract changes what a cooperative model does; only the check protects you from an uncooperative one.
 
@@ -676,7 +676,7 @@ In production, the cheap deterministic checks from this chapter run on every req
 
 - RAG puts external, current, private, permissioned knowledge into the model's input at request time; it is a design pattern around a search system, not an algorithm or a database product.
 - Retrieval quality usually dominates generation quality. When an answer is wrong, first check whether the required evidence was in the context.
-- RAG is two systems joined by a contract: a retrieval system measured by recall and precision, and a generation system measured by faithfulness, citations, and abstention. Evaluate them separately.
+- RAG is two systems joined by a contract: a retrieval system measured by recall and precision, and a generation system measured by groundedness, citations, and abstention. Evaluate them separately.
 - The stage model (ingest, chunk, index, query understanding, retrieve, rerank, pack, generate, validate) gives every failure an owner and every stage a place to log and test.
 - Use RAG for knowledge that is large, changing, private, or permissioned; long context when one request's corpus is small or as the last step after retrieval; fine-tuning for behavior, not facts.
 - The seven naive failures are wrong chunk boundaries, missing evidence, distractors, stale versions, no abstention, hallucinated citations, and permission leaks. Each has a deterministic signal you can log on every request.

@@ -1060,7 +1060,7 @@ The retrieval in RAG does not have to be vectors. Four common situations need no
 
 - **The corpus is small.** A few hundred documents fit in a NumPy matrix or often in the context window (Chapter 10 compares RAG with long context).
 - **The queries are exact lookups.** "Status of ticket TCK-1042" or "error code RET-002" are key or keyword queries; embedding models are weak at rare identifiers, and SQL or full-text search answers them exactly. The Northwind gold set tags such questions `exact-id` so you can measure dense retrieval on them separately.
-- **The data is structured.** Metrics, orders, and inventory belong in SQL, possibly model-generated over a semantic layer (the `query_metrics` tool; Chapter 36). Similarity search over rows loses exact filtering, aggregation, and joins.
+- **The data is structured.** Metrics, orders, and inventory belong in SQL, possibly model-generated over a semantic layer and checked by a SQL guard (Chapter 36, Case B). Similarity search over rows loses exact filtering, aggregation, and joins.
 - **The content is navigable.** Manuals, legal codes, and API references can be retrieved through their hierarchy, metadata filters, or a model choosing sections from an outline; Chapter 37 implements this.
 
 The sensible default for a new project: full-text search and an exact vector scan in the database you already have, measured on real questions, with an ANN index or a dedicated store added when measurements show the need.

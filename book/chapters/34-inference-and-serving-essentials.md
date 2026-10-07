@@ -1,10 +1,20 @@
 # Chapter 34 — Inference and Serving Essentials
 
-After this chapter you will be able to decide, with numbers, whether an application should call a hosted model API or run an open-weights model on hardware you control; read a serving benchmark and know which of its metrics your users will feel; size the KV cache for a given model and context length and translate that into a concurrency limit; plan capacity with Little's Law and a load test instead of a vendor's single-request figure; and put a self-hosted, OpenAI-compatible server behind the same `aie_core` client the rest of the book uses. The code for the chapter lives in `book/projects/examples/ch34/`: a KV-cache and concurrency calculator, Little's Law and replica-estimate helpers, an async load generator that measures time to first token through streaming, and an in-process fake server so everything is testable offline.
+This chapter is the serving math behind a model endpoint: what limits how many users one GPU serves, which latency numbers users feel, and how to plan capacity from a load test instead of a spec sheet. You need it the day a workload moves from a hosted API to open weights on hardware you control, or the day a hosted endpoint's latency becomes your problem.
+
+**You will be able to:**
+- Decide, with numbers, which slice of traffic (if any) should run on a self-hosted or managed open-weight endpoint instead of a hosted API.
+- Define TTFT, TPOT, end-to-end latency, throughput, and goodput, and read a serving benchmark for the one your users feel.
+- Size the KV cache for a model and context length, including grouped-query, sliding-window, latent-attention, and mixture-of-experts models, and turn it into a concurrency limit.
+- Plan replicas with Little's Law and a load-tested operating point, and explain why headroom is not waste.
+- Run a reproducible closed-loop load test that measures TTFT through streaming and finds the operating point.
+- Put a self-hosted, OpenAI-compatible server behind the same `aie_core` client and gateway the rest of the book uses.
+
+**Prerequisites:** Chapters 2 (tokens, prefill and decode, the KV cache as a mechanism), 3 (the `aie_core` client and `ModelGateway`), and 5 (prompt layout for prefix caching). | **Code:** `book/projects/examples/ch34/` (run: `.venv/bin/python -m pytest book/projects/examples/ch34 -q` from the repository root) | **Builds:** a KV-cache and concurrency calculator, Little's Law and replica-estimate helpers, an async streaming load generator, an in-process fake server, and a serving-target router over `aie_core`.
 
 ## Why this matters
 
-Most of this book treats the model as a service behind an HTTP call. That abstraction holds until one of four things happens. Volume grows until the per-token bill becomes a line item the finance team asks about. A customer or regulator requires that prompts never leave a region or a network. A product needs a model the hosted providers do not offer, such as a fine-tuned open model from Chapter 33 or a small specialist for classification. Or latency needs to be controlled rather than observed, because a voice product (Chapter 38) cannot tolerate a provider's queue during a traffic spike.
+Most of this book treats the model as a service behind an HTTP call. That abstraction holds until one of four things happens. Volume grows until the per-token bill becomes a line item the finance team asks about. A customer or regulator requires that prompts never leave a region or a network. A product needs a model the hosted providers do not offer, such as a fine-tuned open model from Chapter 33 or a small specialist for classification. Or latency needs to be controlled rather than observed, because a voice product (Chapter 35, Case 2) cannot tolerate a provider's queue during a traffic spike.
 
 At that point an application engineer inherits a problem that looks like infrastructure: GPUs, serving engines, memory budgets, batch schedulers. The temptation is to treat it as someone else's domain. That is a mistake for two reasons. First, the serving layer's behavior leaks straight into application behavior: the prompt layout you chose in Chapter 5 decides whether prefix caching (reusing computation for a shared prompt opening) helps, the context lengths your RAG pipeline produces decide how many users fit on a GPU, and the quantization (lower-precision weights) an operator picks silently changes your structured-output success rate.
 
@@ -24,7 +34,7 @@ Three consequences follow and recur throughout the chapter. Because the KV cache
 
 ### Hosted API or self-hosted engine
 
-The decision is rarely binary. Many production systems route most traffic to a hosted provider and send a slice to a self-hosted model: regulated tenants, high-volume cheap tasks, or a fine-tuned specialist. The question is which slice, if any, justifies the operational burden. Five factors decide it.
+The decision is rarely binary. Many production systems route most traffic to a hosted provider and send a slice to a self-hosted model: regulated tenants, high-volume cheap tasks, or a fine-tuned specialist. The question is which slice, if any, justifies the operational burden. Chapter 7 frames this as part of model selection; this section adds the serving-side detail. Five factors decide it.
 
 **Cost at volume.** Per-token pricing has no fixed component; a self-hosted GPU costs the same per hour whether it serves one request or a thousand. Self-hosting wins only when utilization is high and sustained. The cost section later gives the arithmetic; a GPU idle 60 percent of the day often costs more per useful token than the API it replaced.
 
@@ -45,6 +55,8 @@ The decision is rarely binary. Many production systems route most traffic to a h
 | Team | No one to own GPUs and engine upgrades | Platform team exists, or workload justifies hiring |
 | Change rate | Want new models without migration work | Want pinned behavior and reproducible outputs |
 | Typical outcome | Everything hosted, gateway for retries and cost (Chapter 3, 30) | Hybrid: hosted default, self-hosted slice behind the same gateway |
+
+**The middle option: managed open-weight endpoints.** Between a hosted proprietary API and your own GPUs sits a third choice: a cloud or inference provider serves open weights for you, billed per token or per reserved GPU-hour. You get the model choice and portability of open weights, often including your own fine-tune or LoRA adapter, without procurement, driver upgrades, or an on-call rotation for memory exhaustion. You give up most of the latency control and part of the residency guarantee, and you still inherit the quality questions of this chapter: the provider picks the engine, the quantization, and the upgrade schedule, so ask which quantization is served and rerun your evaluation suite when it changes. It is the usual first step when a team wants open weights, and the right end state when volume is too spiky to keep dedicated GPUs busy. A dedicated-capacity variant (reserved replicas run by the provider) moves the cost model toward self-hosting: you pay per hour again, so the utilization arithmetic in Production considerations applies.
 
 Whatever the split, both sides speak the same `LLMClient` protocol from Chapter 3, so retries, caching, cost accounting, and tracing come from the same `ModelGateway`. Where each target sits is a design choice. Interchangeable replicas of the same model belong in one gateway's fallback chain. A different model with a different envelope (shorter context, no tool calling, another quantization) belongs behind a capability-aware router like the one in Chapter 7 (this chapter's `check_fit` and `choose_target` are a minimal version) that chooses a target per request and then calls that target's gateway; putting it in a fallback chain would silently change capability in the middle of an incident.
 
@@ -97,6 +109,22 @@ Three consequences follow. Admission control must count KV memory, not requests:
 
 The formula is a floor. Real footprints add block metadata, fragmentation, draft-model caches, and per-request workspaces. Treat the estimate as the plausibility check and the load test as the truth.
 
+### When the architecture changes the arithmetic
+
+The formula above, and `kv_cache.py`, describe a dense model with conventional (grouped-query) attention in every layer. Many current open-weight models depart from that in ways that change both the fixed and the variable cost. Read the model's configuration file before you plan, because the model card's headline parameter count can mislead in either direction.
+
+**Mixture-of-experts (MoE).** An MoE model replaces each feed-forward block with many "expert" blocks and a small router that sends each token to a few of them. The model card then quotes two numbers: total parameters (every expert) and active parameters (what one token passes through). They govern different resources. **Memory scales with total parameters**: every expert must be resident, because the next token may need any of them. **Compute per token, and decode bandwidth at small batch, scale with active parameters**: a single sequence reads only the experts its token was routed to. Take an illustrative MoE with 48B total and 8B active parameters. At BF16 its weights need about 96 GB and do not fit on the illustrative 80 GiB device, where the dense 8B model left 55 GiB for cache; at FP8 they take about 48 GB and leave much less cache than the dense model. Yet its single-stream TPOT resembles the dense 8B model's, since each step reads roughly 8B parameters' worth of weights.
+
+Two consequences follow. First, the "batching is nearly free" argument weakens: as the batch grows, its tokens route to different experts, so a decode step reads more of the total weight set, and per-step time rises toward that of a dense model of the total size until the batch is large enough to amortize it. Second, the KV cache is untouched by the experts: it depends on the attention layers alone, so size it with the attention shape from the config, not the parameter count. MoE models suit fleets with plenty of memory and steady, high concurrency, and spread naturally across devices with expert parallelism (see the parallelism paragraph below). On a single small device they are often the wrong choice: you pay memory for the total and get the quality of something between the two numbers.
+
+**Attention variants change the KV formula.** Three are common:
+
+- **Multi-query and grouped-query attention** shrink `kv_heads`, which the formula already captures.
+- **Sliding-window (local) attention** layers attend only to the last W tokens, so they keep at most W tokens of cache regardless of context length. Models that interleave local and global layers pay the full formula only for the global layers; for long contexts the real footprint can be a fraction of the naive estimate, provided the engine implements the window and does not allocate full-length cache for every layer.
+- **Latent attention** (multi-head latent attention, used for example in the DeepSeek-V2 and V3 model families) caches one compressed latent vector per token per layer instead of separate keys and values for every head. Per token the cost becomes roughly `layers × latent_dim × bytes` (plus a small positional component), which removes the factor 2 and the `kv_heads × head_dim` product and is several times smaller than a grouped-query cache of similar model size.
+
+Hybrid models that mix attention with linear-attention or state-space layers go further: those layers keep a fixed-size state per sequence that does not grow with context at all. In every case the practical rule is the same. Engines report the KV capacity they actually allocated at startup, as a number of tokens or blocks that fit; that number, divided by your p95 sequence length, is the concurrency ceiling to check your arithmetic against. `kv_cache.py` deliberately models only conventional attention; exercise K7 asks you to extend the reasoning.
+
 ### Static versus continuous batching
 
 Early serving systems used **static batching**: wait until N requests have arrived, run them together, return when the longest finishes. Because output lengths vary, most of the batch sits idle waiting for the one request still generating, and a request arriving a millisecond after the batch started waits for the whole batch. Utilization is poor and TTFT is erratic.
@@ -137,6 +165,16 @@ The speedup is governed by the **acceptance rate**. If the draft guesses four to
 
 Drafts come in several forms. A separate small model from the same family is the classic choice and needs its own weights and cache. **Medusa** adds prediction heads to the target so it proposes several tokens from one hidden state, at the cost of training those heads. **EAGLE** predicts at the level of hidden features with a small auxiliary network and tends to reach higher acceptance than a tiny standalone draft. **N-gram speculation** proposes continuations from token patterns already in the prompt or output, costs almost nothing, and suits tasks that copy from context, such as extraction and code editing. All are engine configuration choices; benchmark TTFT and TPOT at realistic concurrency, because speculation helps most at low batch sizes and its benefit shrinks when the GPU is already busy.
 
+### Serving many fine-tunes on one base: multi-adapter serving
+
+Chapter 33 recommends parameter-efficient fine-tuning, usually LoRA: the base weights stay frozen and the fine-tune is a small set of low-rank matrices, the adapter. That shape has a serving consequence. Instead of one replica per fine-tuned model, an engine can load the base weights once and keep many adapters resident, applying each request's adapter inside the same batch with kernels designed for mixed-adapter batches. The client selects an adapter by model name, so to the application each adapter looks like a separate model on the same endpoint.
+
+**When it pays.** Many fine-tunes with modest traffic each: one per tenant, per task family, or per language. Ten adapters on one base cost roughly one replica plus the adapters' memory (illustratively tens to hundreds of megabytes each, depending on rank and which layers they touch), where ten merged models would cost ten replicas, nine of them mostly idle. It also makes adapter rollout cheap: loading a new adapter version is a configuration change, not a new deployment.
+
+**When not.** A single high-volume fine-tune is better merged into the base weights and served as a plain model, because applying an adapter at runtime adds a little work to every step. Full fine-tunes cannot share a base at all. And adapters for different base models, or the same base at different quantizations, need different pools.
+
+**What to watch.** Engines cap the number of adapters resident on the GPU and the maximum adapter rank; a request for a cold adapter waits for it to load, which shows up as a TTFT outlier. The prefix cache is per adapter, because the same text produces different keys and values under different adapters, so ten adapters split the cache hit rate ten ways. Each adapter is its own model release: evaluate it on its own slice (Chapter 33), record the adapter name and version in every trace, and add a contract test that an unknown adapter name is rejected rather than silently served by the base model.
+
 ### Parallelism in one paragraph
 
 When a model does not fit on one GPU, or one GPU cannot deliver the required throughput, the engine spreads work across devices. **Tensor parallelism** splits each matrix operation across GPUs and synchronizes after every layer, so it needs a fast interconnect and is used within one machine. **Pipeline parallelism** assigns layers to stages on different devices and passes activations along; it tolerates slower links but introduces idle bubbles. **Data parallelism** runs independent replicas of the whole model and is the right answer whenever the model fits on one device group, because replicas add capacity with no communication. **Expert parallelism** places the experts of a mixture-of-experts model on different devices and routes tokens to them, which requires all-to-all communication. The practical guidance for an application team is simple: fit the model on the smallest device group that holds weights plus a useful KV budget, scale with data-parallel replicas behind a load balancer, and treat multi-node tensor parallelism as a specialist's problem.
@@ -151,6 +189,7 @@ The table lists the common choices as options, not recommendations. The cells re
 | SGLang | Data-center GPUs | Continuous, paged KV with radix-tree prefix sharing | Core design goal; strong for shared prefixes and multi-call agent programs | Constrained decoding built in, plus a frontend language for multi-step programs | Common weight-only and FP8 formats | OpenAI-compatible server; emphasizes scheduling and cache reuse for agentic and structured workloads; speculative decoding supported |
 | TensorRT-LLM | One GPU vendor's hardware only | Continuous, in-flight batching | Supported | Supported via guided decoding integrations | Vendor-optimized FP8, INT8, INT4 kernels | Often the highest peak performance on its hardware in published benchmarks; requires a per-model build step and tighter coupling to the vendor stack; typically fronted by a separate inference server |
 | llama.cpp (GGUF) | CPUs, consumer GPUs, laptops, edge; many backends | Limited parallel slots; not a high-concurrency design | Prompt cache per slot | Grammar-constrained sampling | GGUF with many low-bit schemes; GGUF is a file format, llama.cpp is the runtime | Excellent for local, offline, and single-user deployments; OpenAI-compatible server included; not intended for server-scale concurrency |
+| Managed open-weight endpoints | Provider's | Provider-managed | Varies by provider | Varies; often JSON-schema mode | Provider's choice; ask which is served | Open weights and often your own adapters without running GPUs; per-token or dedicated-capacity billing; engine and quantization upgrades on the provider's schedule |
 | Hosted endpoints | Provider's | Provider-managed | Prompt caching with discounts, provider-specific rules | Native structured outputs on most providers | Not exposed | No operations; regional options; capacity and latency are observed rather than controlled; model behavior can change on provider schedule |
 
 Benchmark the shortlist on your exact model, your GPU generation, your prompt and output distributions, and your structured-output needs. A generic leaderboard measures none of those.
@@ -249,7 +288,7 @@ sequenceDiagram
 
 ## Implementation
 
-Five modules, all under `book/projects/examples/ch34/`. The calculators and the load generator depend only on `httpx` and `pydantic`. `local_target.py` is the bridge to `aie_core`: it imports the library lazily, so the capacity helpers stay importable on their own, and its tests drive a real `OpenAICompatibleClient` and `ModelGateway` against the in-process fake server.
+Five modules, all under `book/projects/examples/ch34/`. The listings below are excerpts that carry the ideas; every file is complete on disk, including each module's `__main__` demo and the full test file. The calculators and the load generator depend only on `httpx` and `pydantic`. `local_target.py` is the bridge to `aie_core`: it imports the library lazily, so the capacity helpers stay importable on their own, and its tests drive a real `OpenAICompatibleClient` and `ModelGateway` against the in-process fake server.
 
 ```
 book/projects/examples/ch34/
@@ -279,45 +318,14 @@ python loadtest.py --base-url http://localhost:8000/v1 --model my-model \
 ### KV-cache sizing
 
 ```python
-# path: book/projects/examples/ch34/kv_cache.py
-"""KV-cache sizing and concurrency estimation for self-hosted decoder models.
-
-Every number this module produces is an *estimate before allocator overhead*: real engines add
-block metadata, fragmentation, CUDA graphs, activation workspaces, and communication buffers.
-Use these functions to decide whether a plan is plausible, then confirm with a load test
-(see ``loadtest.py``). Pure arithmetic, no I/O.
-"""
-from __future__ import annotations
-
-import math
-
-from pydantic import BaseModel, Field, PositiveInt
-
-KiB = 1024
-MiB = 1024**2
-GiB = 1024**3
-
-
+# path: book/projects/examples/ch34/kv_cache.py (excerpt; full file on disk)
 class ModelShape(BaseModel):
-    """The handful of architecture facts that drive serving memory.
-
-    Read them from the model's config file (``num_hidden_layers``, ``num_key_value_heads``,
-    ``hidden_size // num_attention_heads``). ``kv_heads`` is the number of key/value heads,
-    which with grouped-query attention is smaller than the number of query heads.
-    """
-
+    # ... docstring: read these from the model's config file
     name: str = "illustrative-8b"
     layers: PositiveInt
     kv_heads: PositiveInt
     head_dim: PositiveInt
     params_billion: float = Field(gt=0, description="total parameters, in billions")
-
-
-class Precision(BaseModel):
-    """Bytes per element for weights and for the KV cache. They may differ."""
-
-    weight_bytes: float = Field(default=2.0, gt=0, description="2 = BF16/FP16, 1 = INT8/FP8, 0.5 = INT4")
-    kv_bytes: float = Field(default=2.0, gt=0, description="2 = BF16 cache, 1 = FP8/INT8 cache")
 
 
 def kv_bytes_per_token(shape: ModelShape, kv_bytes: float = 2.0) -> int:
@@ -340,22 +348,7 @@ def weight_bytes(shape: ModelShape, weight_bytes_per_param: float = 2.0) -> int:
     return int(shape.params_billion * 1e9 * weight_bytes_per_param)
 
 
-class ConcurrencyEstimate(BaseModel):
-    gpu_memory_bytes: int
-    weight_bytes: int
-    headroom_bytes: int
-    runtime_overhead_bytes: int
-    usable_kv_bytes: int
-    per_sequence_bytes: int
-    max_sequences: int
-
-    def summary(self) -> str:
-        return (
-            f"GPU {self.gpu_memory_bytes / GiB:.0f} GiB, weights {self.weight_bytes / GiB:.1f} GiB, "
-            f"headroom {self.headroom_bytes / GiB:.1f} GiB, runtime {self.runtime_overhead_bytes / GiB:.1f} GiB "
-            f"-> {self.usable_kv_bytes / GiB:.1f} GiB for KV; {self.per_sequence_bytes / GiB:.2f} GiB per "
-            f"sequence -> about {self.max_sequences} concurrent sequences"
-        )
+# ... ConcurrencyEstimate (fields and summary) on disk
 
 
 def max_concurrent_sequences(
@@ -398,43 +391,9 @@ def tokens_that_fit(shape: ModelShape, kv_budget_bytes: int, kv_bytes: float = 2
     """Inverse question: given a KV budget, how many total tokens can be resident at once?"""
     per_token = kv_bytes_per_token(shape, kv_bytes)
     return 0 if kv_budget_bytes <= 0 else kv_budget_bytes // per_token
-
-
-def format_bytes(n: int | float) -> str:
-    """Human-readable binary units; the text of the chapter uses the same units."""
-    if n >= GiB:
-        return f"{n / GiB:.2f} GiB"
-    if n >= MiB:
-        return f"{n / MiB:.1f} MiB"
-    if n >= KiB:
-        return f"{n / KiB:.1f} KiB"
-    return f"{int(n)} B"
-
-
-def gqa_savings_factor(query_heads: int, kv_heads: int) -> float:
-    """KV memory ratio of grouped-query attention vs. full multi-head attention."""
-    if kv_heads <= 0 or query_heads <= 0 or kv_heads > query_heads:
-        raise ValueError("need 0 < kv_heads <= query_heads")
-    return kv_heads / query_heads
-
-
-if __name__ == "__main__":
-    # Illustrative shape: 32 layers, 8 KV heads, head dimension 128, 8B parameters.
-    shape = ModelShape(layers=32, kv_heads=8, head_dim=128, params_billion=8)
-    print(f"{shape.name}: {format_bytes(kv_bytes_per_token(shape))} per token")
-    for ctx in (8_192, 32_768):
-        print(f"  {ctx:>6} tokens -> {format_bytes(kv_bytes_per_sequence(shape, ctx))} per sequence")
-    for ctx in (8_192, 32_768):
-        est = max_concurrent_sequences(shape, ctx, gpu_memory_bytes=80 * GiB)
-        print(f"  ctx {ctx}: {est.summary()}")
-    est_fp8 = max_concurrent_sequences(
-        shape, 32_768, gpu_memory_bytes=80 * GiB, precision=Precision(weight_bytes=1.0, kv_bytes=1.0)
-    )
-    print(f"  ctx 32768 with INT8 weights + FP8 cache: {est_fp8.summary()}")
-    print(f"  math.ceil check: {math.ceil(est_fp8.per_sequence_bytes / GiB)} GiB per sequence rounded up")
 ```
 
-Running it prints the numbers used earlier in the chapter (illustrative hardware):
+Running `python kv_cache.py` (its `__main__` block is on disk) prints the numbers used earlier in the chapter (illustrative hardware):
 
 ```
 illustrative-8b: 128.0 KiB per token
@@ -448,23 +407,7 @@ illustrative-8b: 128.0 KiB per token
 ### Capacity helpers
 
 ```python
-# path: book/projects/examples/ch34/capacity.py
-"""Capacity-planning helpers: Little's Law, the queueing knee, headroom, replica estimates.
-
-These are sanity checks, not a substitute for a load test. Little's Law is exact for any stable
-system; the M/M/1 curve is an idealization that shows *why* latency explodes near saturation.
-The replica estimate converts token rates into a first guess that the benchmark then corrects.
-"""
-from __future__ import annotations
-
-import math
-
-from pydantic import BaseModel, Field
-
-
-# ----------------------------------------------------------------------------- Little's Law
-
-
+# path: book/projects/examples/ch34/capacity.py (excerpt; full file on disk)
 def in_flight(arrival_rate_per_s: float, mean_time_in_system_s: float) -> float:
     """L = lambda * W. Average number of requests inside the system (queued or running)."""
     _non_negative(arrival_rate_per_s, "arrival_rate_per_s")
@@ -472,29 +415,7 @@ def in_flight(arrival_rate_per_s: float, mean_time_in_system_s: float) -> float:
     return arrival_rate_per_s * mean_time_in_system_s
 
 
-def arrival_rate(in_flight_requests: float, mean_time_in_system_s: float) -> float:
-    """lambda = L / W. The arrival rate a fixed concurrency slot count can sustain."""
-    if mean_time_in_system_s <= 0:
-        raise ValueError("mean_time_in_system_s must be positive")
-    return in_flight_requests / mean_time_in_system_s
-
-
-def mean_time_in_system(in_flight_requests: float, arrival_rate_per_s: float) -> float:
-    """W = L / lambda. What users wait on average when L requests share the system."""
-    if arrival_rate_per_s <= 0:
-        raise ValueError("arrival_rate_per_s must be positive")
-    return in_flight_requests / arrival_rate_per_s
-
-
-# ----------------------------------------------------------------------------- Queueing knee
-
-
-def utilization(arrival_rate_per_s: float, service_rate_per_s: float) -> float:
-    """rho = lambda / mu. Above 1.0 the queue grows without bound."""
-    if service_rate_per_s <= 0:
-        raise ValueError("service_rate_per_s must be positive")
-    _non_negative(arrival_rate_per_s, "arrival_rate_per_s")
-    return arrival_rate_per_s / service_rate_per_s
+# ... arrival_rate, mean_time_in_system, utilization on disk
 
 
 def mm1_response_time(service_time_s: float, rho: float) -> float:
@@ -509,58 +430,7 @@ def mm1_response_time(service_time_s: float, rho: float) -> float:
     return service_time_s / (1.0 - rho)
 
 
-def queueing_curve(service_time_s: float, utilizations: list[float]) -> list[tuple[float, float]]:
-    """(rho, mean response time) pairs; plot it once and you will remember the knee."""
-    return [(rho, mm1_response_time(service_time_s, rho)) for rho in utilizations]
-
-
-def headroom(capacity: float, demand: float) -> float:
-    """Fraction of capacity left unused at this demand. Negative means overload."""
-    if capacity <= 0:
-        raise ValueError("capacity must be positive")
-    return 1.0 - demand / capacity
-
-
-# ----------------------------------------------------------------------------- Replica estimate
-
-
-class Workload(BaseModel):
-    """Traffic shape. Use measured distributions; the mean alone hides the saturation story."""
-
-    peak_requests_per_s: float = Field(gt=0)
-    mean_input_tokens: float = Field(gt=0)
-    mean_output_tokens: float = Field(gt=0)
-    p95_input_tokens: float | None = None
-    p95_output_tokens: float | None = None
-    mean_e2e_s: float = Field(gt=0, description="measured or targeted mean end-to-end latency")
-
-
-class ReplicaProfile(BaseModel):
-    """What one replica sustains *while meeting the SLO*, taken from a load test, not a spec sheet."""
-
-    decode_tokens_per_s: float = Field(gt=0, description="aggregate output tokens/s at the operating point")
-    prefill_tokens_per_s: float = Field(gt=0, description="aggregate prompt tokens/s at the operating point")
-    kv_budget_bytes: int = Field(gt=0, description="KV memory available after weights and headroom")
-    kv_bytes_per_token: int = Field(gt=0)
-
-
-class ReplicaEstimate(BaseModel):
-    decode_bound_replicas: float
-    prefill_bound_replicas: float
-    kv_bound_replicas: float
-    target_utilization: float
-    failover_replicas: int
-    recommended_replicas: int
-    in_flight_requests: float
-    binding_constraint: str
-
-    def summary(self) -> str:
-        return (
-            f"in flight ~{self.in_flight_requests:.1f}; decode needs {self.decode_bound_replicas:.2f}, "
-            f"prefill {self.prefill_bound_replicas:.2f}, KV {self.kv_bound_replicas:.2f} replicas at "
-            f"{self.target_utilization:.0%} utilization; binding: {self.binding_constraint}; "
-            f"+{self.failover_replicas} failover -> {self.recommended_replicas} replicas"
-        )
+# ... headroom, Workload, ReplicaProfile, ReplicaEstimate on disk
 
 
 def replicas_needed(
@@ -569,19 +439,7 @@ def replicas_needed(
     target_utilization: float = 0.6,
     failover_replicas: int = 1,
 ) -> ReplicaEstimate:
-    """First-cut replica count from three independent constraints.
-
-    Decode: peak output tokens/s against what a replica decodes under SLO.
-    Prefill: peak prompt tokens/s against prefill throughput.
-    KV: average in-flight requests (Little's Law) times per-request cache, against KV budget.
-    Each is divided by ``target_utilization`` because running near 100 percent puts you past the
-    queueing knee. The largest wins; failover replicas are added on top.
-    """
-    if not 0 < target_utilization <= 1:
-        raise ValueError("target_utilization must be in (0, 1]")
-    if failover_replicas < 0:
-        raise ValueError("failover_replicas must be non-negative")
-
+    # ... docstring and argument validation
     decode_demand = workload.peak_requests_per_s * workload.mean_output_tokens
     prefill_demand = workload.peak_requests_per_s * workload.mean_input_tokens
     decode_r = decode_demand / (profile.decode_tokens_per_s * target_utilization)
@@ -608,144 +466,12 @@ def replicas_needed(
         in_flight_requests=l_in_flight,
         binding_constraint=binding,
     )
-
-
-def _non_negative(value: float, name: str) -> None:
-    if value < 0:
-        raise ValueError(f"{name} must be non-negative")
-
-
-if __name__ == "__main__":
-    # Illustrative Northwind Assist RAG traffic and a replica profile from a load test.
-    wl = Workload(
-        peak_requests_per_s=6, mean_input_tokens=3000, mean_output_tokens=300,
-        p95_input_tokens=6000, p95_output_tokens=600, mean_e2e_s=4.0,
-    )
-    prof = ReplicaProfile(
-        decode_tokens_per_s=1500, prefill_tokens_per_s=20000,
-        kv_budget_bytes=55 * 1024**3, kv_bytes_per_token=131072,
-    )
-    print(f"Little's Law: {in_flight(wl.peak_requests_per_s, wl.mean_e2e_s):.0f} requests in flight at peak")
-    print(replicas_needed(wl, prof).summary())
-    print("M/M/1 knee (service 2 s):")
-    for rho, w in queueing_curve(2.0, [0.5, 0.7, 0.8, 0.9, 0.95, 0.99]):
-        print(f"  rho={rho:.2f} -> mean response {w:6.1f} s")
 ```
 
 ### The load generator
 
 ```python
-# path: book/projects/examples/ch34/loadtest.py
-"""Async load generator for any OpenAI-compatible chat endpoint.
-
-Closed-loop design: at concurrency N, N workers each keep exactly one request open and start
-the next one when the previous finishes. Sweeping N and watching p95 TTFT and p95 end-to-end
-latency is how you locate the operating point. Streaming is mandatory because TTFT and TPOT
-are only observable from the first and subsequent content deltas.
-
-Run against a real server:
-
-    python loadtest.py --base-url http://localhost:8000/v1 --model my-model \
-        --levels 1,2,4,8,16 --requests 24 --prompt-file prompts.txt
-
-Tests inject an ``httpx.AsyncBaseTransport`` (see ``fake_server.py``) so no network is used.
-"""
-from __future__ import annotations
-
-import argparse
-import asyncio
-import json
-import math
-import random
-import sys
-import time
-from pathlib import Path
-from typing import Any
-
-import httpx
-from pydantic import BaseModel, Field
-
-
-class LoadTestConfig(BaseModel):
-    base_url: str = "http://localhost:8000/v1"
-    model: str = "local-model"
-    api_key: str = "not-needed"
-    prompts: list[str] = Field(min_length=1, description="realistic prompt distribution, sampled uniformly")
-    max_tokens_choices: list[int] = Field(default=[64, 128, 256], min_length=1)
-    concurrency_levels: list[int] = Field(default=[1, 2, 4, 8], min_length=1)
-    requests_per_level: int = Field(default=16, ge=1)
-    warmup_requests: int = Field(default=2, ge=0)
-    timeout_s: float = Field(default=120.0, gt=0)
-    temperature: float = 0.0
-    ttft_slo_s: float = Field(default=2.0, gt=0)
-    e2e_slo_s: float = Field(default=8.0, gt=0)
-    seed: int = 7
-
-
-class RequestResult(BaseModel):
-    concurrency: int
-    ok: bool
-    error: str | None = None
-    status_code: int | None = None
-    prompt_chars: int = 0
-    max_tokens: int = 0
-    output_tokens: int = 0
-    ttft_s: float | None = None
-    tpot_s: float | None = None  # mean inter-token latency after the first token
-    e2e_s: float = 0.0
-
-    def meets_slo(self, cfg: LoadTestConfig) -> bool:
-        return self.ok and self.ttft_s is not None and self.ttft_s <= cfg.ttft_slo_s and self.e2e_s <= cfg.e2e_slo_s
-
-
-class LevelSummary(BaseModel):
-    concurrency: int
-    requests: int
-    errors: int
-    wall_s: float
-    ttft_p50: float
-    ttft_p95: float
-    ttft_p99: float
-    tpot_p50: float
-    tpot_p95: float
-    e2e_p50: float
-    e2e_p95: float
-    e2e_p99: float
-    requests_per_s: float
-    output_tokens_per_s: float
-    slo_pass_fraction: float
-    goodput_requests_per_s: float  # completed requests per second that met the SLO
-
-
-def percentile(values: list[float], p: float) -> float:
-    """Nearest-rank percentile; deterministic and good enough for load-test reporting."""
-    if not values:
-        return math.nan
-    if not 0 <= p <= 100:
-        raise ValueError("p must be in [0, 100]")
-    ordered = sorted(values)
-    rank = max(1, math.ceil(p / 100 * len(ordered)))
-    return ordered[rank - 1]
-
-
-def parse_sse_line(line: str) -> dict[str, Any] | None:
-    """Return the JSON payload of a ``data:`` line, ``None`` for keep-alives and ``[DONE]``."""
-    if not line.startswith("data:"):
-        return None
-    payload = line[len("data:"):].strip()
-    if not payload or payload == "[DONE]":
-        return None
-    return json.loads(payload)
-
-
-def _delta_text(chunk: dict[str, Any]) -> str:
-    choices = chunk.get("choices") or []
-    if not choices:
-        return ""
-    delta = choices[0].get("delta") or {}
-    return delta.get("content") or ""
-
-
+# path: book/projects/examples/ch34/loadtest.py (excerpt; full file on disk)
 async def run_one(
     client: httpx.AsyncClient, cfg: LoadTestConfig, prompt: str, max_tokens: int, concurrency: int
 ) -> RequestResult:
@@ -804,27 +530,7 @@ async def run_one(
     result.ok = True
     return result
 
-
-async def run_level(
-    client: httpx.AsyncClient, cfg: LoadTestConfig, concurrency: int, n_requests: int, rng: random.Random
-) -> list[RequestResult]:
-    """Closed loop: ``concurrency`` workers drain a shared queue of ``n_requests`` jobs."""
-    queue: asyncio.Queue[tuple[str, int]] = asyncio.Queue()
-    for _ in range(n_requests):
-        queue.put_nowait((rng.choice(cfg.prompts), rng.choice(cfg.max_tokens_choices)))
-    results: list[RequestResult] = []
-
-    async def worker() -> None:
-        while True:
-            try:
-                prompt, max_tokens = queue.get_nowait()
-            except asyncio.QueueEmpty:
-                return
-            results.append(await run_one(client, cfg, prompt, max_tokens, concurrency))
-
-    await asyncio.gather(*(worker() for _ in range(min(concurrency, n_requests))))
-    return results
-
+# ... run_level (closed-loop workers draining a shared queue) on disk
 
 def summarize(results: list[RequestResult], wall_s: float, cfg: LoadTestConfig) -> LevelSummary:
     ok = [r for r in results if r.ok]
@@ -834,38 +540,14 @@ def summarize(results: list[RequestResult], wall_s: float, cfg: LoadTestConfig) 
     passed = sum(1 for r in results if r.meets_slo(cfg))
     wall = max(wall_s, 1e-9)
     return LevelSummary(
-        concurrency=results[0].concurrency if results else 0,
-        requests=len(results),
-        errors=len(results) - len(ok),
-        wall_s=wall_s,
-        ttft_p50=percentile(ttft, 50), ttft_p95=percentile(ttft, 95), ttft_p99=percentile(ttft, 99),
-        tpot_p50=percentile(tpot, 50), tpot_p95=percentile(tpot, 95),
-        e2e_p50=percentile(e2e, 50), e2e_p95=percentile(e2e, 95), e2e_p99=percentile(e2e, 99),
+        # ... nearest-rank p50/p95/p99 for TTFT, TPOT, and E2E
         requests_per_s=len(ok) / wall,
         output_tokens_per_s=sum(r.output_tokens for r in ok) / wall,
         slo_pass_fraction=passed / len(results) if results else 0.0,
         goodput_requests_per_s=passed / wall,
     )
 
-
-async def sweep(cfg: LoadTestConfig, transport: httpx.AsyncBaseTransport | None = None) -> list[LevelSummary]:
-    """Warm up, then run every concurrency level and summarize each one."""
-    rng = random.Random(cfg.seed)
-    headers = {"Authorization": f"Bearer {cfg.api_key}"}
-    summaries: list[LevelSummary] = []
-    # The default pool caps connections at 100; above that the client itself would queue and the
-    # wait would be reported as server TTFT.
-    width = max(cfg.concurrency_levels)
-    limits = httpx.Limits(max_connections=width, max_keepalive_connections=width)
-    async with httpx.AsyncClient(base_url=cfg.base_url, headers=headers, transport=transport, limits=limits) as client:
-        if cfg.warmup_requests:
-            await run_level(client, cfg, concurrency=1, n_requests=cfg.warmup_requests, rng=rng)
-        for level in cfg.concurrency_levels:
-            t0 = time.perf_counter()
-            results = await run_level(client, cfg, level, cfg.requests_per_level, rng)
-            summaries.append(summarize(results, time.perf_counter() - t0, cfg))
-    return summaries
-
+# ... sweep (warm-up, pooled client, one run_level per concurrency level) on disk
 
 def find_operating_point(summaries: list[LevelSummary], cfg: LoadTestConfig) -> LevelSummary | None:
     """Highest concurrency whose p95 TTFT and p95 E2E meet the SLO with zero errors."""
@@ -874,94 +556,12 @@ def find_operating_point(summaries: list[LevelSummary], cfg: LoadTestConfig) -> 
         if s.errors == 0 and s.ttft_p95 <= cfg.ttft_slo_s and s.e2e_p95 <= cfg.e2e_slo_s
     ]
     return max(passing, key=lambda s: s.concurrency) if passing else None
-
-
-def format_report(summaries: list[LevelSummary]) -> str:
-    header = (
-        f"{'conc':>5} {'n':>4} {'err':>4} {'ttft p50':>9} {'ttft p95':>9} {'tpot p50':>9} "
-        f"{'e2e p50':>8} {'e2e p95':>8} {'req/s':>7} {'tok/s':>8} {'slo%':>6} {'goodput':>8}"
-    )
-    rows = [header, "-" * len(header)]
-    for s in summaries:
-        rows.append(
-            f"{s.concurrency:>5} {s.requests:>4} {s.errors:>4} {s.ttft_p50:>9.3f} {s.ttft_p95:>9.3f} "
-            f"{s.tpot_p50:>9.4f} {s.e2e_p50:>8.2f} {s.e2e_p95:>8.2f} {s.requests_per_s:>7.2f} "
-            f"{s.output_tokens_per_s:>8.1f} {s.slo_pass_fraction * 100:>6.1f} {s.goodput_requests_per_s:>8.2f}"
-        )
-    return "\n".join(rows)
-
-
-def _parse_args(argv: list[str]) -> LoadTestConfig:
-    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--base-url", default="http://localhost:8000/v1")
-    p.add_argument("--model", default="local-model")
-    p.add_argument("--api-key", default="not-needed")
-    p.add_argument("--levels", default="1,2,4,8", help="comma-separated concurrency levels")
-    p.add_argument("--requests", type=int, default=16, help="requests per level")
-    p.add_argument("--warmup", type=int, default=2)
-    p.add_argument("--max-tokens", default="64,128,256", help="comma-separated choices")
-    p.add_argument("--prompt-file", type=Path, help="one prompt per line; default is a built-in mix")
-    p.add_argument("--ttft-slo", type=float, default=2.0)
-    p.add_argument("--e2e-slo", type=float, default=8.0)
-    a = p.parse_args(argv)
-    prompts = (
-        [ln for ln in a.prompt_file.read_text().splitlines() if ln.strip()]
-        if a.prompt_file
-        else [
-            "Summarize the Northwind parental leave policy in three sentences.",
-            "List the steps of the IT runbook for a VPN outage. " * 20,
-            "Classify this ticket: 'My laptop will not charge since the update.'",
-        ]
-    )
-    return LoadTestConfig(
-        base_url=a.base_url, model=a.model, api_key=a.api_key, prompts=prompts,
-        max_tokens_choices=[int(x) for x in a.max_tokens.split(",")],
-        concurrency_levels=[int(x) for x in a.levels.split(",")],
-        requests_per_level=a.requests, warmup_requests=a.warmup,
-        ttft_slo_s=a.ttft_slo, e2e_slo_s=a.e2e_slo,
-    )
-
-
-def main(argv: list[str] | None = None) -> int:
-    cfg = _parse_args(sys.argv[1:] if argv is None else argv)
-    summaries = asyncio.run(sweep(cfg))
-    print(format_report(summaries))
-    op = find_operating_point(summaries, cfg)
-    if op is None:
-        print(f"\nNo level met the SLO (TTFT p95 <= {cfg.ttft_slo_s}s, E2E p95 <= {cfg.e2e_slo_s}s).")
-        return 1
-    print(f"\nOperating point: concurrency {op.concurrency}, goodput {op.goodput_requests_per_s:.2f} req/s")
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
 ```
 
 ### The offline fake server
 
 ```python
-# path: book/projects/examples/ch34/fake_server.py
-"""An in-process fake of an OpenAI-compatible streaming server for offline tests.
-
-It is deliberately simple but has the two properties that make load tests interesting:
-a per-token decode delay (so TTFT < E2E) and a real capacity limit: at most ``capacity``
-sequences decode at once and the rest wait for a slot, so queue time, and therefore TTFT,
-grows once more requests are active than the fake "batch" can hold, while throughput levels
-off at the knee instead of growing without bound. Plug it into an
-``httpx.AsyncClient`` through ``httpx.MockTransport``.
-"""
-from __future__ import annotations
-
-import asyncio
-import json
-import time
-from collections.abc import AsyncIterator
-from dataclasses import dataclass, field
-
-import httpx
-
-
+# path: book/projects/examples/ch34/fake_server.py (excerpt; full file on disk)
 @dataclass
 class FakeServer:
     capacity: int = 4  # concurrent sequences the fake "GPU" decodes without queueing
@@ -969,44 +569,12 @@ class FakeServer:
     tpot_s: float = 0.002  # per-token decode delay
     queue_slot_s: float = 0.02  # scheduler overhead added when a request had to wait for a slot
     fail_above: int | None = None  # return HTTP 429 when more than this many are active
-    active: int = 0
-    seen: list[dict] = field(default_factory=list)
-    peak_active: int = 0
-    peak_decoding: int = 0
-    decoding: int = 0
-    _slots: dict = field(default_factory=dict, repr=False)  # one semaphore per event loop
+    # ... counters and the per-event-loop slot semaphore on disk
 
-    def slots(self) -> asyncio.Semaphore:
-        loop = asyncio.get_running_loop()
-        if loop not in self._slots:
-            self._slots[loop] = asyncio.Semaphore(self.capacity)
-        return self._slots[loop]
-
-    def transport(self) -> httpx.MockTransport:
-        return httpx.MockTransport(self.handle)
-
-    async def handle(self, request: httpx.Request) -> httpx.Response:
-        body = json.loads(request.content or b"{}")
-        self.seen.append(body)
-        if request.url.path.endswith("/models"):
-            return httpx.Response(200, json={"data": [{"id": "fake-model"}]})
-        if not request.url.path.endswith("/chat/completions"):
-            return httpx.Response(404, json={"error": "unknown path"})
-        if self.fail_above is not None and self.active >= self.fail_above:
-            return httpx.Response(429, json={"error": {"message": "overloaded"}})
-        if not body.get("stream"):
-            return httpx.Response(400, json={"error": {"message": "this fake only streams"}})
-        return httpx.Response(
-            200,
-            headers={"content-type": "text/event-stream"},
-            stream=_SSEStream(self, int(body.get("max_tokens", 16)), body.get("model", "fake-model")),
-        )
-
+    # ... handle(): routes /chat/completions, returns 429 above fail_above, streams _SSEStream
 
 class _SSEStream(httpx.AsyncByteStream):
-    def __init__(self, server: FakeServer, n_tokens: int, model: str) -> None:
-        self.server, self.n_tokens, self.model = server, n_tokens, model
-
+    # ...
     async def __aiter__(self) -> AsyncIterator[bytes]:
         s = self.server
         s.active += 1
@@ -1031,50 +599,12 @@ class _SSEStream(httpx.AsyncByteStream):
                     s.decoding -= 1
         finally:
             s.active -= 1
-
-    async def aclose(self) -> None:  # pragma: no cover - nothing to release
-        return None
-
-
-def _chunk(model: str, created: int, text: str | None, finish: str | None = None, usage: dict | None = None) -> bytes:
-    delta = {"content": text} if text is not None else {}
-    payload = {
-        "id": "chatcmpl-fake", "object": "chat.completion.chunk", "created": created, "model": model,
-        "choices": [{"index": 0, "delta": delta, "finish_reason": finish}],
-    }
-    if usage is not None:
-        payload["usage"] = usage
-    return f"data: {json.dumps(payload)}\n\n".encode()
 ```
 
 ### Serving targets and the `aie_core` client
 
 ```python
-# path: book/projects/examples/ch34/local_target.py
-"""Describe a serving target (hosted or local) and check a request against its capabilities.
-
-The book's ``aie_core.OpenAICompatibleClient`` already speaks to any OpenAI-compatible server
-when given a ``base_url``, so there is nothing to reimplement for transport. What changes when
-you route between a hosted endpoint and a self-hosted engine is the *envelope*: whether tools
-and JSON-schema output are supported, how long the context is, and which model name the
-server expects. This module makes that envelope explicit so the router can refuse or downgrade
-a request before the server rejects it with a less helpful error.
-
-Two functions connect it to ``aie_core``: ``envelope_for`` derives the envelope from the same
-``CompletionRequest`` the application already built, and ``make_client`` returns an
-``OpenAICompatibleClient`` whose ``provider`` names the engine and target (so every span says
-which deployment answered) and whose ``supports_response_schema`` matches the target (so
-``complete_structured`` falls back to prompt-and-repair instead of sending an unsupported
-``response_format``). Capability-changing choices between targets belong to the router
-(Chapter 7); a ``ModelGateway`` fallback chain should hold only interchangeable replicas.
-"""
-from __future__ import annotations
-
-from typing import Any
-
-from pydantic import BaseModel, Field
-
-
+# path: book/projects/examples/ch34/local_target.py (excerpt; full file on disk)
 class ServingTarget(BaseModel):
     name: str
     base_url: str
@@ -1087,13 +617,7 @@ class ServingTarget(BaseModel):
     engine: str | None = None  # e.g. "vllm", "sglang", "llama.cpp", "hosted"; recorded in traces
 
 
-class RequestEnvelope(BaseModel):
-    """The capability-relevant facts about one request, independent of the message contents."""
-
-    input_tokens: int = Field(ge=0)
-    max_output_tokens: int = Field(ge=1)
-    needs_tools: bool = False
-    needs_response_schema: bool = False
+# ... RequestEnvelope: input_tokens, max_output_tokens, needs_tools, needs_response_schema
 
 
 def check_fit(target: ServingTarget, env: RequestEnvelope, reserve_tokens: int = 64) -> list[str]:
@@ -1112,28 +636,7 @@ def check_fit(target: ServingTarget, env: RequestEnvelope, reserve_tokens: int =
     return problems
 
 
-def choose_target(targets: list[ServingTarget], env: RequestEnvelope) -> ServingTarget | None:
-    """First target, in preference order, that fits the request. ``None`` if none does."""
-    for t in targets:
-        if not check_fit(t, env):
-            return t
-    return None
-
-
-def envelope_for(req: Any, *, needs_tools: bool | None = None, needs_response_schema: bool | None = None) -> RequestEnvelope:
-    """The envelope of an ``aie_core`` ``CompletionRequest``, counted with ``count_message_tokens``.
-
-    The count is the application's estimate, not the engine's; ``check_fit`` keeps a reserve for
-    the difference. Imported lazily so the module stays importable without ``aie_core``.
-    """
-    from aie_core.llm.tokens import count_message_tokens  # noqa: PLC0415
-
-    return RequestEnvelope(
-        input_tokens=count_message_tokens(req.messages, req.model),
-        max_output_tokens=req.max_tokens,
-        needs_tools=bool(req.tools) if needs_tools is None else needs_tools,
-        needs_response_schema=(req.response_schema is not None) if needs_response_schema is None else needs_response_schema,
-    )
+# ... choose_target and envelope_for on disk
 
 
 def make_client(
@@ -1143,14 +646,7 @@ def make_client(
     transport: Any = None,
     async_transport: Any = None,
 ) -> Any:
-    """Build the book's provider-neutral client for this target.
-
-    ``provider`` becomes ``"<engine>:<target name>"`` so gateway spans and cost reports separate
-    a self-hosted replica from the hosted endpoint. Transports are injectable for offline tests.
-    Imported lazily so this module stays importable in environments without ``aie_core``.
-    """
-    import os
-
+    # ... docstring; aie_core is imported lazily
     from aie_core.llm.providers import OpenAICompatibleClient  # noqa: PLC0415
 
     client = OpenAICompatibleClient(
@@ -1164,32 +660,15 @@ def make_client(
     )
     client.supports_response_schema = target.supports_response_schema
     return client
-
-
-# Illustrative targets. Capabilities and limits are engine- and version-specific: read them from
-# the server's /v1/models response and its documentation, and re-check after every upgrade.
-HOSTED = ServingTarget(
-    name="hosted", base_url="https://api.example-provider.com/v1", model="hosted-general",
-    max_context_tokens=128_000, engine="hosted",
-)
-LOCAL_VLLM = ServingTarget(
-    name="local-gpu", base_url="http://inference.internal:8000/v1", model="open-8b-instruct",
-    api_key_env="LOCAL_LLM_API_KEY", max_context_tokens=32_768, engine="vllm",
-)
-LOCAL_CPU = ServingTarget(
-    name="local-cpu", base_url="http://localhost:8080/v1", model="open-8b-instruct-q4",
-    api_key_env="LOCAL_LLM_API_KEY", max_context_tokens=8_192, supports_tools=False,
-    supports_response_schema=True, engine="llama.cpp",
-)
 ```
 
 ## Code walkthrough
 
 **`kv_cache.py`** is the formula with guard rails. `ModelShape` holds the four architecture facts that matter and tells you where to find them in a model's configuration file. `max_concurrent_sequences` subtracts weights, a headroom fraction, and a fixed runtime allowance from device memory and divides by the per-sequence cache. The headroom default of 10 percent is a planning posture, not a measurement: it is memory you refuse to count on. The `tensor_parallel` argument pools memory across a device group, which is the only parallelism arithmetic an application engineer needs; the runtime allowance is per device, so it scales with the group. `tokens_that_fit` answers the inverse question an admission controller asks: given the free cache right now, what is the longest request I can admit?
 
-**`capacity.py`** separates what is exact from what is a sketch. The three Little's Law functions are exact identities and are safe to use on any measured system. `mm1_response_time` is labeled an idealization in its docstring, and it exists to produce the knee curve, not to predict your server. `replicas_needed` computes three independent constraints and reports which one binds, because the remedy differs: a decode-bound fleet wants more replicas or quantized weights, a prefill-bound fleet wants shorter prompts or prefix caching, a KV-bound fleet wants shorter contexts, cache quantization, or a GQA model. The `ReplicaProfile` docstring insists that its token rates come from a load test at the operating point, not from a spec sheet, because a spec sheet's tokens per second is measured past the knee.
+**`capacity.py`** separates what is exact from what is a sketch. The three Little's Law functions (`in_flight` above, `arrival_rate` and `mean_time_in_system` on disk) are exact identities and are safe to use on any measured system. `mm1_response_time` is labeled an idealization in its docstring, and it exists to produce the knee curve, not to predict your server. `replicas_needed` computes three independent constraints and reports which one binds, because the remedy differs: a decode-bound fleet wants more replicas or quantized weights, a prefill-bound fleet wants shorter prompts or prefix caching, a KV-bound fleet wants shorter contexts, cache quantization, or a GQA model. The `ReplicaProfile` docstring (on disk) insists that its token rates come from a load test at the operating point, not from a spec sheet, because a spec sheet's tokens per second is measured past the knee.
 
-**`loadtest.py`** does the one thing most ad hoc benchmarks skip: it streams. `run_one` requests `stream_options.include_usage` so the server's final chunk reports the real completion token count; content deltas are counted as a fallback because servers may coalesce tokens into one chunk. TTFT is measured to the first non-empty content delta, not the first response byte, because engines send role-only or empty deltas first. TPOT is the span between first and last content token divided by tokens minus one. Errors become result rows with `ok=False` rather than exceptions, so an overloaded server shows up as an error rate instead of aborting the sweep; cancellation is not caught, so Ctrl-C or an outer deadline stops it. The client's connection pool is sized to the highest concurrency level, because a default pool of 100 would queue requests on the client and report the wait as server TTFT. `summarize` computes nearest-rank percentiles and goodput as requests that met both SLOs divided by wall time; `find_operating_point` applies the protocol's rule: highest concurrency with zero errors and both p95s under the SLO.
+**`loadtest.py`** does the one thing most ad hoc benchmarks skip: it streams. `run_one` requests `stream_options.include_usage` so the server's final chunk reports the real completion token count; content deltas are counted as a fallback because servers may coalesce tokens into one chunk. TTFT is measured to the first non-empty content delta, not the first response byte, because engines send role-only or empty deltas first. TPOT is the span between first and last content token divided by tokens minus one. Errors become result rows with `ok=False` rather than exceptions, so an overloaded server shows up as an error rate instead of aborting the sweep; cancellation is not caught, so Ctrl-C or an outer deadline stops it. `run_level` (on disk) runs a closed loop: `concurrency` workers drain a shared queue of jobs, each starting its next request when the previous one finishes. `sweep` (on disk) warms up and then runs one level after another; the client's connection pool is sized to the highest concurrency level, because a default pool of 100 would queue requests on the client and report the wait as server TTFT. `summarize` computes nearest-rank percentiles and goodput as requests that met both SLOs divided by wall time; `find_operating_point` applies the protocol's rule: highest concurrency with zero errors and both p95s under the SLO.
 
 Against the fake server configured with a capacity of 8 (prefill 0.02 s, 5 ms per token, 32 or 64 output tokens, 32 requests per level, and SLOs scaled to the fake: 0.15 s TTFT and 1 s end to end), the sweep produces this table. The timings are fake and vary a little between runs; the shape is what you will see against real hardware, and `test_walkthrough_shape_has_a_knee_at_capacity` checks it:
 
@@ -1207,7 +686,7 @@ Read it the way you will read a real one. TPOT is flat at every level: the GPU d
 
 **`fake_server.py`** implements the server-sent-events framing of an OpenAI-compatible endpoint with a per-token sleep so TTFT and E2E differ, a real capacity limit (at most `capacity` sequences decode at once; the rest wait for a slot) so TTFT grows and throughput levels off when more requests are active than the fake can batch, and a `fail_above` knob that returns HTTP 429 to exercise the error path. As an `httpx.MockTransport`, it lets the generator run its real HTTP and SSE parsing code with no sockets.
 
-**`local_target.py`** is the routing side of self-hosting. `ServingTarget` records what an endpoint can do; `check_fit` returns every problem rather than the first so the trace (Chapter 31) explains a reroute; `choose_target` walks a preference list. `envelope_for` computes the envelope from the `CompletionRequest` the application already built, using `aie_core`'s token counter, so routing needs no second representation of the request. `make_client` builds the book's `OpenAICompatibleClient` with the target's `base_url` and two settings that matter in production: `provider` becomes `engine:target`, so every gateway span and cost report says which deployment answered, and `supports_response_schema` mirrors the target, so `complete_structured` switches to prompt-and-repair on an engine without schema mode instead of sending a `response_format` it will reject. That is the entire integration: the same `CompletionRequest`, the same `ModelGateway`, the same tests. One test streams through a gateway into the fake server and checks the span's provider; another runs `complete_structured` against a mocked schema-less target and checks that no `response_format` was sent.
+**`local_target.py`** is the routing side of self-hosting. `ServingTarget` records what an endpoint can do; `check_fit` returns every problem rather than the first so the trace (Chapter 31) explains a reroute; `choose_target` (on disk) walks a preference list. `envelope_for` (on disk) computes the envelope from the `CompletionRequest` the application already built, using `aie_core`'s token counter, so routing needs no second representation of the request. `make_client` builds the book's `OpenAICompatibleClient` with the target's `base_url` and two settings that matter in production: `provider` becomes `engine:target`, so every gateway span and cost report says which deployment answered, and `supports_response_schema` mirrors the target, so `complete_structured` switches to prompt-and-repair on an engine without schema mode instead of sending a `response_format` it will reject. That is the entire integration: the same `CompletionRequest`, the same `ModelGateway`, the same tests. One test streams through a gateway into the fake server and checks the span's provider; another runs `complete_structured` against a mocked schema-less target and checks that no `response_format` was sent.
 
 ### What changes when you route between hosted and local
 
@@ -1233,7 +712,7 @@ The transport does not change; the envelope does. When a request that ran on a h
 
 **Cancellation.** When a client disconnects or an agent loop abandons a step, the engine must notice and free that sequence's KV blocks. The zombie-generation failure mode below gives the test; some gateway configurations keep the upstream connection open after the client has gone, and the GPU keeps generating for nobody. Chapter 29 covers timeouts and cancellation plumbing at the gateway.
 
-**Model version in traces.** Every span for a self-hosted call should carry the model name, weights or quantization identifier, engine name and version, and the replica. Outputs change when any of these change, and without the fields in the trace you will debug a prompt for a day before discovering the operator upgraded the engine.
+**Model version in traces.** Every span for a self-hosted call should carry the model name, weights or quantization identifier, adapter name and version when one is used, engine name and version, and the replica. Outputs change when any of these change, and without the fields in the trace you will debug a prompt for a day before discovering the operator upgraded the engine.
 
 **Quality suite after every engine or quantization change.** Treat a change of quantization, engine version, kernel configuration, speculative decoding setting, or even maximum batch size as a model release. Rerun the golden-set evaluation and the slice reports from Chapters 24 and 25 before promoting it. Some settings change sampling numerics enough to alter outputs at temperature zero.
 
@@ -1249,11 +728,7 @@ The transport does not change; the envelope does. When a request that ran on a h
 
 **Treating "the model fits" as "the users fit."** Weight memory is the fixed cost; the KV cache budget is what determines concurrency, and it depends on your context lengths.
 
-**Leaving the engine's maximum model length at the model's trained maximum.** A 128k setting admits rare requests whose cache crowds out dozens of ordinary ones, and worst-case planning has to assume them.
-
-**Choosing quantization by perplexity.** Run the task-level suite, sliced by structured output, tool calling, long context, and language.
-
-**Varying the prompt's beginning.** A timestamp or request ID early in the system prompt defeats prefix caching for every request.
+**Sizing a mixture-of-experts model by its active parameters.** The active count predicts single-stream speed; the total count decides whether the weights fit and how much memory is left for cache.
 
 **Self-hosting a spiky workload.** A GPU busy two hours a day costs more per useful token than the API; do the cost arithmetic before buying hardware.
 
@@ -1283,13 +758,13 @@ Each failure below names what breaks, how it looks in telemetry, and how to test
 
 Every lever in this chapter trades one resource for another, and the right setting is workload-specific.
 
-- **Context length versus concurrency.** Longer maximum contexts let single requests claim cache that many users could have shared. Set the engine's limit to your p99 plus margin, not to the model's maximum.
+- **Context length versus concurrency.** Longer maximum contexts let single requests claim cache that many users could have shared: a 128k setting admits rare requests whose cache crowds out dozens of ordinary ones, and worst-case planning has to assume them. Set the engine's limit to your p99 plus margin, not to the model's trained maximum, and route the rare long request to a pool configured for it.
 - **Batch size versus TPOT.** Larger batches raise throughput almost linearly during decode and raise per-token latency slightly; past the cache budget they raise TTFT sharply. Tune the maximum batched tokens against the SLO.
 - **Quantization versus quality.** Fewer bits buy concurrency and bandwidth; the price is task-specific and only visible in a sliced evaluation.
 - **Speculation versus utilization.** Speculative decoding helps most when the GPU is underutilized (low concurrency, interactive use) and least when it is already full.
 - **Prefix caching versus memory.** A warm prefix cache reduces prefill work but occupies blocks that active sequences need; under heavy load it may be evicted anyway.
 - **Headroom versus cost.** Every percentage point of headroom is idle hardware; every point removed moves you toward the knee. Sixty to seventy percent of measured goodput capacity is a common operating posture for interactive services, and batch pools can run hotter.
-- **Hosted versus self-hosted.** Control, residency, and cost at high utilization against operational burden, capacity risk, and slower access to new models.
+- **Hosted versus managed open-weight versus self-hosted.** Each step toward self-hosting buys control, residency, and lower cost at high utilization, and costs operational burden, capacity risk, and slower access to new models. The managed open-weight middle buys model choice without the GPUs.
 - **Engine choice.** Peak performance and hardware specialization against portability, model coverage, and operational familiarity. Benchmark, pin, and plan to re-benchmark on upgrade.
 
 ## Evaluation and testing
@@ -1304,7 +779,23 @@ Three kinds of tests belong to a serving layer, and they run at different times.
 
 The full test file is on disk at `book/projects/examples/ch34/test_ch34.py`. The `aie_core` tests run offline against the fake server and a mock transport; the `integration` marker remains registered for tests you add against a real engine, which are skipped unless `--run-integration` is passed.
 
+## Before you ship
+
+- [ ] The self-hosting decision is written down per traffic slice, with cost per useful token computed at measured average utilization (including nights and weekends), not at peak throughput.
+- [ ] Two SLOs exist, p95 TTFT and p95 completion, with per-replica alerts on each, plus leading-indicator alerts on queue depth, KV-cache utilization, and preemptions.
+- [ ] The KV budget was computed from the model's configuration file (attention type, KV heads, sliding windows, MoE total parameters) and matches, within a few percent, the KV capacity the engine reports at startup.
+- [ ] The engine's maximum model length is set to the p99 sequence plus margin, `ServingTarget.max_context_tokens` holds that same value, and a contract test sends a request one token over it and gets a clean rejection, not truncation.
+- [ ] A load test with production-sampled prompt and output lengths, warm-up discarded, swept concurrency until p95 TTFT left the floor, and its full configuration record (weights, quantization, engine version, scheduler settings, hardware) is stored with the results.
+- [ ] The replica count comes from load-tested goodput at a 60 to 70 percent target utilization, plus at least one failover replica.
+- [ ] The sliced release evaluation (structured output, tool calls, long context, language) passed on the exact quantization, engine version, and adapter being deployed.
+- [ ] Prefix-cache hit rate is on a dashboard, and CI asserts that the system prompt's first N tokens are unchanged across cache-compatible prompt versions.
+- [ ] Readiness performs a real tiny completion; rolling upgrades drain with a timeout and promote one replica first.
+- [ ] A cancellation test closes streams early and sees the engine's running-sequence count return to baseline within a bounded time.
+- [ ] Every span carries model, quantization, adapter, engine version, and replica; the engine requires authentication even on the internal network; cross-tenant prefix-cache sharing has been reviewed.
+
 ## Exercises
+
+**Start here:** K3, K7, E2, P3, D2 (about 4 hours). The rest go deeper.
 
 ### Knowledge questions
 
@@ -1320,6 +811,8 @@ The full test file is on disk at `book/projects/examples/ch34/test_ch34.py`. The
 
 **K6.** State Little's Law and give one example of using it in each direction: deriving in-flight requests from traffic, and deriving a sustainable arrival rate from a fixed concurrency budget.
 
+**K7.** An illustrative mixture-of-experts model has 48B total and 8B active parameters, 32 layers, 8 KV heads, and head dimension 128. (a) Compute its weight memory at BF16 and at FP8, and, with the chapter's 10 percent headroom and 2 GiB runtime allowance on an 80 GiB device, the KV budget left in each case. (b) How much KV cache does one 8k-token sequence need, and how many fit? (c) Would you expect its TPOT at concurrency 1 and at concurrency 32 to resemble a dense 8B model or a dense 48B model, and why? (d) If 24 of its 32 layers used sliding-window attention with a 4,096-token window, what would one 32k-token sequence cost in KV memory?
+
 ### Engineering questions
 
 **E1.** Northwind's logistics tenant requires that incident reports never leave the corporate network, while the retail tenant has no such constraint. Design the routing so both tenants use the same application code and the same gateway. Which `aie_core` components are involved, what does the `ServingTarget` list look like, and what must appear in every trace?
@@ -1332,13 +825,13 @@ The full test file is on disk at `book/projects/examples/ch34/test_ch34.py`. The
 
 ### Practical exercises
 
-**P1.** Extend `loadtest.py` to record the engine's Prometheus-style metrics (queue depth, KV utilization, running sequences) at the end of each concurrency level, add the columns to `LevelSummary` and the report, and extend `fake_server.py` to expose a `/metrics` endpoint so the feature is tested offline.
+**P1.** (about 2 hours) Extend `loadtest.py` to record the engine's Prometheus-style metrics (queue depth, KV utilization, running sequences) at the end of each concurrency level, add the columns to `LevelSummary` and the report, and extend `fake_server.py` to expose a `/metrics` endpoint so the feature is tested offline.
 
-**P2.** Write `plot_sweep.py` that reads a list of `LevelSummary` objects (serialize them to JSON from `sweep`) and produces the two protocol plots: p50 and p95 TTFT against requests per second, and output tokens per second against p95 E2E. Mark the SLO lines and the operating point.
+**P2.** (about 90 min) Write `plot_sweep.py` that reads a list of `LevelSummary` objects (serialize them to JSON from `sweep`) and produces the two protocol plots: p50 and p95 TTFT against requests per second, and output tokens per second against p95 E2E. Mark the SLO lines and the operating point.
 
-**P3.** Build an admission-control function on top of `kv_cache.tokens_that_fit` that, given free KV bytes reported by the engine and a request's input tokens plus `max_tokens`, decides between admit, queue (with a bounded wait), and reject with a retryable error. Test it with a sequence of mixed-length requests against a fixed budget and assert that it never admits more tokens than fit.
+**P3.** (about 2 hours) Build an admission-control function on top of `kv_cache.tokens_that_fit` that, given free KV bytes reported by the engine and a request's input tokens plus `max_tokens`, decides between admit, queue (with a bounded wait), and reject with a retryable error. Test it with a sequence of mixed-length requests against a fixed budget and assert that it never admits more tokens than fit.
 
-**P4.** Run the load generator against a real local OpenAI-compatible server of your choice, once with the default configuration and once with a quantized variant of the same model. Record the full configuration from the protocol section, find both operating points, and run the same small structured-output evaluation against both. Write a one-page comparison that reports goodput at the SLO and the quality deltas by slice.
+**P4.** (about half a day, needs a local GPU or a capable CPU) Run the load generator against a real local OpenAI-compatible server of your choice, once with the default configuration and once with a quantized variant of the same model. Record the full configuration from the protocol section, find both operating points, and run the same small structured-output evaluation against both. Write a one-page comparison that reports goodput at the SLO and the quality deltas by slice.
 
 ### Debugging exercises
 
@@ -1353,10 +846,19 @@ The full test file is on disk at `book/projects/examples/ch34/test_ch34.py`. The
 - Self-hosting is a hybrid decision made per traffic slice on five factors: cost at sustained volume, data residency, latency control, model availability, and the operational burden of owning a stateful GPU service. Both sides use the same `aie_core` client and gateway; the router chooses between targets with different capabilities, and gateway fallbacks hold only interchangeable replicas.
 - Define metrics precisely. TTFT is where load appears, TPOT stays mostly flat under saturation, and goodput under SLO is the only capacity number worth advertising.
 - Prefill is compute-bound and sets TTFT; decode is memory-bandwidth-bound, sets TPOT, and makes batching nearly free. Traffic shape, not model size alone, determines what users feel.
-- KV cache per sequence is 2 × layers × KV heads × head dim × tokens × bytes. For the illustrative 8B shape that is 1 GiB at 8k and 4 GiB at 32k, so a fourfold context increase divides concurrency by four on the same hardware. Admission control must count tokens, not requests.
+- KV cache per sequence is 2 × layers × KV heads × head dim × tokens × bytes. For the illustrative 8B shape that is 1 GiB at 8k and 4 GiB at 32k, so a fourfold context increase divides concurrency by four on the same hardware. Admission control must count tokens, not requests. Read the config, not the headline parameter count: MoE weight memory follows total parameters while small-batch speed follows active ones, and sliding-window and latent attention shrink the cache below the formula.
 - Continuous batching and paged KV memory are why modern engines reach high utilization; the knobs you tune are maximum batched tokens and chunked prefill, against your SLO.
 - Prefix caching is controlled by prompt layout: stable content first, variable content last, nothing unique in the shared prefix.
 - Quantization's main gift is memory that becomes batch size; its cost is task-specific and visible only in a sliced quality suite. Speculative decoding helps interactive, low-concurrency traffic and depends on acceptance rate.
 - Little's Law turns traffic into in-flight requests and KV demand; the queueing knee says why headroom is not waste. Size replicas from the load-tested operating point, divide by a target utilization, and add failover.
 - A reproducible benchmark warms up, uses realistic prompt and output distributions, sweeps concurrency in a closed loop, records TTFT, TPOT, E2E, errors, and engine metrics, and chooses the operating point where p95s meet the SLO.
 - Treat every engine, quantization, or scheduler change as a model release: record versions in traces, rerun the quality suite, roll out one replica at a time, and verify that cancellation frees KV memory.
+
+## Further reading
+
+- *Efficiently Scaling Transformer Inference* (Pope et al., 2023): the prefill versus decode split, memory bandwidth limits, and KV-cache costs worked out carefully; the source of most of this chapter's arithmetic.
+- *Efficient Memory Management for Large Language Model Serving with PagedAttention* (Kwon et al., 2023): the vLLM paper; why paged KV memory makes continuous batching practical and how fragmentation wastes capacity.
+- *Orca: A Distributed Serving System for Transformer-Based Generative Models* (Yu et al., 2022): iteration-level scheduling, the idea behind continuous batching.
+- *DistServe: Disaggregating Prefill and Decoding for Goodput-optimized Large Language Model Serving* (Zhong et al., 2024): goodput under an SLO as the capacity metric, and when splitting prefill and decode pays.
+- *Fast Inference from Transformers via Speculative Decoding* (Leviathan, Kalman, and Matias, 2023): the acceptance rule that makes speculation lossless and the arithmetic of its speedup.
+- *GQA: Training Generalized Multi-Query Transformer Models from Multi-Head Checkpoints* (Ainslie et al., 2023): the attention variant that shrinks `kv_heads` and therefore the KV cache in most current open models.

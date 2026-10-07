@@ -1,16 +1,26 @@
 # Chapter 12 — Retrieval Engineering
 
-After this chapter you will be able to design the retrieval stage of a RAG system as a measured funnel rather than a single similarity search: a BM25 index you understand down to the formula, a dense retriever with versioned namespaces, fusion of the two with Reciprocal Rank Fusion or calibrated weights, rerankers ranging from a lexical baseline to cross-encoders and LLM graders, an optional maximal-marginal-relevance stage that keeps near-copies from filling the shortlist, query transformations that never lose the user's original question, contextual and parent-document retrieval, and per-stage sizing and latency budgets. The code lives in `book/projects/ragkit/ragkit/retrieval/`, next to the ingestion code from Chapter 11, and implements the retrieval contract that Chapters 13 to 15 and Project 3 build on. A comparison script, `ragkit/eval/compare_retrievers.py`, runs BM25, dense, hybrid, and hybrid with reranking against the shared gold set, with permission-violating questions scored as failures if the restricted document comes back.
+Retrieval decides most of a RAG system's quality. This chapter treats it as a measured funnel rather than a single similarity search: cheap retrievers for recall, fusion, an expensive reranker for precision, and optional stages that each have to earn their place on the gold set.
+
+**You will be able to:**
+- Explain BM25 term by term and build an identifier-aware lexical index that enforces authorization before scoring.
+- Combine lexical and dense retrieval with Reciprocal Rank Fusion or weighted fusion, and say when each is right.
+- Choose a reranker (lexical baseline, cross-encoder, hosted API, LLM grader) and an optional MMR diversity stage from measured gains per slice.
+- Apply query transformations (rewriting, multi-query, decomposition, HyDE) and index-side techniques (contextual and parent-document retrieval) without losing the user's question.
+- Size `candidate_k`, `rerank_k`, and `final_k` and split a p95 latency budget across stages with deadlines and degraded paths.
+- Diagnose a retrieval failure to the stage that lost the evidence, from per-stage traces.
+
+**Prerequisites:** Chapters 9 (vector stores, filtered search, `semsearch`), 10 (the gold set, the failure catalog, and the retrieval metrics), and 11 (chunks with breadcrumbs and ACL fields). | **Code:** `book/projects/ragkit/ragkit/retrieval/` (run: `cd book/projects/ragkit && pytest -q tests/test_retrieval_*.py`) | **Builds:** the `ragkit.retrieval` package that Chapters 13 to 15 and Project 3 use, and the `compare_retrievers.py` evaluation script.
 
 ## Why this matters
 
-Chapter 10 ended with a catalogue of failures, and three of them belong to retrieval. A distractor outranked the evidence: "What is the return window for my old laptop?" pulled the Retail Returns API reference above the IT laptop runbook. A stale FAQ outranked the current policy. And a permission leak happened because nothing filtered by the caller's groups. Chapter 11 fixed what it could at ingestion: structure-aware chunks, breadcrumbs, ACL fields on every chunk. What remains is the search itself.
+Chapter 10 ended with a catalog of failures, and three of them belong to retrieval. A distractor outranked the evidence: "What is the return window for my old laptop?" pulled the Retail Returns API reference above the IT laptop runbook. A stale FAQ outranked the current policy. And a permission leak happened because nothing filtered by the caller's groups. Chapter 11 fixed what it could at ingestion: structure-aware chunks, breadcrumbs, ACL fields on every chunk. What remains is the search itself.
 
 Retrieval is where most of a RAG system's quality is won or lost, and it is an information retrieval problem first. A Northwind support engineer types "INC-2025-1142 root cause". A dense embedding model represents that string as a blur of "incident", "number", and "something about 2025", and it may well prefer the POS overview, which mentions the incident in passing, over the incident report itself. A lexical index matches the token exactly. An employee asks "can I work from another country for a month?". The remote-work policy describes a "work from abroad" allowance of up to 20 working days per calendar year, which shares almost none of the question's words. Dense retrieval bridges that; BM25 does not. Real query logs mix both kinds, so a system that uses only one family of retrieval fails a predictable slice of users, every day, silently.
 
 The second reason is economics. Every stage that reads query and document together (a cross-encoder, an LLM judge, the generator itself) is expensive per candidate. Every stage that scores documents independently of the query (an inverted index, a vector index) is cheap per candidate but shallow. Production retrieval arranges these into a funnel: broad and cheap first, narrow and expensive last, with each stage's k chosen so the next stage has the evidence available without drowning in candidates. Getting the funnel wrong produces either a system that misses evidence the reranker would have found, or one that spends its entire latency budget reranking two hundred chunks to choose eight.
 
-The third reason is safety. Retrieval is the last place where authorization can be enforced cleanly: once a forbidden chunk is scored, logged, or shown to a reranking model, it has been exposed to a component the user's permissions never covered.
+The third reason is safety. Retrieval is the last place where authorization can be enforced cleanly: once a forbidden chunk is scored, logged, or shown to a reranking model, it has been exposed to a component the user's permissions never covered. Chapter 15 owns authorization in retrieval; this chapter shows where each retriever enforces it.
 
 ## Mental model
 
@@ -22,13 +32,23 @@ The second picture is that **each retrieval signal fails differently**. Lexical 
 
 ## Core concepts
 
+> **Default recipe.** If you have no evaluation data yet, start here and change one piece at a time against the gold set:
+>
+> - **First stage:** BM25 with an identifier-aware tokenizer and a dense retriever, run in parallel, each returning `candidate_k = 50` under the caller's authorization pre-filter.
+> - **Fusion:** Reciprocal Rank Fusion with k = 60, cut to `rerank_k = 20`.
+> - **Rerank:** a cross-encoder over those 20, returning `final_k = 8`; a lexical-overlap reranker as the fallback and as the baseline every reranker must beat.
+> - **Off the hot path:** no HyDE, no LLM reranking, no MMR, no multi-query expansion. Each is a per-slice tool you enable when a slice of the gold set shows the failure it fixes.
+> - **Always:** a deadline per stage with a degraded path, and per-stage candidate ids in the trace.
+>
+> The sections below explain each choice and when to deviate from it.
+
 ### Dense retrieval as one stage among several
 
 Chapters 8 and 9 covered embeddings and vector search. From the retrieval engineer's point of view, a dense retriever is a function from (query text, principal, filters, k) to a ranked list of chunks with cosine scores, with three properties that matter here.
 
 First, the representation is learned, so it captures paraphrase and topical similarity, and it is lossy on tokens that were rare in the model's training data. Product codes, ticket numbers, error codes, version strings, and internal acronyms are the classic casualties. A model may embed "SH-201" and "SH-210" almost identically, or embed "SH-201" as noise. The failure is silent: the vector search still returns k results with confident-looking scores.
 
-Second, the vector space is tied to an embedding model and to the exact text that was embedded. Chapter 9's `semsearch` names a namespace `index:model:version` so vectors from two models never mix. Chapter 11's `Chunk.embedding_text()` prefixes the breadcrumb (title and section), and this chapter adds an optional contextual prefix. If either changes, the chunks must be re-embedded, and the index version must change with them. A query embedded with a different model than the corpus returns plausible garbage, not an error.
+Second, the vector space is tied to an embedding model and to the exact text that was embedded (Chapter 8's space fingerprint, Chapter 9's `index:model:version` namespaces and migrations). The embedded text here is Chapter 11's breadcrumb plus an optional contextual prefix from this chapter, so changing either means re-embedding into a new index version. A query embedded with a different model than the corpus returns plausible garbage, not an error.
 
 Third, cosine scores are relative: 0.42 is the best match in one corpus and noise in another, so dense scores cannot be thresholded without calibration or added to BM25 scores.
 
@@ -67,52 +87,27 @@ BM25 gets this one right, because "old" and "laptop" are rare and both appear in
 
 Use lexical retrieval for identifiers, codes, names, quoted phrases, unfamiliar jargon, and whenever you must explain a match; expect it to fail on paraphrase, misspellings (without fuzzy matching or character n-grams), and multilingual text without per-language analyzers.
 
-### Lexical retrieval in PostgreSQL
+> **Sidebar: lexical retrieval in PostgreSQL.** The from-scratch index exists so you know what a lexical engine does; in production you usually let the database or a search engine do it. Chapter 9 already put a generated `tsvector` column on the chunk table and fused it with pgvector results in one SQL statement. Two cautions apply. First, PostgreSQL's built-in `ts_rank` and `ts_rank_cd` are not BM25: they weigh term frequency and term proximity but have no corpus-level idf, so a rare identifier and a common word count the same. That matters little for RRF, which uses only the order, and a lot for weighted score fusion. True BM25 inside PostgreSQL needs an extension or a dedicated search engine, a deliberate dependency either way. Second, the `english` text-search configuration stems and splits tokens, which is good for prose and bad for identifiers. The usual fix is two vectors: a weighted `english` vector for prose (title, breadcrumb, body) and a `simple` vector over extracted identifiers that matches them exactly. `ragkit/retrieval/sql/lexical_tsvector.sql` on disk shows both, with the authorization predicates in the same `WHERE` clause as the text match and a deterministic tiebreak.
 
-The from-scratch index exists so you know what a lexical engine does; in production you usually let the database or search engine do it. Chapter 9 already put a generated `tsvector` column on the chunk table and fused it with pgvector results in one SQL statement. Two cautions apply before relying on it.
+### Learned sparse retrieval
 
-First, PostgreSQL's built-in ranking functions are not BM25. `ts_rank` weighs term frequency and `ts_rank_cd` weighs cover density (how close the matched terms are), and neither has a corpus-level idf term. A rare identifier and a common word count the same. For fusion by rank this matters less than it seems, because RRF only uses the order; for weighted score fusion it matters a lot. If you need true BM25 inside PostgreSQL, extensions exist that add it, or you keep a dedicated search engine; either is a deliberate dependency, not a default.
+Between BM25 and dense retrieval sits a third family. A learned sparse model (SPLADE is the best-known example) runs a transformer over the text and outputs a weight for each term in its vocabulary, including terms that do not appear in the text but are related to it. "Laptop return" might get weight on "device", "hardware", and "handover" as well. The output is still a sparse term-weight vector, so it lives in an ordinary inverted index and is scored by the dot product of query and document weights.
 
-Second, the `english` text-search configuration stems and splits tokens in its own way, which is good for prose and bad for identifiers. The usual fix is two vectors: a weighted `english` vector for prose (title weight A, breadcrumb B, body C) and a `simple` vector over extracted identifiers that matches them exactly.
+It exists to get some of dense retrieval's paraphrase tolerance while keeping lexical retrieval's machinery: posting lists, exact-term matching, and explainability per term. On many public benchmarks it beats BM25 and is competitive with dense models; on your corpus that is a hypothesis to test, not a given.
 
-```sql
--- path: book/projects/ragkit/ragkit/retrieval/sql/lexical_tsvector.sql (excerpt; full file on disk)
-ALTER TABLE chunks
-    ADD COLUMN IF NOT EXISTS search_tsv tsvector GENERATED ALWAYS AS (
-        setweight(to_tsvector('english', coalesce(metadata->>'title', '')), 'A') ||
-        setweight(to_tsvector('english', coalesce(metadata->>'breadcrumb', '')), 'B') ||
-        setweight(to_tsvector('english', coalesce(metadata->>'context_prefix', '') || ' ' || text), 'C')
-    ) STORED;
+The costs are real. Every chunk passes through a model at ingestion, as with dense retrieval, and queries need a model call too unless you use a query-side variant that only tokenizes. Expansion makes documents' posting lists longer, so the index is larger and queries slower than BM25. The vocabulary is the model's, so identifiers the model's tokenizer splits into fragments can fare worse than with an identifier-aware BM25 tokenizer, and a domain shift hurts it the way it hurts dense models. Engine support varies: some search engines and vector databases accept sparse vectors natively, PostgreSQL needs an extension.
 
-CREATE INDEX IF NOT EXISTS chunks_search_tsv_gin ON chunks USING gin (search_tsv);
-
-WITH q AS (
-    SELECT websearch_to_tsquery('english', %(q)s) AS words,
-           plainto_tsquery('simple', %(ident)s)   AS ident
-)
-SELECT c.id, c.doc_id, c.text,
-       ts_rank_cd(c.search_tsv, q.words, 32)
-         + CASE WHEN c.ident_tsv @@ q.ident THEN 1.0 ELSE 0.0 END AS lexical_score
-FROM chunks c, q
-WHERE c.namespace = %(namespace)s
-  AND c.tenant = ANY(%(tenants)s)
-  AND c.acl_groups && %(groups)s::text[]
-  AND (c.search_tsv @@ q.words OR c.ident_tsv @@ q.ident)
-ORDER BY lexical_score DESC, c.id
-LIMIT %(n)s;
-```
-
-The SQL was written against Chapter 9's schema but not executed here, because PostgreSQL with pgvector was unavailable in the book's build environment; Project 3 runs it in Docker Compose. The structure is what matters: authorization predicates in the `WHERE` clause next to the text match, a GIN index on each vector, and a deterministic tiebreak. The metadata keys it reads (title, breadcrumb, context prefix, extracted identifiers) are written flat into each record by `DenseRetriever.index`, so lexical and dense search run over the same rows.
+Use it as a candidate replacement for BM25 (or for dense, if you need one sparse index instead of two systems) when the paraphrase slice lags and you would rather not run a vector index. Evaluate it on the `exact-id` slice before trusting it with identifiers, and keep it in the funnel the same way: one more ranked list for RRF.
 
 ### Metadata filters and authorization
 
-Filters restrict retrieval to chunks that satisfy constraints: tenant and group membership (authorization), and business constraints such as document type, tags, product, language, or freshness. Chapter 9 explained the mechanics of pre-filtering, post-filtering, and in-index filtering for vector search. Three retrieval-level rules sit on top.
+Filters restrict retrieval to chunks that satisfy constraints: tenant and group membership (authorization), and business constraints such as document type, tags, product, language, or freshness. Chapter 9 explained the mechanics of filtered vector search, and Chapter 15 owns the authorization rules: filter before scoring, never after generation, with identity taken from the authenticated session. Here is how the retrieval package applies them.
 
-**Authorization is a pre-filter in every retriever, then a check on the way out.** `BM25Index.search` computes the set of chunk ids the principal may read before touching a posting list, and skips any posting outside it, so a forbidden chunk is never scored. `DenseRetriever` turns the principal into a store filter (tenants the user can see, groups they belong to) that the store applies before ranking, and then re-checks `visible()` on each result, dropping and counting any that fail. `RetrievalPipeline` checks again before returning. Three checks for one rule is deliberate. The cost is microseconds; the failure it prevents is a data breach that no answer-level guardrail can undo, because by then the model has read the text. The same rule covers lookups by id, which bypass search (`BM25Index.get_chunks(ids, principal)` for resolving citations or re-showing a stored answer): they take the principal too and omit forbidden chunks exactly like unknown ones.
+**Authorization is a pre-filter in every retriever, then a check on the way out.** `BM25Index.search` computes the set of chunk ids the principal may read before touching a posting list, so a forbidden chunk is never scored. `DenseRetriever` turns the principal into a store filter that the store applies before ranking, then re-checks `visible()` on each result, dropping and counting any that fail. `RetrievalPipeline` checks again before returning. Three checks for one rule cost microseconds; the failure they prevent is a breach no answer-level guardrail can undo. Lookups by id, which bypass search (`BM25Index.get_chunks(ids, principal)` for resolving citations), take the principal too and omit forbidden chunks exactly like unknown ones.
 
-**Filters fail loudly.** A filter key that no retriever understands (`"tag_any"` instead of `"tags_any"`) raises `UnknownFilterError`. Ignoring it would silently widen the result set, which for a filter like `{"source_types": ["policy"]}` might be harmless and for a filter that encodes a contractual restriction is not. The supported keys are document-level properties copied onto chunks at ingestion: `tags_any`, `doc_ids`, `exclude_doc_ids`, `updated_after`, `source_types`. A chunk without an `updated_at` fails an `updated_after` filter: missing metadata fails closed.
+**Filters fail loudly.** A filter key that no retriever understands (`"tag_any"` instead of `"tags_any"`) raises `UnknownFilterError`. Ignoring it would silently widen the result set, which for a filter that encodes a contractual restriction is a leak. The supported keys are document-level properties copied onto chunks at ingestion: `tags_any`, `doc_ids`, `exclude_doc_ids`, `updated_after`, `source_types`. A chunk without an `updated_at` fails an `updated_after` filter: missing metadata fails closed.
 
-**Global statistics can leak.** BM25's idf and average length are computed over the whole index, including documents the current user cannot see. Scores therefore shift slightly when a restricted document containing a rare term is added. Nothing restricted is returned, but in principle an attacker issuing many queries and observing score changes could infer that a term exists somewhere. For most enterprise assistants this side channel is far below the noise of normal index churn and scores are not shown to users. For high-sensitivity tenants, per-tenant indexes (Chapter 15) remove it, at the cost of separate statistics and more indexes to maintain.
+**Global statistics can leak, slightly.** BM25's idf and average length are computed over the whole index, including documents the current user cannot see, so adding a restricted document with a rare term shifts scores a little. Nothing restricted is returned, and scores are not shown to users, so for most assistants this side channel is far below normal index churn. For high-sensitivity tenants, per-tenant indexes (Chapter 15) remove it.
 
 Business filters are also a precision tool, not only a safety one. "Show me only current policies" (`updated_after`, `tags_any: ["policy"]`) removes the stale-FAQ failure from Chapter 10 for questions where the user or a router knows the intent. The risk is over-filtering: a filter that excludes the only document with the answer produces a confident abstention, or worse, a confident answer from the next-best chunk. Log the number of candidates after filtering, and alert when filters frequently reduce candidates to zero.
 
@@ -148,25 +143,27 @@ The costs are latency (one LLM call per batch, typically hundreds of millisecond
 
 **Lexical overlap** is the baseline: the fraction of query terms present in the chunk, plus a weighted bonus for terms in the title and section breadcrumb. It costs microseconds and fixes a surprising share of shallow ranking errors, including the laptop distractor in the naive setup. Every other reranker must beat it on the gold set to justify its latency.
 
-**Late interaction** (ColBERT-style) stores one vector per token and scores a query by summing, over query tokens, the similarity to the best-matching document token (MaxSim). Document vectors are precomputed, so it reranks larger candidate sets than a cross-encoder at the cost of a much larger index. It is not implemented here; Chapter 37 returns to it.
+**Hosted rerank and embedding APIs.** Several providers sell reranking as an API call: send the query and up to some number of passages, get back relevance scores. They are usually cross-encoder-class models you do not have to serve, often multilingual, and the same is true of hosted embedding APIs for the dense stage. They remove GPU operations and model updates from your team. In exchange, every query sends candidate chunk text to a third party (check data-processing terms and whether restricted tenants may use it), the network round trip and the provider's tail latency land inside your retrieval budget, cost scales with candidates times queries, and the model can change under you, so pin a version where the provider allows it and keep the gold-set gate. `CrossEncoderReranker` accepts an injected scoring function, so a hosted reranker plugs in as one; if the call raises or misses `rerank_timeout_s`, the pipeline keeps the fused order. A self-hosted cross-encoder wins when volume is high, data cannot leave, or latency must be tight and predictable; a hosted one wins when the team is small and the volume moderate.
+
+**Late interaction** (ColBERT-style, one vector per token, scored with MaxSim) sits between single-vector retrieval and a cross-encoder. It is not implemented here; Chapter 37 covers it.
 
 Two cautions apply to all rerankers. Their scores are not probabilities and are not comparable across models; a cut-off ("drop candidates below 0.3") must be calibrated on judged queries (Chapter 14). And a reranker can only reorder what it is given: if recall at the candidate stage is 70 percent, a perfect reranker yields at most 70 percent. Measure candidate recall before buying a better reranker.
 
 ### Diversity: maximal marginal relevance
 
-A reranker scores each candidate on its own, so it cannot see that its top four are the same sentence. On Northwind's corpus that happens whenever a fact is restated: the PTO policy and the HR FAQ both say how many days carry over, overlapping chunks repeat each other, and a question with two facets ("how many PTO days carry over, and by when must I use them?") can get four slots of carryover and none of the expiry deadline. Chapter 5 described the effect on the context budget, and Chapter 8 implemented maximal marginal relevance (MMR) over raw embeddings for "related items". Here it becomes an optional retrieval stage after the reranker.
+A reranker scores each candidate on its own, so it cannot see that its top four say the same thing. That happens whenever a fact is restated: the PTO policy and the HR FAQ both state the carryover rule, overlapping chunks repeat each other, and a two-facet question ("how many PTO days carry over, and by when must I use them?") can get four slots of carryover and none of the expiry deadline.
 
-MMR picks hits one at a time. Each remaining candidate scores λ · relevance − (1 − λ) · (its highest similarity to any hit already picked), and the best one is taken. λ = 1 keeps the reranker's order unchanged; lower values push harder against near-copies. Two adaptations make the formula safe inside a funnel. First, relevance is the reranker's score rescaled over the pool, not a cosine. An RRF score and a cross-encoder's raw, unbounded output score live on unrelated scales, and min-max scaling would pin the weakest pool member at zero and make it unselectable, so non-negative scores are divided by the pool maximum and only signed scores are min-max scaled. Second, similarity between candidates is token-set Jaccard by default. It costs no model call and catches overlapping chunks and copied paragraphs, which are most of the redundancy in a shortlist. Pass an `EmbeddingClient` to use cosine instead, which also catches paraphrases, at the price of one batched embedding call per request.
+Maximal marginal relevance (MMR) picks hits one at a time. Each remaining candidate scores
 
-A worked example uses the test fixture. Four candidates arrive with reranker scores 0.95, 0.94, 0.93, and 0.80: three phrasings of the carryover rule and one chunk about the 31 March expiry. Rescaled, their relevance is 1.0, 0.989, 0.979, and 0.842. After the first pick, the second carryover phrasing has Jaccard 0.91 with it and the deadline chunk 0.18 (the test itself asserts the swap at λ = 0.5). At λ = 0.9 the copy scores 0.9 · 0.989 − 0.1 · 0.91 = 0.799 and the deadline 0.9 · 0.842 − 0.1 · 0.18 = 0.740, so the copy wins. At λ = 0.8 the two copies score 0.610 and 0.620 and the deadline 0.638, and the second slot goes to the missing facet. The crossover sits between the two settings, which is why λ is tuned, not guessed: start around 0.7 (Chapter 5 suggests 0.5 to 0.8, illustrative) and sweep it on the gold set.
+```text
+MMR(d) = λ · relevance(d) − (1 − λ) · max over already-picked p: similarity(d, p)
+```
 
-Diversity helps on multi-facet and multi-part questions, on corpora with many near-copies (mirrored wikis, FAQs restating policies, overlapping chunks), and when `final_k` is small and every slot is expensive. It hurts on single-fact lookups, where the second copy of the right answer is better evidence than an unrelated chunk, and on any pool that contains weak candidates, because an unrelated chunk is maximally "diverse". Two guards follow. `min_relevance` (on the rescaled scale) keeps weak candidates out of the selection entirely. And the pool must be small and already reranked: the pipeline hands MMR `diversify_pool_k` hits (by default twice `final_k`, capped at `rerank_k`), so it chooses among good candidates instead of reaching into the first-stage tail. The cost is negligible with Jaccard (well under a millisecond for a ten-hit pool here) and one embedding batch with cosine.
+and the best one is taken. λ = 1 keeps the reranker's order; lower values push harder against near-copies. In this pipeline relevance is the reranker's score rescaled to [0, 1] over the pool (divided by the pool maximum when scores are non-negative, so the weakest candidate is not pinned at zero), and similarity is token-set Jaccard by default, which costs no model call and catches overlapping chunks and copied paragraphs. Passing an `EmbeddingClient` switches to cosine, which also catches paraphrases, for one embedding batch per request. With the test fixture's scores, a near-copy of the first pick keeps the second slot at λ = 0.9 and loses it to the deadline chunk at λ = 0.8, so λ is tuned on the gold set, not guessed: start around 0.7 (illustrative).
 
-On the Northwind corpus the effect is small and mixed. For the two-facet PTO question at `final_k = 4`, MMR swaps the "Annual entitlement" section for "Payout on leaving", which is neither clearly better nor worse. That is the expected result on a corpus with little duplication, and the reason MMR ships off by default and is enabled per slice where the `multi-hop` metrics show a gain.
+MMR helps on multi-facet questions, on corpora with many near-copies (mirrored wikis, FAQs restating policies, overlapping chunks), and when `final_k` is small. It hurts on single-fact lookups, where a second copy of the right answer is better evidence than an unrelated chunk, and whenever the pool holds weak candidates, because an unrelated chunk is maximally "diverse". Two guards follow: a `min_relevance` floor, and a small, already-reranked pool (`diversify_pool_k`, by default twice `final_k`, capped at `rerank_k`).
 
-Run MMR after the reranker, never before it. Before reranking, relevance is a first-stage score that cannot tell "about the topic" from "answers the question", so MMR would diversify among weak candidates and the reranker would then undo its choices. After reranking, the reranker's score is the best relevance signal in the pipeline, which is why `MMRDiversifier` uses it rather than cosine to the query, and why λ must be re-tuned whenever the reranker changes: a cross-encoder that separates candidates sharply needs a different λ from a lexical baseline whose scores bunch together.
-
-Diversity does not replace deduplication either: the evidence packer (Chapter 13) still removes exact duplicates and merges overlapping chunks, and MMR decides which distinct but redundant chunks deserve the remaining slots.
+Run it after the reranker, never before: first-stage scores cannot tell "about the topic" from "answers the question", and the reranker would undo MMR's choices. Re-tune λ whenever the reranker changes, because score spreads differ between rerankers. On the Northwind corpus the effect is small and mixed (one swap of two equally plausible sections), which is the expected result on a corpus with little duplication, and why MMR ships off by default and is enabled per slice where the `multi-hop` metrics show a gain. It does not replace deduplication: the evidence packer (Chapter 13) still removes exact duplicates and merges overlapping chunks.
 
 ### Query transformation
 
@@ -204,7 +201,7 @@ It helps when answers need the qualifiers around a sentence (an exception two li
 
 With the stages defined, the remaining question is how large each one should be. Every stage has a k, and the k values are linked. Let `candidate_k` be the number each first-stage retriever returns per search text, `rerank_k` the number of fused candidates the reranker sees, and `final_k` the number passed to the generator.
 
-Start from the end. `final_k` is set by the generator's evidence budget and by how many chunks typical answers need: five to ten for most question answering, more for summaries. `rerank_k` is set by reranker latency: if the reranker costs a fixed amount per candidate, its stage latency grows linearly with `rerank_k`, so pick the largest value the budget allows and check that candidate recall at that depth is close to its ceiling. `candidate_k` is set by first-stage recall: plot recall@k for the fused list as k grows and choose the knee, typically somewhere between 30 and 100. Larger `candidate_k` is cheap for BM25 and exact vector search, more expensive for approximate indexes (the HNSW search breadth must be at least k), and it only matters if fusion actually promotes the extra candidates into the top `rerank_k`.
+Start from the end. `final_k` is set by the generator's evidence budget and by how many chunks typical answers need: five to ten for most question answering, more for summaries. `rerank_k` is set by reranker latency: if the reranker costs a fixed amount per candidate, its stage latency grows linearly with `rerank_k`, so pick the largest value the budget allows and check that candidate recall at that depth is close to its ceiling. `candidate_k` is set by first-stage recall: plot recall@k for the fused list as k grows and choose the knee, typically somewhere between 30 and 100. Larger `candidate_k` is cheap for BM25 and exact vector search and more expensive for approximate indexes. In pgvector without iterative scans, `ef_search` caps how many results one search can return, so it must be at least `candidate_k`; with iterative scans the index keeps scanning until it has enough, at a latency cost that grows with filter selectivity (Chapter 9). Either way, `candidate_k` only matters if fusion actually promotes the extra candidates into the top `rerank_k`.
 
 The diagnostic that ties this together is the stage recall table. For each gold question, record whether a required document is in each retriever's list, in the fused top `rerank_k`, and in the final top `final_k`. If the evidence is missing from every first-stage list, fix chunking, tokenization, or the embedding model. If it is in a first-stage list but not in the fused top `rerank_k`, raise `rerank_k` or adjust fusion. If it is in the reranker's input but not its output, the reranker is the problem. `RetrievalPipeline` records every stage's candidate ids precisely so this table is a query over traces; the comparison script reports `cand_recall` for the reranker's input next to final recall, and Chapter 14 generalizes it into a stage-isolation report.
 
@@ -364,66 +361,13 @@ python -m ragkit.eval.compare_retrievers --by-tag
 
 ### BM25 from scratch
 
-The whole index is one file. Read `allowed_ids` and the inner loop of `search` together: authorization happens before scoring, and the posting loop skips anything outside the allowed set.
+The whole index is one file on disk: the tokenizer, writes with per-document replacement, `get_chunks` for authorized lookups by id, `explain` for per-term contributions, and `save`/`load` with the tokenizer fingerprint check. The excerpt shows the three parts that carry the ideas. Read `allowed_ids` and the inner loop of `search` together: authorization happens before scoring, and the posting loop skips anything outside the allowed set.
 
 ```python
-# path: book/projects/ragkit/ragkit/retrieval/bm25.py
-"""BM25 lexical retrieval, implemented from scratch.
-
-Three decisions matter more than the formula:
-- Tokenization. Identifiers such as "INC-2025-1142" or "RET-002" are indexed both whole and as
-  parts, so an exact-ID query matches strongly and a partial one ("1142") still matches.
-- Authorization before scoring. The candidate set is restricted to chunks the principal may
-  read *before* any score is computed, so a forbidden chunk never occupies a top-k slot and
-  never appears in a debug log of scores.
-- Persistence with a fingerprint. The saved index records the tokenizer configuration; loading
-  it with a different tokenizer is an error, because query and index terms would not line up.
-"""
-from __future__ import annotations
-
-import json
-import math
-import re
-from collections import Counter
-from pathlib import Path
-from typing import Iterable
-
-from ..documents import Chunk
-from .common import Stopwatch, indexed_text, matches_filters, validate_filters
-from .types import Principal, RetrievalQuery, RetrievalResult, ScoredChunk, visible
-
-FORMAT_VERSION = 1
-
-STOPWORDS = frozenset(
-    """a an and are as at be been but by can could did do does for from had has have how i if in into is it
-    its me my of on or our so than that the their them then there these they this to up us was we were what
-    when where which who why will with would you your""".split()
-)
-
-_TOKEN_RE = re.compile(r"[a-z0-9]+(?:[-_./][a-z0-9]+)*")
-_PART_RE = re.compile(r"[-_./]")
-
-
+# path: book/projects/ragkit/ragkit/retrieval/bm25.py (excerpt; full file on disk)
 class BM25Tokenizer:
     """Lowercase word tokens; compound identifiers emitted whole and split; optional plural folding."""
-
-    def __init__(self, *, stopwords: Iterable[str] = STOPWORDS, fold_plurals: bool = True, min_len: int = 1) -> None:
-        self.stopwords = frozenset(stopwords)
-        self.fold_plurals = fold_plurals
-        self.min_len = min_len
-
-    @property
-    def fingerprint(self) -> str:
-        return f"bm25tok-v1:plurals={self.fold_plurals}:min={self.min_len}:stop={len(self.stopwords)}"
-
-    def _norm(self, word: str) -> str:
-        if self.fold_plurals and len(word) > 3 and word.isalpha():
-            if word.endswith("ies") and len(word) > 4:
-                return word[:-3] + "y"
-            if word.endswith("s") and not word.endswith("ss"):
-                return word[:-1]
-        return word
-
+    # ...
     def tokenize(self, text: str) -> list[str]:
         out: list[str] = []
         for match in _TOKEN_RE.finditer(text.lower()):
@@ -436,104 +380,7 @@ class BM25Tokenizer:
                 out.append(self._norm(tok))
         return out
 
-
-class BM25Index:
-    """An in-memory inverted index with Okapi BM25 scoring and ACL-aware candidate selection.
-
-    score(q, d) = sum over query terms t of  idf(t) * tf * (k1 + 1) / (tf + k1 * (1 - b + b * |d| / avgdl))
-    idf(t)      = ln(1 + (N - n_t + 0.5) / (n_t + 0.5))      (always positive)
-
-    Corpus statistics (N, n_t, avgdl) are global over the index, not per principal.
-    """
-
-    name = "bm25"
-
-    def __init__(self, *, k1: float = 1.2, b: float = 0.75, tokenizer: BM25Tokenizer | None = None) -> None:
-        if k1 < 0 or not 0.0 <= b <= 1.0:
-            raise ValueError("BM25 needs k1 >= 0 and 0 <= b <= 1")
-        self.k1 = k1
-        self.b = b
-        self.tokenizer = tokenizer or BM25Tokenizer()
-        self._chunks: dict[str, Chunk] = {}
-        self._tf: dict[str, Counter[str]] = {}  # forward index: chunk id -> term counts
-        self._length: dict[str, int] = {}
-        self._postings: dict[str, dict[str, int]] = {}  # inverted index: term -> {chunk id: tf}
-        self._by_doc: dict[str, set[str]] = {}
-        self._total_length = 0
-
-    # ------------------------------------------------------------------ writes
-    def add(self, chunks: Iterable[Chunk]) -> int:
-        """Insert or replace chunks by id. Returns the number written."""
-        n = 0
-        for chunk in chunks:
-            if chunk.id in self._chunks:
-                self._remove_one(chunk.id)
-            terms = Counter(self.tokenizer.tokenize(indexed_text(chunk)))
-            self._chunks[chunk.id] = chunk
-            self._tf[chunk.id] = terms
-            length = sum(terms.values())
-            self._length[chunk.id] = length
-            self._total_length += length
-            self._by_doc.setdefault(chunk.doc_id, set()).add(chunk.id)
-            for term, tf in terms.items():
-                self._postings.setdefault(term, {})[chunk.id] = tf
-            n += 1
-        return n
-
-    def replace_document(self, doc_id: str, chunks: Iterable[Chunk]) -> int:
-        """Make `chunks` the only indexed chunks of `doc_id` (re-ingestion of a new version)."""
-        self.delete_document(doc_id)
-        return self.add(chunks)
-
-    def delete_document(self, doc_id: str) -> int:
-        ids = list(self._by_doc.pop(doc_id, set()))
-        for cid in ids:
-            self._remove_one(cid, drop_doc_entry=False)
-        return len(ids)
-
-    def _remove_one(self, chunk_id: str, *, drop_doc_entry: bool = True) -> None:
-        chunk = self._chunks.pop(chunk_id)
-        for term in self._tf.pop(chunk_id):
-            posting = self._postings.get(term)
-            if posting is not None:
-                posting.pop(chunk_id, None)
-                if not posting:
-                    del self._postings[term]
-        self._total_length -= self._length.pop(chunk_id)
-        if drop_doc_entry:
-            ids = self._by_doc.get(chunk.doc_id)
-            if ids is not None:
-                ids.discard(chunk_id)
-                if not ids:
-                    del self._by_doc[chunk.doc_id]
-
-    # ------------------------------------------------------------------ lookups
-    def get_chunks(self, chunk_ids: Iterable[str], principal: Principal) -> list[Chunk]:
-        """Chunks by id, in the order asked, for re-display or citation resolution.
-
-        A lookup by id bypasses search, so it must not bypass authorization: the principal is
-        required and chunks it may not read are omitted, exactly like unknown ids. Callers that
-        need to tell "forbidden" from "absent" are asking the wrong question of a user-facing path.
-        """
-        out: list[Chunk] = []
-        for cid in chunk_ids:
-            chunk = self._chunks.get(cid)
-            if chunk is not None and visible(chunk, principal):
-                out.append(chunk)
-        return out
-
-    def doc_ids(self) -> set[str]:
-        """Documents with at least one indexed chunk (for reconciliation and audits)."""
-        return set(self._by_doc)
-
-    # ------------------------------------------------------------------ stats
-    def __len__(self) -> int:
-        return len(self._chunks)
-
-    @property
-    def avgdl(self) -> float:
-        return self._total_length / len(self._chunks) if self._chunks else 0.0
-
+# ...
     def idf(self, term: str) -> float:
         n_t = len(self._postings.get(term, {}))
         n = len(self._chunks)
@@ -545,7 +392,6 @@ class BM25Index:
         denom = tf + self.k1 * (1.0 - self.b + self.b * dl / avgdl)
         return self.idf(term) * tf * (self.k1 + 1.0) / denom
 
-    # ------------------------------------------------------------------ reads
     def allowed_ids(self, principal: Principal, filters: dict | None = None) -> set[str]:
         """Chunk ids this principal may see under these filters. Computed before any scoring."""
         filters = filters or {}
@@ -568,146 +414,17 @@ class BM25Index:
                 scores[cid] = scores.get(cid, 0.0) + qtf * self._term_score(term, cid, tf)
                 matched[cid] += 1
         ranked = sorted(scores.items(), key=lambda kv: (-kv[1], kv[0]))[:k]
-        return [
-            ScoredChunk(
-                chunk=self._chunks[cid],
-                score=score,
-                stage=self.name,
-                rank=i,
-                signals={"bm25": round(score, 6), "bm25_matched_terms": float(matched[cid])},
-            )
-            for i, (cid, score) in enumerate(ranked, start=1)
-        ]
-
-    def retrieve(self, query: RetrievalQuery) -> RetrievalResult:
-        with Stopwatch() as sw:
-            hits = self.search(query.text, query.principal, query.k, query.filters)
-        trace = {"stage": self.name, "k": query.k, "candidate_ids": [h.chunk.id for h in hits], "latency_ms": sw.ms}
-        return RetrievalResult(query=query, hits=hits, trace=trace)
-
-    def explain(self, text: str, chunk_id: str) -> dict[str, float]:
-        """Per-term contribution to one chunk's score. Useful when a ranking looks wrong."""
-        tf = self._tf[chunk_id]
-        out: dict[str, float] = {}
-        for term, qtf in Counter(self.tokenizer.tokenize(text)).items():
-            if tf.get(term):
-                out[term] = round(qtf * self._term_score(term, chunk_id, tf[term]), 6)
-        return dict(sorted(out.items(), key=lambda kv: -kv[1]))
-
-    # ------------------------------------------------------------------ persistence
-    def save(self, path: str | Path) -> Path:
-        """Write chunks and their term vectors as JSON (write-then-rename). Postings are rebuilt on load."""
-        path = Path(path)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        payload = {
-            "format": FORMAT_VERSION,
-            "k1": self.k1,
-            "b": self.b,
-            "tokenizer": self.tokenizer.fingerprint,
-            "chunks": [
-                {"chunk": self._chunks[cid].model_dump(mode="json"), "tf": dict(self._tf[cid])}
-                for cid in sorted(self._chunks)
-            ],
-        }
-        tmp = path.with_suffix(path.suffix + ".tmp")
-        tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
-        tmp.replace(path)
-        return path
-
-    @classmethod
-    def load(cls, path: str | Path, *, tokenizer: BM25Tokenizer | None = None) -> "BM25Index":
-        data = json.loads(Path(path).read_text(encoding="utf-8"))
-        if data.get("format") != FORMAT_VERSION:
-            raise ValueError(f"unsupported BM25 index format {data.get('format')!r}")
-        index = cls(k1=float(data["k1"]), b=float(data["b"]), tokenizer=tokenizer)
-        if data["tokenizer"] != index.tokenizer.fingerprint:
-            raise ValueError(
-                f"index was built with tokenizer {data['tokenizer']!r}, loader uses {index.tokenizer.fingerprint!r}"
-            )
-        for row in data["chunks"]:
-            chunk = Chunk.model_validate(row["chunk"])
-            terms = Counter({t: int(n) for t, n in row["tf"].items()})
-            index._chunks[chunk.id] = chunk
-            index._tf[chunk.id] = terms
-            index._length[chunk.id] = sum(terms.values())
-            index._total_length += index._length[chunk.id]
-            index._by_doc.setdefault(chunk.doc_id, set()).add(chunk.id)
-            for term, tf in terms.items():
-                index._postings.setdefault(term, {})[chunk.id] = tf
-        return index
-
-
-__all__ = ["BM25Index", "BM25Tokenizer", "STOPWORDS"]
+        # ... wrap each (cid, score) in a ScoredChunk with signals "bm25" and "bm25_matched_terms"
 ```
+
+`_norm` (on disk) folds simple plurals; `allowed_ids` scans every chunk, which is fine for an in-memory teaching index and is what a real engine replaces with a filter bitmap or posting-list intersection.
 
 ### Dense retrieval over the Project 2 store
 
-`index` groups chunks by document and writes each document with `replace_document`, so a reader never sees two versions of one document. `_search` turns the principal and the document-level filters into a store pre-filter and re-checks every result.
+`index` (on disk) groups chunks by document and writes each document with the store's `replace_document`, so a reader never sees two versions of one document. `_store_filter` (on disk) turns the principal into tenant and group predicates and reduces the document-level filters to an allowed doc-id set, raising if it has no document catalog rather than silently returning nothing. `_search` applies that filter in the store and re-checks every result.
 
 ```python
 # path: book/projects/ragkit/ragkit/retrieval/dense.py (excerpt; full file on disk)
-def index(self, chunks: Iterable[Chunk]) -> int:
-    """Embed and write chunks, one atomic replace per document version."""
-    _, models, _ = _semsearch()
-    by_doc: dict[str, list[Chunk]] = {}
-    for c in chunks:
-        by_doc.setdefault(c.doc_id, []).append(c)
-    written = 0
-    for doc_id, doc_chunks in by_doc.items():
-        versions = {c.version for c in doc_chunks}
-        if len(versions) != 1:
-            raise ValueError(f"chunks of {doc_id} span several versions {sorted(versions)}")
-        vectors: list[list[float]] = []
-        for start in range(0, len(doc_chunks), self.batch_size):
-            batch = doc_chunks[start : start + self.batch_size]
-            vectors.extend(self.embeddings.embed([self.text_of(c) for c in batch]))
-        records = [
-            models.VectorRecord(
-                id=c.id,
-                namespace=self.namespace,
-                tenant=c.tenant or SHARED_TENANT,
-                doc_id=c.doc_id,
-                doc_version=c.version,
-                ordinal=c.position,
-                text=c.text,
-                vector=v,
-                acl_groups=tuple(c.acl_groups),
-                tags=tuple(c.metadata.get("tags") or ()),
-                metadata=_record_metadata(c),
-                embedding_model=self.embeddings.model,
-            )
-            for c, v in zip(doc_chunks, vectors)
-        ]
-        written += self.store.replace_document(self.namespace, doc_id, versions.pop(), records)
-        self._catalog[doc_id] = dict(doc_chunks[0].metadata)
-    return written
-```
-
-```python
-# path: book/projects/ragkit/ragkit/retrieval/dense.py (excerpt; full file on disk)
-def _store_filter(self, principal: Principal, filters: dict[str, Any]) -> Any:
-    _, models, flt = _semsearch()
-    validate_filters(filters)
-    doc_ids: tuple[str, ...] | None = None
-    if filters:
-        if not self._catalog:  # e.g. a fresh process over a persistent store: fail loudly, not empty
-            raise RuntimeError("DenseRetriever has no document catalog for filters; call index() or load() first")
-        # every supported filter is document-level, so it reduces to an allowed doc-id set
-        doc_ids = tuple(
-            sorted(
-                d for d, meta in self._catalog.items()
-                if matches_filters(_probe(d, meta), filters)
-            )
-        )
-    return models.SearchFilter(
-        tenants=flt.visible_tenants(principal.tenant, SHARED_TENANT),
-        acl_groups=tuple(principal.groups),
-        doc_ids=doc_ids,
-    )
-
-def search(self, text: str, principal: Principal, k: int = 10, filters: dict | None = None) -> list[ScoredChunk]:
-    return self._search(text, principal, k, filters)[0]
-
 def _search(self, text: str, principal: Principal, k: int, filters: dict | None) -> tuple[list[ScoredChunk], int]:
     """Returns (hits, dropped) where dropped counts results that failed the final ACL check."""
     if k <= 0:
@@ -735,7 +452,7 @@ def _search(self, text: str, principal: Principal, k: int, filters: dict | None)
 
 ### Fusion
 
-Both fusers keep every input list's rank and score in `signals`; weighted fusion min-max scales each list before summing.
+RRF is a few lines of arithmetic; the rest of the function is bookkeeping that keeps every input list's rank and score in `signals`. `weighted_score_fusion` and `min_max` (on disk) follow the same shape, min-max scaling each list before the weighted sum, and map a list whose scores are all equal to 1.0 rather than dividing by zero.
 
 ```python
 # path: book/projects/ragkit/ragkit/retrieval/hybrid.py (excerpt; full file on disk)
@@ -747,13 +464,7 @@ def reciprocal_rank_fusion(
     limit: int | None = None,
 ) -> list[ScoredChunk]:
     """Fuse ranked lists by sum of w / (k + rank). Ranks are 1-based positions in each list."""
-    if k < 0:
-        raise ValueError("RRF k must be >= 0")
-    w = _check_weights(rankings, weights)
-    fused: dict[str, float] = {}
-    best_rank: dict[str, int] = {}
-    signals: dict[str, dict[str, float]] = {}
-    chunks: dict[str, ScoredChunk] = {}
+    # ...
     for name, ranking in rankings.items():
         seen: set[str] = set()
         for position, hit in enumerate(ranking, start=1):
@@ -769,164 +480,69 @@ def reciprocal_rank_fusion(
             sig[f"{name}_rank"] = float(position)
             sig[f"{name}_score"] = round(hit.score, 6)
     order = sorted(fused, key=lambda cid: (-fused[cid], best_rank[cid], cid))
-    if limit is not None:
-        order = order[:limit]
-    return [
-        ScoredChunk(chunk=chunks[cid].chunk, score=round(fused[cid], 8), stage="fusion", rank=i,
-                    signals={**signals[cid], "rrf": round(fused[cid], 8)})
-        for i, cid in enumerate(order, start=1)
-    ]
-
-
-def min_max(scores: Sequence[float]) -> list[float]:
-    """Scale to [0, 1]. A list whose scores are all equal maps to 1.0: it expresses no preference
-    among its own items, but each item was still retrieved."""
-    if not scores:
-        return []
-    lo, hi = min(scores), max(scores)
-    if hi == lo:
-        return [1.0 for _ in scores]
-    return [(s - lo) / (hi - lo) for s in scores]
-
-
-def weighted_score_fusion(
-    rankings: Mapping[str, Ranking],
-    *,
-    weights: Mapping[str, float] | None = None,
-    limit: int | None = None,
-) -> list[ScoredChunk]:
-    """Weighted sum of per-list min-max normalized scores; a chunk missing from a list gets 0 there."""
-    w = _check_weights(rankings, weights)
-    fused: dict[str, float] = {}
-    signals: dict[str, dict[str, float]] = {}
-    chunks: dict[str, ScoredChunk] = {}
-    for name, ranking in rankings.items():
-        dedup: dict[str, ScoredChunk] = {}
-        for hit in ranking:
-            if hit.chunk.id not in dedup or hit.score > dedup[hit.chunk.id].score:
-                dedup[hit.chunk.id] = hit
-        hits = list(dedup.values())
-        for hit, norm in zip(hits, min_max([h.score for h in hits])):
-            cid = hit.chunk.id
-            chunks.setdefault(cid, hit)
-            fused[cid] = fused.get(cid, 0.0) + w[name] * norm
-            sig = signals.setdefault(cid, {})
-            sig.update({k_: v for k_, v in hit.signals.items() if k_ not in sig})
-            sig[f"{name}_score"] = round(hit.score, 6)
-            sig[f"{name}_norm"] = round(norm, 6)
-    order = sorted(fused, key=lambda cid: (-fused[cid], cid))
-    if limit is not None:
-        order = order[:limit]
-    return [
-        ScoredChunk(chunk=chunks[cid].chunk, score=round(fused[cid], 8), stage="fusion", rank=i,
-                    signals={**signals[cid], "weighted": round(fused[cid], 8)})
-        for i, cid in enumerate(order, start=1)
-    ]
+    # ...
 ```
+
+The sort key matters more than it looks: ties break on the best rank in any list and then on chunk id, so the same inputs always produce the same order, which is what makes traces and evaluation runs reproducible.
 
 ### Rerankers
 
-The LLM reranker is the most instructive of the three because it shows the pattern for any model-in-the-loop stage: untrusted input fenced, output validated by schema, a cheap deterministic tiebreak, and degradation on failure. The cross-encoder's lazy loading and fallback are in the file on disk; the lexical baseline is about twenty lines.
+The LLM reranker is the most instructive of the three because it shows the pattern for any model-in-the-loop stage: untrusted input fenced, output validated by schema, a cheap deterministic tiebreak, and degradation on failure. `_grade` (on disk) calls `complete_structured` with a `GradeBatch` schema, so an out-of-range grade is repaired once or rejected, and a passage the model skipped is marked `llm_missing`. The cross-encoder's lazy loading and fallback are on disk too; the lexical baseline is about twenty lines.
 
 ```python
 # path: book/projects/ragkit/ragkit/retrieval/rerank.py (excerpt; full file on disk)
-class LLMReranker:
-    """Graded relevance from an LLM, batch by batch, combined with the prior rank as a tie-breaker."""
+def build_request(self, question: str, batch: Sequence[ScoredChunk]) -> CompletionRequest:
+    blocks = []
+    for i, c in enumerate(batch, start=1):
+        header = c.chunk.context_header() or c.chunk.doc_id
+        body = c.chunk.text[: self.max_chars]
+        blocks.append(f'<passage id="{i}" source="{c.chunk.doc_id}" title="{header}">\n'
+                      f"<untrusted_data>\n{body}\n</untrusted_data>\n</passage>")
+    user = f"Question: {question}\n\n" + "\n\n".join(blocks) + f"\n\nGrade passages 1 to {len(batch)}."
+    return CompletionRequest(
+        messages=[Message.system(RERANK_SYSTEM), Message.user(user)],
+        model=self.model,
+        temperature=0.0,
+        max_tokens=40 + 16 * len(batch),
+        metadata={"purpose": "rerank", "batch_size": len(batch)},
+    )
 
-    name = "llm"
-
-    def __init__(
-        self,
-        llm: LLMClient,
-        *,
-        batch_size: int = 8,
-        max_chars: int = 1200,
-        model: str | None = None,
-        max_concurrency: int = 4,
-        max_repair_attempts: int = 1,
-    ) -> None:
-        self.llm = llm
-        self.batch_size = batch_size
-        self.max_chars = max_chars
-        self.model = model
-        self.max_concurrency = max_concurrency
-        self.max_repair_attempts = max_repair_attempts
-
-    def build_request(self, question: str, batch: Sequence[ScoredChunk]) -> CompletionRequest:
-        blocks = []
-        for i, c in enumerate(batch, start=1):
-            header = c.chunk.context_header() or c.chunk.doc_id
-            body = c.chunk.text[: self.max_chars]
-            blocks.append(f'<passage id="{i}" source="{c.chunk.doc_id}" title="{header}">\n'
-                          f"<untrusted_data>\n{body}\n</untrusted_data>\n</passage>")
-        user = f"Question: {question}\n\n" + "\n\n".join(blocks) + f"\n\nGrade passages 1 to {len(batch)}."
-        return CompletionRequest(
-            messages=[Message.system(RERANK_SYSTEM), Message.user(user)],
-            model=self.model,
-            temperature=0.0,
-            max_tokens=40 + 16 * len(batch),
-            metadata={"purpose": "rerank", "batch_size": len(batch)},
-        )
-
-    def _grade(self, question: str, batch: Sequence[ScoredChunk]) -> list[float | None]:
-        parsed, _ = complete_structured(self.llm, self.build_request(question, batch), GradeBatch,
-                                        max_repair_attempts=self.max_repair_attempts)
-        assert isinstance(parsed, GradeBatch)
-        grades: dict[int, int] = {}
-        for g in parsed.grades:
-            grades.setdefault(g.id, g.score)  # first grade wins; duplicates are ignored
-        return [float(grades[i]) if i in grades else None for i in range(1, len(batch) + 1)]
-
-    def rerank(self, query: RetrievalQuery, candidates: list[ScoredChunk], k: int) -> list[ScoredChunk]:
-        if not candidates:
-            return []
-        batches = [candidates[i : i + self.batch_size] for i in range(0, len(candidates), self.batch_size)]
-        try:
-            if self.max_concurrency > 1 and len(batches) > 1:
-                with ThreadPoolExecutor(max_workers=min(self.max_concurrency, len(batches))) as pool:
-                    graded = list(pool.map(lambda b: self._grade(query.text, b), batches))
-            else:
-                graded = [self._grade(query.text, b) for b in batches]
-        except LLMError as exc:
-            # Degrade to the incoming order rather than failing the request; the signal makes it visible.
-            log.warning("LLMReranker failed (%s); keeping prior order", exc)
-            return [c.model_copy(update={"stage": "rerank", "rank": i,
-                                         "signals": {**c.signals, "rerank_failed": 1.0}})
-                    for i, c in enumerate(candidates[:k], start=1)]
-        n = len(candidates)
-        out: list[ScoredChunk] = []
-        for batch, grades in zip(batches, graded):
-            for c, g in zip(batch, grades):
-                sig = {**c.signals, "prior_rank": float(c.rank)}
-                if g is None:
-                    sig["llm_missing"] = 1.0
-                sig["llm_grade"] = g if g is not None else 0.0
-                out.append(c.model_copy(update={"score": (g or 0.0) + _prior_bonus(c, n), "signals": sig}))
-        return rerank_list(out, "rerank")[:k]
+def rerank(self, query: RetrievalQuery, candidates: list[ScoredChunk], k: int) -> list[ScoredChunk]:
+    if not candidates:
+        return []
+    batches = [candidates[i : i + self.batch_size] for i in range(0, len(candidates), self.batch_size)]
+    try:
+        if self.max_concurrency > 1 and len(batches) > 1:
+            with ThreadPoolExecutor(max_workers=min(self.max_concurrency, len(batches))) as pool:
+                graded = list(pool.map(lambda b: self._grade(query.text, b), batches))
+        else:
+            graded = [self._grade(query.text, b) for b in batches]
+    except LLMError as exc:
+        # Degrade to the incoming order rather than failing the request; the signal makes it visible.
+        log.warning("LLMReranker failed (%s); keeping prior order", exc)
+        return [c.model_copy(update={"stage": "rerank", "rank": i,
+                                     "signals": {**c.signals, "rerank_failed": 1.0}})
+                for i, c in enumerate(candidates[:k], start=1)]
+    n = len(candidates)
+    out: list[ScoredChunk] = []
+    for batch, grades in zip(batches, graded):
+        for c, g in zip(batch, grades):
+            sig = {**c.signals, "prior_rank": float(c.rank)}
+            if g is None:
+                sig["llm_missing"] = 1.0
+            sig["llm_grade"] = g if g is not None else 0.0
+            out.append(c.model_copy(update={"score": (g or 0.0) + _prior_bonus(c, n), "signals": sig}))
+    return rerank_list(out, "rerank")[:k]
 ```
+
+`_prior_bonus` adds a small amount that decreases with the incoming rank, smaller than one grade step, so it only breaks ties among passages with the same grade.
 
 ### Diversity
 
-`MMRDiversifier` has the `Reranker` shape, `rerank(query, candidates, k)`, so it can run standalone on any ranked list; inside the pipeline it is the `diversifier` argument. The pipeline asks the reranker for `diversify_pool_k` hits instead of `final_k`, records that list as the `rerank` stage, and records MMR's choice as a separate `diversify` stage, so a trace shows exactly which chunk diversity displaced. Chapter 14's stage isolation counts the `diversify` stage as part of the precision stage: a required document it drops is labeled `dropped-by-rerank`. Every selected hit keeps `prior_rank` and adds `mmr_relevance`, `mmr_redundancy`, and `mmr_score` to its signals.
-
-For callers that hold vectors, `ragkit.retrieval.mmr_select(query_vec, candidates, k, lambda_=0.7, min_relevance=None, vectors=..., embeddings=...)` is the embedding-space form, identical to Chapter 8's `embedlab` `mmr`: relevance is cosine to the query vector, redundancy is cosine between candidates, and `min_relevance` is a cosine floor. Pass the vectors the dense retriever already computed, or an `EmbeddingClient` to embed the candidates in one batch. Use it without a reranker, for example on a dense-only path; after a reranker, prefer `MMRDiversifier`, for the reason given in the core-concepts section. Both share the greedy loop below.
+`MMRDiversifier` has the `Reranker` shape, `rerank(query, candidates, k)`, so it can run standalone on any ranked list; inside the pipeline it is the `diversifier` argument. The pipeline records the reranker's pool and MMR's choice as separate `rerank` and `diversify` stages, so a trace shows exactly which chunk diversity displaced, and each selected hit carries `prior_rank`, `mmr_relevance`, `mmr_redundancy`, and `mmr_score`. `normalized_relevance` (on disk) does the rescaling described in Core concepts. For callers that hold vectors and have no reranker, `mmr_select` in `mmr.py` is the embedding-space form, identical to Chapter 8's. Both share the greedy loop:
 
 ```python
 # path: book/projects/ragkit/ragkit/retrieval/diversity.py (excerpt; full file on disk)
-def normalized_relevance(candidates: Sequence[ScoredChunk]) -> list[float]:
-    """Rescale incoming scores to [0, 1]: score / max when none is negative, else min-max."""
-    if not candidates:
-        return []
-    scores = [c.score for c in candidates]
-    lo, hi = min(scores), max(scores)
-    if hi - lo > 1e-12:
-        if lo >= 0.0:
-            return [s / hi for s in scores]
-        return [(s - lo) / (hi - lo) for s in scores]
-    n = len(candidates)
-    return [1.0 - i / n for i in range(n)]  # incoming order is the only signal left
-
-
 def mmr_order(relevance: Sequence[float], similarity: np.ndarray, k: int, lambda_: float,
               min_relevance: float = 0.0) -> list[tuple[int, float, float]]:
     """Greedy MMR. Returns (index, mmr score, redundancy) in selection order."""
@@ -946,7 +562,7 @@ def mmr_order(relevance: Sequence[float], similarity: np.ndarray, k: int, lambda
 
 ### Query transformation
 
-`QueryPlan` is the contract: whatever a transformer does, the original survives and `primary` names the text rerankers judge against.
+`QueryPlan` is the contract: whatever a transformer does, the original survives and `primary` names the text rerankers judge against. The rewriter and HyDE excerpts below show the fallback pattern every transformer follows; `MultiQueryExpander`, `QueryDecomposer`, and `ChainedTransformer` are on disk.
 
 ```python
 # path: book/projects/ragkit/ragkit/retrieval/query.py (excerpt; full file on disk)
@@ -988,23 +604,11 @@ def transform(self, query: RetrievalQuery, history: Sequence[Message] | None = N
 ```python
 # path: book/projects/ragkit/ragkit/retrieval/query.py (excerpt; full file on disk)
 class HyDEGenerator(_LLMTransformer):
-    """Hypothetical Document Embeddings: embed a generated answer-shaped passage, not the question.
-
-    The plan keeps the original question as the only lexical query, so BM25 never searches with
-    invented terms, and the passages are routed to dense retrievers by the pipeline.
-    """
-
-    name = "hyde"
+    # ...
     system = """Write a short passage (2-4 sentences) in the style of an internal policy or runbook
 that would answer the question. Use the vocabulary such a document would use. If you do not know
 specific values, use placeholders like X rather than inventing numbers. Do not mention the question."""
-
-    def __init__(self, llm: LLMClient, *, n: int = 1, max_passage_chars: int = 1200, **kw: Any) -> None:
-        kw.setdefault("max_tokens", 250)
-        super().__init__(llm, **kw)
-        self.n = n
-        self.max_passage_chars = max_passage_chars
-
+    # ...
     def transform(self, query: RetrievalQuery, history: Sequence[Message] | None = None) -> QueryPlan:
         original = _original(query)
         passages: list[str] = []
@@ -1042,27 +646,19 @@ def key(self, doc: Document, chunk: Chunk) -> str:
 
 ### The pipeline
 
-`retrieve` runs the steps from How it works in order and records each stage in the trace.
+`retrieve` runs the steps from How it works in order and records each stage in the trace. The excerpt keeps the control flow and the degradation rules; the stage records, the trace assembly, and the diversify step (same shape as rerank) are on disk.
 
 ```python
 # path: book/projects/ragkit/ragkit/retrieval/pipeline.py (excerpt; full file on disk)
 def retrieve(self, query: RetrievalQuery, history: Sequence[Message] | None = None) -> RetrievalResult:
     validate_filters(query.filters)  # a caller bug, so it raises instead of degrading
     final_k = self.final_k or query.k
-    stages: list[dict[str, Any]] = []
-    latency: dict[str, float] = {}
-    degraded: list[str] = []
+    # ...
     with Stopwatch() as total, self._span("retrieval.pipeline", final_k=final_k):
         # 1. transform
         with Stopwatch() as sw, self._span("retrieval.transform"):
             plan = self.transformer.transform(query, history)
-        latency["transform"] = sw.ms
-        if plan.fallback:
-            degraded.append(f"transform:{plan.strategy}")
-        stages.append({"name": "transform", "kind": "transform", "strategy": plan.strategy,
-                       "queries": plan.queries, "hyde_passages": len(plan.hyde_passages),
-                       "fallback": plan.fallback, "latency_ms": sw.ms})
-
+        # ...
         # 2. first-stage retrieval, all (retriever, text) jobs in parallel, under an optional deadline
         jobs = self._jobs(plan)
         with Stopwatch() as sw:
@@ -1072,16 +668,11 @@ def retrieve(self, query: RetrievalQuery, history: Sequence[Message] | None = No
         degraded.extend(f"retrieve:{r['name']}" for r in records if "error" in r)
         if not ok:
             raise RetrievalError("all retrievers failed: " + "; ".join(r["error"] for r in records))
-        for r in records:
-            stages.append({k: v for k, v in r.items() if k != "hits"})
-
+        # ...
         # 3. fusion
         with Stopwatch() as sw, self._span("retrieval.fusion", lists=len(ok)):
             fused = self._fuse({r["name"]: r["hits"] for r in ok}, limit=self.rerank_k)
-        latency["fusion"] = sw.ms
-        stages.append({"name": "fusion", "kind": "fusion", "method": self.fusion, "k": self.rerank_k,
-                       "candidate_ids": [h.chunk.id for h in fused], "latency_ms": sw.ms})
-
+        # ...
         # 4. rerank, judged against the self-contained question
         rerank_query = query.model_copy(update={"text": plan.primary, "original_text": plan.original_text})
         pool_k = self._pool_k(final_k)
@@ -1093,42 +684,19 @@ def retrieve(self, query: RetrievalQuery, history: Sequence[Message] | None = No
                 except Exception as exc:  # degrade to fused order, including on timeout
                     degraded.append(f"rerank:{type(exc).__name__}")
                     hits = fused[:pool_k]
-            if any(h.signals.get("rerank_failed") or h.signals.get("cross_encoder_fallback") for h in hits):
-                degraded.append("rerank:fallback")
-            latency["rerank"] = sw.ms
-            stages.append({"name": "rerank", "kind": "rerank", "reranker": type(self.reranker).__name__,
-                           "k": pool_k, "candidate_ids": [h.chunk.id for h in hits], "latency_ms": sw.ms})
-
+        # ...
         # 4b. diversify (optional): pick final_k from the pool, trading relevance against redundancy
-        if self.diversifier is not None and hits:
-            with Stopwatch() as sw, self._span("retrieval.diversify", candidates=len(hits)):
-                try:
-                    hits = self.diversifier.rerank(rerank_query, hits, final_k)
-                except Exception as exc:  # degrade to the relevance order
-                    degraded.append(f"diversify:{type(exc).__name__}")
-                    hits = hits[:final_k]
-            latency["diversify"] = sw.ms
-            stages.append({"name": "diversify", "kind": "diversify",
-                           "diversifier": type(self.diversifier).__name__, "pool_k": pool_k, "k": final_k,
-                           "candidate_ids": [h.chunk.id for h in hits], "latency_ms": sw.ms})
+        # ...
         hits = hits[:final_k]
 
         # 5. final authorization check: belt and braces; any violation is a security event
         violations = [h.chunk.id for h in hits if not visible(h.chunk, query.principal)]
         hits = [h for h in hits if visible(h.chunk, query.principal)]
-    latency["total"] = total.ms
-    trace = {
-        "plan": plan.model_dump(),
-        "stages": stages,
-        "k": {"candidate_k": self.candidate_k, "rerank_k": self.rerank_k, "final_k": final_k,
-              **({"diversify_pool_k": pool_k} if self.diversifier is not None else {})},
-        "latency_ms": latency,
-        "degraded": degraded,
-        "acl_violations": violations,
-        "acl_dropped": sum(r.get("acl_dropped", 0) for r in records),
-    }
+    # ...
     return RetrievalResult(query=query, hits=hits, trace=trace)
 ```
+
+The trace holds the plan, one record per stage with its k and candidate ids, latency per stage, the `degraded` list, `acl_violations`, and the total `acl_dropped` from the retrievers' own re-checks.
 
 The deadline lives in `_run_jobs`. `wait` returns when every job is done or the deadline passes, whichever comes first. A job still running is recorded with `timed_out` and the same `error` field as a failed retriever, so fusion, the degraded list, and Chapter 14's stage isolation treat both alike. Each job runs in `contextvars.copy_context()`: tracing context lives in context variables, which a thread pool does not inherit, so without the copy every per-retriever span would start a new trace and the request's trace would lose its retrieval children. A request uses the caller's shared `executor` when one is configured, which is what a service should do, and otherwise a short-lived pool that is shut down without waiting for stragglers.
 
@@ -1159,7 +727,7 @@ A deadline stops the pipeline from waiting; it does not stop the work. Python ca
 
 ### Scoring the gold set
 
-The comparison script builds the offline bench (Chapter 11's 300-token section chunks, BM25, and a dense retriever over `FakeEmbeddings` in vocabulary mode), runs each configuration under each gold question's own principal, and scores at document level. The inversion for `forbidden-doc` questions is the important part.
+The comparison script builds the offline bench (Chapter 11's 300-token section chunks, BM25, and a dense retriever over `FakeEmbeddings` in vocabulary mode), runs each configuration under each gold question's own principal, and scores at document level with the metrics defined in Chapter 10. The inversion for `forbidden-doc` questions is the part worth reading.
 
 ```python
 # path: book/projects/ragkit/ragkit/eval/compare_retrievers.py (excerpt; full file on disk)
@@ -1178,16 +746,7 @@ def score_question(q: GoldQuestion, chunk_docs: Sequence[str], ks: Sequence[int]
         if candidate_docs is not None:
             row["cand_recall"] = 0.0 if any(d in set(candidate_docs) for d in req) else 1.0
         return row
-    for k in ks:
-        hits = [d for d in req if d in ranks and ranks[d] <= k]
-        row[f"hit@{k}"] = 1.0 if hits else 0.0
-        row[f"recall@{k}"] = len(hits) / len(req)
-    row["mrr"] = 1.0 / min(found_any) if found_any else 0.0
-    row["leak"] = 0.0
-    if candidate_docs is not None:
-        cand = set(candidate_docs)
-        row["cand_recall"] = sum(d in cand for d in req) / len(req)
-    return row
+    # ... ordinary questions: hit@k, recall@k, MRR, and cand_recall as defined in Chapter 10
 ```
 
 ## Code walkthrough
@@ -1218,19 +777,17 @@ def score_question(q: GoldQuestion, chunk_docs: Sequence[str], ks: Sequence[int]
 
 **Adding raw BM25 and cosine scores.** The larger scale dominates and the fused order is effectively one retriever's order, sometimes the worse one. Use RRF, or normalize and tune weights on judged data.
 
-**Dense-only retrieval for a corpus full of identifiers.** Ticket numbers, error codes, part numbers, and names are where dense retrieval silently fails. If your users paste identifiers, you need a lexical signal.
-
 **Tuning BM25 parameters before fixing tokenization.** `k1` and `b` move results a little; splitting "INC-2025-1142" into three common tokens moves them a lot.
 
 **Reranking without measuring candidate recall.** A reranker cannot recover evidence that is not in its input. Teams buy a larger reranker to fix what is actually a first-stage recall problem.
 
-**Filtering after retrieval.** Removing forbidden chunks from the top 10 returns fewer results for restricted users, exposes forbidden text to logs and rerankers, and can leave nothing, which looks like missing knowledge.
+**Filtering after retrieval.** Removing forbidden chunks from the top 10 returns fewer results for restricted users, exposes forbidden text to logs and rerankers, and can leave nothing, which looks like missing knowledge (Chapter 15).
 
 **Letting transformations replace the question.** A pipeline that stores only the rewritten query cannot evaluate whether rewriting helped, cannot rerank against what the user asked, and cannot explain a wrong answer. Keep `original_text` everywhere.
 
-**Enabling HyDE or LLM reranking globally.** Both add a model call to every request and help only some query types. Enable them per slice, after evaluation.
+**Enabling HyDE, LLM reranking, or MMR globally.** Each helps only some query types, and the first two add a model call to every request. Enable them per slice, after evaluation.
 
-**Changing index text without a new index version.** A new breadcrumb format, contextual prefixes, or an embedding upgrade applied in place leaves a mixture of old and new representations that no test of the new code catches.
+**Reading a hosted reranker's or embedder's model as fixed.** A provider-side model update changes rankings with no deploy on your side. Pin a version where possible and run the gold set on a schedule, not only on your own changes.
 
 ## Failure modes
 
@@ -1252,7 +809,7 @@ def score_question(q: GoldQuestion, chunk_docs: Sequence[str], ks: Sequence[int]
 
 **Diversity starves the answer.** MMR with a low λ, or without a relevance floor, replaces the second copy of the right answer with an unrelated chunk, and single-fact questions lose a supporting citation or abstain. Signal: hits whose `mmr_relevance` is low and whose `prior_rank` is deep in the pool; `exact-fact` metrics drop while `multi-hop` ones rise. Fix: raise λ, set `min_relevance`, shrink `diversify_pool_k`, or enable diversity only for slices that need it.
 
-**Stale contextual index.** Contextual prefixes were regenerated with a new prompt, but the indexer compared chunk ids, saw no change, and skipped re-embedding. Signal: `context_key` in metadata differs from the key recorded in the index. Fix: include the context key and index-text fingerprint in the indexing decision.
+**Stale or mixed index.** Index text changed (a new breadcrumb format, regenerated contextual prefixes, an embedding upgrade) but was applied in place, or the indexer compared chunk ids, saw no change, and skipped re-embedding. The index now mixes old and new representations, and no test of the new code catches it. Signal: `context_key` in metadata differs from the key recorded in the index; scores shift for some documents and not others. Fix: include the context key and index-text fingerprint in the indexing decision, and build a new index version for any change to index text (Chapter 9).
 
 ## Tradeoffs
 
@@ -1262,7 +819,9 @@ def score_question(q: GoldQuestion, chunk_docs: Sequence[str], ks: Sequence[int]
 | Dense | paraphrase, conceptual questions | identifiers, numbers, negation, out-of-domain jargon | query embedding; vector index; re-embedding on model change |
 | RRF fusion | retrievers fail differently; no labeled data | one retriever is much stronger on all queries | negligible |
 | Weighted fusion | labeled data exists; one retriever's confidence is informative | weights go stale; min-max outliers | tuning and re-tuning |
+| Learned sparse (SPLADE-style) | paraphrase tolerance inside an inverted index; one sparse system instead of two | identifiers the model's vocabulary fragments; domain shift | model call per chunk and per query; larger postings |
 | Cross-encoder rerank | relevant evidence present but misordered | candidate recall is the real problem; very long chunks | tens to hundreds of ms per query; a model to serve |
+| Hosted rerank or embedding API | small team, moderate volume, multilingual needs | data may not leave; tight p95; high volume | per-call price; network tail latency; provider-side model changes |
 | LLM rerank | nuanced relevance, instructions about authority or recency | strict latency budgets; untrusted-text exposure | one LLM call per batch; tokens per candidate |
 | Conversational rewrite | follow-up questions with references | standalone questions (adds latency for nothing) | one small model call |
 | Multi-query | vocabulary mismatch; short questions | precise questions (more distractors) | one model call plus more first-stage jobs |
@@ -1276,7 +835,7 @@ The general rule is to add a stage when the gold set shows a failure class it fi
 
 ## Evaluation and testing
 
-Retrieval is evaluated without any generation. The comparison script runs the four standard configurations on the 40 gold questions, each under its own principal, and reports document-level metrics over the top-k chunks. The three `forbidden-doc` questions are scored inverted: they count as hits only if no chunk of the restricted document appears, and any appearance is also counted under `leaks`. Here is the offline run with the lexical reranker (dense is the vocabulary-mode fake described above; numbers are illustrative of mechanisms, not of any production model):
+Retrieval is evaluated without any generation. The comparison script runs the four standard configurations on the 40 gold questions, each under its own principal, and reports document-level metrics over the top-k chunks (hit@k, recall@k, and MRR as defined in Chapter 10). The three `forbidden-doc` questions are scored inverted: they count as hits only if no chunk of the restricted document appears, and any appearance is also counted under `leaks`. Here is the offline run with the lexical reranker (dense is the vocabulary-mode fake described above; numbers are illustrative of mechanisms, not of any production model):
 
 | config | hit@1 | hit@3 | recall@5 | MRR | cand_recall | leaks | p50 ms |
 |---|---|---|---|---|---|---|---|
@@ -1293,18 +852,35 @@ Read it the way you would read a production report:
 4. The lexical reranker does not earn its place here. It reaches the same candidates (`cand_recall` 1.0) and then undoes dense's paraphrase wins, because a term-overlap reranker has the same blind spot as BM25. That is the reranker evaluation working as intended: a baseline that fixes the Chapter 10 distractor in the naive setup can still be a net loss on the full gold set, and only measurement tells you.
 5. Most remaining top-1 misses are FAQ documents (the HR FAQ, the IT FAQ) outranking the authoritative policy or runbook, including the conflicting-version questions. Those FAQs are genuinely relevant; relevance ranking cannot know that a newer policy supersedes them. That failure belongs to version metadata and evidence handling (Chapters 13 and 15), not to a better retriever. Chapter 14 calls this attribution of a failure to its stage *stage isolation*.
 
-The 78 tests split into four layers:
+The tests split into four layers:
 
 - **Math**: BM25 against the formula, RRF against hand-computed values, min-max edges, deterministic tie-breaking.
 - **Properties that must always hold**: forbidden chunks never scored or returned by id lookups, tenant isolation, unknown filters raising, atomic version replacement, persistence and fingerprint checks, `original_text` preserved.
 - **Behavior on the shared corpus**: the identifier, distractor, parent, and contextual cases above.
 - **The pipeline**: trace contents, HyDE routing, degradation, deadlines on a hung retriever and a slow reranker, a shared executor, span parentage across the thread pool, settings, and forbidden-doc at every stage.
 
-The MMR stage's tests (included in the 78) cover the near-copy swap at λ = 0.5, λ = 1 as identity, the relevance floor, cosine similarity, embedding-space `mmr_select`, and the traced pool and degradation. All run offline in about a second with `FakeLLM` and `FakeEmbeddings`.
+The MMR stage's tests cover the near-copy swap at λ = 0.5, λ = 1 as identity, the relevance floor, cosine similarity, embedding-space `mmr_select`, and the traced pool and degradation. All run offline in about a second with `FakeLLM` and `FakeEmbeddings`.
 
-In production, replay the gold set against every configuration change and report per-slice metrics, candidate recall next to final metrics, p95 latency per stage, and leaks. Add real user queries to the gold set as they arrive, especially the ones that failed: identifier lookups, follow-ups, and questions with no answer in the corpus. Chapter 14 turns this into the general evaluation harness, with nDCG (a ranking metric that rewards graded relevance near the top), judged relevance grades, and a stage-isolation report built from the traces this pipeline records.
+In production, replay the gold set against every configuration change and report per-slice metrics, candidate recall next to final metrics, p95 latency per stage, and leaks. Add real user queries to the gold set as they arrive, especially the ones that failed: identifier lookups, follow-ups, and questions with no answer in the corpus. Chapter 14 turns this into the general evaluation harness, with nDCG (defined in Chapter 10), judged relevance grades, and a stage-isolation report built from the traces this pipeline records.
+
+## Before you ship
+
+- [ ] The gold set runs under each question's own principal, has `exact-id`, `paraphrase`, `multi-hop`, and `forbidden-doc` slices, and reports zero leaks at every stage's candidate ids, not only the final list.
+- [ ] Every first-stage retriever enforces tenant and ACL predicates before scoring, and id lookups (`get_chunks`) take the principal; a test with a deliberately leaky retriever shows `acl_violations` catching it.
+- [ ] An unknown filter key raises in a test, and a chunk missing filter metadata fails closed.
+- [ ] The BM25 tokenizer keeps identifiers whole, the same normalization runs at index and query time, and loading an index with a different tokenizer fingerprint fails.
+- [ ] Fusion is RRF, or weighted fusion with weights tuned on a current gold set and a scheduled re-tune.
+- [ ] The chosen reranker beats the lexical baseline per slice, not only overall, and `cross_encoder_fallback` and `rerank_failed` rates are alerted on.
+- [ ] `candidate_k`, `rerank_k`, and `final_k` come from a measured recall-versus-k curve and a reranker latency measurement at p95 under load; `ef_search` (or iterative scanning) supports `candidate_k`.
+- [ ] `retrieve_timeout_s` and `rerank_timeout_s` are set from the stage budget, clients have their own timeouts, and a test with a hung retriever shows the degraded path.
+- [ ] HyDE, LLM reranking, multi-query, and MMR are off on the hot path unless a slice's evaluation shows a gain, and each enabled one is scoped to that slice.
+- [ ] Index text changes (tokenizer, embedding model, chunker, breadcrumb, contextual prompt version) produce a new index version that is evaluated before reads switch.
+- [ ] Traces record per-stage candidate ids, k values, latencies, the transformation strategy and fallback flag, and the degraded list; traces hold chunk ids, never chunk text.
+- [ ] Alerts exist for `acl_violations` above zero, the degraded-stage rate, and the zero-candidates-after-filtering rate.
 
 ## Exercises
+
+**Start here:** K2, K6, E1, P2, D2 (about 4 hours). The rest go deeper.
 
 ### Knowledge questions
 
@@ -1320,6 +896,8 @@ In production, replay the gold set against every configuration change and report
 
 **K6.** What is the difference between candidate recall and final recall, and what does it mean when candidate recall is 0.95 and final recall at 5 is 0.70?
 
+**K7.** How does a learned sparse retriever (SPLADE-style) differ from BM25 in what it stores and how it scores? Name one query type where you would expect it to beat BM25 and one where it may lose.
+
 ### Engineering questions
 
 **E1.** Northwind adds a ticket corpus of two million support tickets to the existing documents. Propose `candidate_k`, `rerank_k`, and `final_k` values and a reranker choice for a 400 ms p95 retrieval budget, and describe the measurement you would run to validate each number.
@@ -1332,13 +910,13 @@ In production, replay the gold set against every configuration change and report
 
 ### Practical exercises
 
-**P1.** Add a `FieldWeightedBM25Index` (BM25F-style) that indexes the breadcrumb and the body as separate fields with configurable weights. Show on the gold set whether weighting the breadcrumb higher improves hit@1, and add a test that fails if field weights are ignored.
+**P1.** (about 3 hours) Add a `FieldWeightedBM25Index` (BM25F-style) that indexes the breadcrumb and the body as separate fields with configurable weights. Show on the gold set whether weighting the breadcrumb higher improves hit@1, and add a test that fails if field weights are ignored.
 
-**P2.** Implement a `funnel_sweep` command in the comparison script that reports, for `candidate_k` in {10, 30, 100} and `rerank_k` in {5, 10, 20, 40}, candidate recall, final MRR, and p50 and p95 latency. Run it with an artificially slowed reranker (a fixed delay per candidate) and recommend a configuration for a given latency budget.
+**P2.** (about 2 hours) Implement a `funnel_sweep` command in the comparison script that reports, for `candidate_k` in {10, 30, 100} and `rerank_k` in {5, 10, 20, 40}, candidate recall, final MRR, and p50 and p95 latency. Run it with an artificially slowed reranker (a fixed delay per candidate) and recommend a configuration for a given latency budget.
 
-**P3.** Add a freshness-aware reranker wrapper that, among candidates whose documents share tags and disagree in version, boosts the most recently updated one by a configurable amount. Show its effect on the `conflicting-versions` slice and on every other slice.
+**P3.** (about 2 hours) Add a freshness-aware reranker wrapper that, among candidates whose documents share tags and disagree in version, boosts the most recently updated one by a configurable amount. Show its effect on the `conflicting-versions` slice and on every other slice.
 
-**P4.** Implement a cheap "needs rewriting" classifier (rules or a small model) that skips `QueryRewriter` for standalone questions. Measure how many rewriter calls it saves on a synthetic conversation set and whether retrieval quality on follow-ups is unchanged.
+**P4.** (about 3 hours) Implement a cheap "needs rewriting" classifier (rules or a small model) that skips `QueryRewriter` for standalone questions. Measure how many rewriter calls it saves on a synthetic conversation set and whether retrieval quality on follow-ups is unchanged.
 
 ### Debugging exercises
 
@@ -1359,3 +937,12 @@ In production, replay the gold set against every configuration change and report
 - Query transformations (rewriting, multi-query, decomposition, HyDE) are lossy; keep the original question, trace every search text, fall back on failure, and enable each only where evaluation shows a gain.
 - Contextual retrieval and parent-document retrieval change what is indexed and what is returned; both need index versioning and evaluation, and contextual enrichment needs a content-hash cache to be affordable.
 - Record per-stage candidate ids, k values, and latencies in every trace: that record turns "retrieval is bad" into "stage X lost the evidence", and it is what Chapter 14's stage isolation runs on.
+
+## Further reading
+
+- *The Probabilistic Relevance Framework: BM25 and Beyond* (Robertson and Zaragoza, 2009): the standard account of BM25, including where idf, saturation, and length normalization come from and the BM25F field-weighted variant used in P1.
+- *Reciprocal Rank Fusion Outperforms Condorcet and Individual Rank Learning Methods* (Cormack, Clarke, and Büttcher, 2009): the short paper behind RRF and the k = 60 default.
+- *Passage Re-ranking with BERT* (Nogueira and Cho, 2019): the cross-encoder reranking baseline, and a clear picture of why reading query and passage together beats separate encodings.
+- *BEIR: A Heterogeneous Benchmark for Zero-shot Evaluation of Information Retrieval Models* (Thakur et al., 2021): evidence that BM25 stays a strong baseline out of domain, the argument for keeping a lexical signal.
+- *Precise Zero-Shot Dense Retrieval without Relevance Labels* (Gao et al., 2023): the HyDE paper; read it with this chapter's caveats about the model's prior.
+- *Introducing Contextual Retrieval* (Anthropic, 2024): an engineering write-up of contextual chunk prefixes combined with hybrid retrieval and reranking.

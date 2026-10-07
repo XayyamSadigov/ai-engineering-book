@@ -122,6 +122,15 @@ be authorization, least privilege, and egress control that block the effect rega
    and passes in CI against the current controls, and the incident owner signs off. If any allowed egress
    was found, the incident escalates to a data-breach process, and the tool stays off.
 
+**E6.** A strong answer combines several patterns and keeps the gateway checks underneath all of them.
+
+- **Map-reduce for reading and filing.** Each email is summarized and classified by an isolated call with no tools and a schema-constrained output (category, urgency, customer id as a validated field, a bounded summary). An injected email can at worst mislabel or mis-summarize itself; it cannot reach other emails or trigger a tool. Cost: no reasoning across emails in that step; thread-level context has to be assembled by code.
+- **Dual LLM for replies.** The privileged model, which sees only the support agent's request and symbolic references such as `$EMAIL_7_SUMMARY`, decides to draft a reply and to whom; the quarantined model writes the draft body from the email content. Code substitutes values only when rendering the draft and filling `send_reply` arguments. Injection cannot choose a recipient or add a send step. Cost: the privileged model cannot make decisions that depend on email content (for example "reply only if the customer is angry"), so such rules move to code over the structured fields.
+- **Context minimization.** Raw email bodies are dropped once summarized; the reply step sees the summary and the ticket, not the original HTML with its hidden text. Cost: occasional loss of detail the reply needed.
+- **Plan-then-execute or an action selector** is a reasonable alternative for the filing path if the actions are a small fixed set.
+
+Gateway checks that remain: the recipient of `send_reply` must be the email's verified sender or on an allowlist, derived by code from message headers rather than from any model output; approval bound to the concrete recipient and body for anything outside the normal reply flow; authorization of ticket and customer lookups against the support agent's scope; output handling that strips links and images from drafts. The draft body is still untrusted content when it leaves, so egress checks on links apply. A weak answer picks one pattern and claims injection is solved.
+
 ## Practical exercises
 
 **P1.** Expected implementation: add a `Variant` member (for example `ZERO_WIDTH` or `RTL_OVERRIDE`) and a
@@ -176,7 +185,7 @@ the user's authorization context), a cached answer built from one user's documen
 user asking a similar question. Confirm by logging the cache-key inputs and checking whether tenant and
 the user's entitlement hash are present; their absence is the root cause. Fix per E2.
 
-**D3.** This is memory poisoning (the memory-quality threat from Module 10's advanced note). The false
+**D3.** This is memory poisoning (see Memory poisoning in the chapter; Chapter 21 owns write policies). The false
 claim most plausibly entered as follows: an injected ticket or document asserted that logistics refunds
 are pre-approved; the agent, lacking a write policy, summarized that assertion into long-term memory as a
 fact; later tasks retrieved the memory and treated it as authoritative, so behavior changed with no code

@@ -263,7 +263,7 @@ sequenceDiagram
     R->>GW: request pinned to the chosen alias
     GW-->>R: completion after retries, llm.complete span
     R-->>V: completion, route decision recorded
-    V->>V: parse and validate; on failure, repair through the router again
+    V->>V: parse and validate, on failure repair through the router again
     V-->>App: GroundedAnswer
     Note over App,GW: one trace: prompt version, context manifest, route decision, model calls
 ```

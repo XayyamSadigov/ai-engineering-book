@@ -1,0 +1,5940 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="A complete textbook and field guide for building production LLM applications.">
+      
+      
+      
+        <link rel="canonical" href="https://xayyamsadigov.github.io/ai-engineering-book/00-learning-roadmap/">
+      
+      
+        <link rel="prev" href="..">
+      
+      
+        <link rel="next" href="../chapters/01-what-ai-engineering-is/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>Learning roadmap - AI Engineering</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="deep-orange">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#learning-roadmap" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="AI Engineering" class="md-header__button md-logo" aria-label="AI Engineering" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            AI Engineering
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Learning roadmap
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="deep-orange"  aria-label="Dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="deep-orange"  aria-label="Light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/XayyamSadigov/ai-engineering-book" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    XayyamSadigov/ai-engineering-book
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="AI Engineering" class="md-nav__button md-logo" aria-label="AI Engineering" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    AI Engineering
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/XayyamSadigov/ai-engineering-book" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    XayyamSadigov/ai-engineering-book
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Learning roadmap
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Learning roadmap
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#1-how-the-book-is-organized" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. How the book is organized
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="1. How the book is organized">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#dependency-graph-between-parts" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Dependency graph between parts
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#prerequisites-per-part" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Prerequisites per part
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-the-study-method" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. The study method
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3-how-to-use-exercises-and-solutions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. How to use exercises/ and solutions/
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4-the-full-path-16-weeks-at-6-8-hours-per-week" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. The full path: 16 weeks at 6-8 hours per week
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#5-the-accelerated-path-8-weeks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5. The accelerated path: 8 weeks
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#6-role-based-paths" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6. Role-based paths
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="6. Role-based paths">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#backend-engineer-adding-ai-features-to-an-existing-product" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Backend engineer adding AI features to an existing product
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#engineer-joining-a-rag-or-search-team" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Engineer joining a RAG or search team
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#engineer-building-agents-or-automation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Engineer building agents or automation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#platform-or-sre-engineer-running-ai-services" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Platform or SRE engineer running AI services
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#7-graduation-criteria-and-capstone-acceptance" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7. Graduation criteria and capstone acceptance
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="7. Graduation criteria and capstone acceptance">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#capstone-acceptance-checklist" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Capstone acceptance checklist
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    I. AI Engineering Foundations
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    I. AI Engineering Foundations
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../chapters/01-what-ai-engineering-is/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 1 — What AI Engineering Is
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../chapters/02-how-llms-work-for-engineers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 2 — How LLMs Work, for Engineers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../chapters/03-working-with-llm-apis/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 3 — Working with LLM APIs
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    II. LLM Application Development
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    II. LLM Application Development
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../chapters/04-prompt-engineering/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 4 — Prompt Engineering as Engineering
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../chapters/05-context-engineering/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 5 — Context Engineering
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../chapters/06-structured-output-and-extraction/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 6 — Structured Output and Extraction
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../chapters/07-model-selection-and-routing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 7 — Model Selection and Routing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    III. Embeddings and Retrieval
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    III. Embeddings and Retrieval
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../chapters/08-embeddings/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 8 — Embeddings
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../chapters/09-vector-search-and-vector-databases/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 9 — Vector Search and Vector Databases
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    IV. Production RAG
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    IV. Production RAG
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../chapters/10-rag-fundamentals/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 10 — RAG Fundamentals
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../chapters/11-ingestion-and-chunking/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 11 — Ingestion and Chunking
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../chapters/12-retrieval-engineering/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 12 — Retrieval Engineering
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../chapters/13-grounded-generation-and-citations/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 13 — Grounded Generation and Citations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../chapters/14-rag-evaluation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 14 — RAG Evaluation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../chapters/15-production-rag/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 15 — Production RAG
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_7" >
+        
+          
+          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    V. Tools and Workflows
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    V. Tools and Workflows
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../chapters/16-tool-calling/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 16 — Tool Calling
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../chapters/17-ai-workflows-and-orchestration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 17 — AI Workflows and Orchestration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../chapters/18-mcp-and-tool-ecosystems/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 18 — MCP and Tool Ecosystems
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_8" >
+        
+          
+          <label class="md-nav__link" for="__nav_8" id="__nav_8_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    VI. Agents
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_8">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    VI. Agents
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../chapters/19-the-agent-loop/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 19 — The Agent Loop
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../chapters/20-agent-architectures/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 20 — Agent Architectures
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../chapters/21-memory-systems/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 21 — Memory Systems
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../chapters/22-multi-agent-systems/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 22 — Multi-Agent Systems
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../chapters/23-frameworks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 23 — Frameworks
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_9" >
+        
+          
+          <label class="md-nav__link" for="__nav_9" id="__nav_9_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    VII. Evaluation
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_9_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_9">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    VII. Evaluation
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../chapters/24-evaluation-fundamentals/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 24 — Evaluation Fundamentals
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../chapters/25-evaluating-ai-systems-in-practice/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 25 — Evaluating AI Systems in Practice
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_10" >
+        
+          
+          <label class="md-nav__link" for="__nav_10" id="__nav_10_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    VIII. Security and Guardrails
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_10_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_10">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    VIII. Security and Guardrails
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../chapters/26-threat-modeling-and-prompt-injection/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 26 — Threat Modeling and Prompt Injection
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../chapters/27-guardrails-and-safe-tooling/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 27 — Guardrails and Safe Tooling
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_11" >
+        
+          
+          <label class="md-nav__link" for="__nav_11" id="__nav_11_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    IX. Production AI Engineering
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_11_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_11">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    IX. Production AI Engineering
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../chapters/28-ai-application-architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 28 — AI Application Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../chapters/29-reliability-and-scalability/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 29 — Reliability and Scalability
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../chapters/30-performance-and-cost-engineering/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 30 — Performance and Cost Engineering
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../chapters/31-observability/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 31 — Observability for AI Systems
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../chapters/32-engineering-practices/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 32 — Engineering Practices for AI Systems
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../chapters/33-fine-tuning-for-engineers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 33 — Fine-Tuning for Engineers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../chapters/34-inference-and-serving-essentials/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 34 — Inference and Serving Essentials
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_12" >
+        
+          
+          <label class="md-nav__link" for="__nav_12" id="__nav_12_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    X. AI System Design
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_12_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_12">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    X. AI System Design
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../chapters/35-system-design-method-and-cases-1/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 35 — System Design Method and Cases I
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../chapters/36-system-design-cases-2/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 36 — System Design Cases II
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_13" >
+        
+          
+          <label class="md-nav__link" for="__nav_13" id="__nav_13_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    XI. Advanced Patterns
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_13_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_13">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    XI. Advanced Patterns
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../chapters/37-advanced-retrieval-patterns/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 37 — Advanced Retrieval Patterns
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../chapters/38-durable-and-long-running-agents/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 38 — Durable and Long-Running Agents
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_14" >
+        
+          
+          <label class="md-nav__link" for="__nav_14" id="__nav_14_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    XII. Capstone
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_14_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_14">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    XII. Capstone
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../chapters/39-capstone/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 39 — Capstone: Northwind Assist
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_15" >
+        
+          
+          <label class="md-nav__link" for="__nav_15" id="__nav_15_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Exercises
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_15_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_15">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Exercises
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../exercises/ch01-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 1
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../exercises/ch02-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 2
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../exercises/ch03-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 3
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../exercises/ch04-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 4
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../exercises/ch05-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 5
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../exercises/ch06-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 6
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../exercises/ch07-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 7
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../exercises/ch08-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 8
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../exercises/ch09-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 9
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../exercises/ch10-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 10
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../exercises/ch11-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 11
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../exercises/ch12-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 12
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../exercises/ch13-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 13
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../exercises/ch14-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 14
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../exercises/ch15-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 15
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../exercises/ch16-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 16
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../exercises/ch17-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 17
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../exercises/ch18-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 18
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../exercises/ch19-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 19
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../exercises/ch20-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 20
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../exercises/ch21-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 21
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../exercises/ch22-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 22
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../exercises/ch23-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 23
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../exercises/ch24-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 24
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../exercises/ch25-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 25
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../exercises/ch26-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 26
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../exercises/ch27-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 27
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../exercises/ch28-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 28
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../exercises/ch29-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 29
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../exercises/ch30-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 30
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../exercises/ch31-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 31
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../exercises/ch32-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 32
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../exercises/ch33-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 33
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../exercises/ch34-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 34
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../exercises/ch35-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 35
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../exercises/ch36-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 36
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../exercises/ch37-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 37
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../exercises/ch38-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 38
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../exercises/ch39-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 39
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_16" >
+        
+          
+          <label class="md-nav__link" for="__nav_16" id="__nav_16_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Solutions
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_16_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_16">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Solutions
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../solutions/ch01-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 1
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../solutions/ch02-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 2
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../solutions/ch03-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 3
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../solutions/ch04-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 4
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../solutions/ch05-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 5
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../solutions/ch06-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 6
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../solutions/ch07-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 7
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../solutions/ch08-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 8
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../solutions/ch09-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 9
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../solutions/ch10-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 10
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../solutions/ch11-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 11
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../solutions/ch12-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 12
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../solutions/ch13-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 13
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../solutions/ch14-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 14
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../solutions/ch15-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 15
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../solutions/ch16-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 16
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../solutions/ch17-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 17
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../solutions/ch18-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 18
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../solutions/ch19-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 19
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../solutions/ch20-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 20
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../solutions/ch21-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 21
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../solutions/ch22-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 22
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../solutions/ch23-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 23
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../solutions/ch24-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 24
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../solutions/ch25-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 25
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../solutions/ch26-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 26
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../solutions/ch27-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 27
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../solutions/ch28-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 28
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../solutions/ch29-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 29
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../solutions/ch30-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 30
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../solutions/ch31-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 31
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../solutions/ch32-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 32
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../solutions/ch33-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 33
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../solutions/ch34-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 34
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../solutions/ch35-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 35
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../solutions/ch36-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 36
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../solutions/ch37-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 37
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../solutions/ch38-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 38
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../solutions/ch39-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 39
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_17" >
+        
+          
+          <label class="md-nav__link" for="__nav_17" id="__nav_17_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Appendix
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_17_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_17">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Appendix
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../appendix-c-interview-preparation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Appendix — Interview preparation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../glossary/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Glossary
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../references/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    References
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../coverage-matrix/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Coverage matrix
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#1-how-the-book-is-organized" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. How the book is organized
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="1. How the book is organized">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#dependency-graph-between-parts" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Dependency graph between parts
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#prerequisites-per-part" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Prerequisites per part
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-the-study-method" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. The study method
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3-how-to-use-exercises-and-solutions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. How to use exercises/ and solutions/
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4-the-full-path-16-weeks-at-6-8-hours-per-week" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. The full path: 16 weeks at 6-8 hours per week
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#5-the-accelerated-path-8-weeks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5. The accelerated path: 8 weeks
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#6-role-based-paths" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6. Role-based paths
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="6. Role-based paths">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#backend-engineer-adding-ai-features-to-an-existing-product" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Backend engineer adding AI features to an existing product
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#engineer-joining-a-rag-or-search-team" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Engineer joining a RAG or search team
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#engineer-building-agents-or-automation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Engineer building agents or automation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#platform-or-sre-engineer-running-ai-services" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Platform or SRE engineer running AI services
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#7-graduation-criteria-and-capstone-acceptance" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7. Graduation criteria and capstone acceptance
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="7. Graduation criteria and capstone acceptance">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#capstone-acceptance-checklist" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Capstone acceptance checklist
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="learning-roadmap">Learning Roadmap<a class="headerlink" href="#learning-roadmap" title="Permanent link">&para;</a></h1>
+<p>This book is written for a strong software engineer who is new to AI engineering. Most of its value
+is in the code you type and the tests you run, not in the pages you read. This roadmap explains how
+the material is organized, which parts depend on which, how to study it, and which path to take given
+your time and your job. It ends with the graduation criteria and the capstone acceptance checklist, so
+you know from day one what "done" means.</p>
+<h2 id="1-how-the-book-is-organized">1. How the book is organized<a class="headerlink" href="#1-how-the-book-is-organized" title="Permanent link">&para;</a></h2>
+<p>Thirty-nine chapters in twelve parts, all following one template (why it matters, mental model,
+concepts, mechanism, architecture, implementation, production considerations, failure modes,
+evaluation, exercises, key takeaways); the system-design chapters replace the middle with the
+ten-step method per case, and the capstone with a build log. Implementation chapters write real code under <code>book/projects/</code>,
+and all of it depends on one shared library, <code>aie_core</code>, built in Chapter 3. The running example is
+Northwind Assist, an internal assistant for a fictional 4,000-person company with two tenants,
+<code>retail</code> and <code>logistics</code>. Each project adds one capability to it; the capstone assembles them.</p>
+<table>
+<thead>
+<tr>
+<th>Part</th>
+<th>Chapters</th>
+<th>Theme</th>
+<th>Project</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>I. Foundations</td>
+<td>1-3</td>
+<td>What the discipline is, how LLMs behave, the <code>aie_core</code> client and gateway</td>
+<td><code>aie_core</code> library</td>
+</tr>
+<tr>
+<td>II. Application development</td>
+<td>4-7</td>
+<td>Prompts as contracts, context budgets, structured output, model routing</td>
+<td>P1: structured extraction API (Ch 6)</td>
+</tr>
+<tr>
+<td>III. Embeddings and retrieval</td>
+<td>8-9</td>
+<td>Embedding math, vector search, pgvector</td>
+<td>P2: semantic search system (Ch 9)</td>
+</tr>
+<tr>
+<td>IV. Production RAG</td>
+<td>10-15</td>
+<td>Ingestion, retrieval engineering, grounding, RAG evaluation, production RAG</td>
+<td>P3: production RAG assistant (Ch 15)</td>
+</tr>
+<tr>
+<td>V. Tools and workflows</td>
+<td>16-18</td>
+<td>Tool calling, workflow orchestration, MCP</td>
+<td>P4: tool-using support assistant (Ch 16)</td>
+</tr>
+<tr>
+<td>VI. Agents</td>
+<td>19-23</td>
+<td>Agent loop, architectures, memory, multi-agent, frameworks</td>
+<td>P5: incident-research agent (Ch 20); P6: multi-agent research (Ch 22)</td>
+</tr>
+<tr>
+<td>VII. Evaluation</td>
+<td>24-25</td>
+<td><code>evalkit</code>, judges, statistics, task evaluators, CI gates</td>
+<td>retrofit onto P1, P3, P5</td>
+</tr>
+<tr>
+<td>VIII. Security</td>
+<td>26-27</td>
+<td>Threat modeling, prompt injection, guardrails, safe tooling</td>
+<td>adversarial suite for P3 and P4</td>
+</tr>
+<tr>
+<td>IX. Production engineering</td>
+<td>28-34</td>
+<td>Architecture, reliability, cost, observability, practices, fine-tuning, serving</td>
+<td>primitives wired into P3 and P4</td>
+</tr>
+<tr>
+<td>X. System design</td>
+<td>35-36</td>
+<td>The 10-step method and nine worked cases, each mapped to the packages above</td>
+<td>design drills; <code>back_of_envelope.py</code> sizing, <code>sql_guard.py</code></td>
+</tr>
+<tr>
+<td>XI. Advanced patterns</td>
+<td>37-38</td>
+<td>Advanced retrieval, durable and long-running agents</td>
+<td>optional extensions</td>
+</tr>
+<tr>
+<td>XII. Capstone</td>
+<td>39</td>
+<td>Northwind Assist as one production-grade system</td>
+<td>capstone in <code>book/capstone/</code></td>
+</tr>
+</tbody>
+</table>
+<p>Four projects are parts of the capstone: P1 is its extraction endpoint, P2 and P3 its retrieval
+stack, and P4 its tool layer with approvals, run by the Chapter 19 agent loop. P5 and P6 are agent
+systems you build to learn architecture and multi-agent trade-offs; the capstone deliberately does
+not embed them, and Chapter 39 explains how either would plug in as one more route. Parts VII through
+IX add evaluation, security, and production wiring to the projects rather than new ones. Skip P1 to
+P4 and the capstone has a hole in it.</p>
+<h3 id="dependency-graph-between-parts">Dependency graph between parts<a class="headerlink" href="#dependency-graph-between-parts" title="Permanent link">&para;</a></h3>
+<pre class="mermaid"><code>flowchart TD
+  P1["Part I Foundations (Ch 1-3)"] --&gt; P2["Part II Application dev (Ch 4-7)"]
+  P2 --&gt; P3["Part III Embeddings and retrieval (Ch 8-9)"]
+  P3 --&gt; P4["Part IV Production RAG (Ch 10-15)"]
+  P2 --&gt; P5["Part V Tools and workflows (Ch 16-18)"]
+  P5 --&gt; P6["Part VI Agents (Ch 19-23)"]
+  P4 --&gt; P7["Part VII Evaluation (Ch 24-25)"]
+  P6 --&gt; P7
+  P4 --&gt; P8["Part VIII Security (Ch 26-27)"]
+  P6 --&gt; P8
+  P7 --&gt; P9["Part IX Production engineering (Ch 28-34)"]
+  P8 --&gt; P9
+  P9 --&gt; P10["Part X System design (Ch 35-36)"]
+  P4 --&gt; P11["Part XI Advanced patterns (Ch 37-38)"]
+  P6 --&gt; P11
+  P10 --&gt; P12["Part XII Capstone (Ch 39)"]
+  P11 -.optional.-&gt; P12</code></pre>
+<p>Parts III-IV (retrieval) and Parts V-VI (tools and agents) are independent branches after Part II; a
+reader who needs agents but not RAG can take the right branch first. Parts VII and VIII need both
+branches because evaluation and security are taught against the RAG assistant and the tool-using
+agent, not in the abstract.</p>
+<h3 id="prerequisites-per-part">Prerequisites per part<a class="headerlink" href="#prerequisites-per-part" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Part</th>
+<th>You need before starting</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>I</td>
+<td>Python 3.11 with type hints, <code>pytest</code>, HTTP basics, Docker. No ML background.</td>
+</tr>
+<tr>
+<td>II</td>
+<td><code>aie_core</code> installed and its tests passing (Ch 3). pydantic v2 basics.</td>
+</tr>
+<tr>
+<td>III</td>
+<td>Ch 2 (tokens, context window), Ch 3. Comfort with NumPy arrays. PostgreSQL available locally or via Compose; the NumPy fallback works without it.</td>
+</tr>
+<tr>
+<td>IV</td>
+<td>All of Part III. P2 running.</td>
+</tr>
+<tr>
+<td>V</td>
+<td>Ch 3 (tool-calling protocol), Ch 4, Ch 6 (schemas and validation).</td>
+</tr>
+<tr>
+<td>VI</td>
+<td>All of Part V; P4 running. Ch 5 for context compaction.</td>
+</tr>
+<tr>
+<td>VII</td>
+<td>P3 and P5 running, because the evaluators are tested against them. Basic statistics (mean, variance, confidence interval).</td>
+</tr>
+<tr>
+<td>VIII</td>
+<td>P3 and P4 running. Ch 16 side-effect classes.</td>
+</tr>
+<tr>
+<td>IX</td>
+<td>Parts VII and VIII. Familiarity with OpenTelemetry concepts helps for Ch 31 but is taught.</td>
+</tr>
+<tr>
+<td>X</td>
+<td>Parts I-IX. The cases assume you can estimate from Ch 30 and Ch 34.</td>
+</tr>
+<tr>
+<td>XI</td>
+<td>Part IV for Ch 37; Part VI for Ch 38.</td>
+</tr>
+<tr>
+<td>XII</td>
+<td>Everything, and all six projects passing their tests.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="2-the-study-method">2. The study method<a class="headerlink" href="#2-the-study-method" title="Permanent link">&para;</a></h2>
+<p>Reading alone produces people who can name techniques and cannot ship them. Use this loop for every
+implementation chapter.</p>
+<ol>
+<li><strong>Read the chapter once without touching the keyboard.</strong> Start with the "You will be able to" list
+   under the title, so you know what you are reading for. Note the mental-model callouts and the
+   failure-modes section.</li>
+<li><strong>Read the code on disk, then type the core.</strong> Listings in the chapters are excerpts of the parts
+   that carry the idea; the first-line comment names the full file. Open it, read it end to end, and
+   type the excerpted functions yourself instead of pasting. The places where you hesitate are the
+   places you do not yet understand.</li>
+<li><strong>Run the tests.</strong> Every project passes <code>pytest</code> offline with <code>FakeLLM</code> and <code>FakeEmbeddings</code>. Fix
+   failures before continuing. Then point <code>LLM_PROVIDER</code> at a real provider and run the
+   <code>@pytest.mark.integration</code> tests once, so you see real behavior at least one time.</li>
+<li><strong>Break it.</strong> Violate one invariant the chapter claims: remove the retry jitter, set the chunk size
+   to 50 tokens, drop the ACL filter, lower the agent step budget to 2. Watch the telemetry. This is
+   the fastest way to learn what each piece is for.</li>
+<li><strong>Do the core exercises first.</strong> Each chapter's exercises open with a "Start here" line naming
+   four or five core exercises and the time they take; practical exercises carry their own time
+   estimate. Include the D-exercises: a broken system or a trace that you diagnose. They are the
+   exercises that most resemble the job.</li>
+<li><strong>Write the recall note.</strong> Close the book and write from memory: five concepts, one mechanism (an
+   equation, a data flow, or a state machine), one production trade-off, one failure mode, and one
+   situation where you would not use the technique. If you cannot fill all five lines, reread. Keep the
+   notes in one file; they become your interview preparation (the interview appendix).</li>
+</ol>
+<p>Two parts of each chapter are built for later use rather than first reading. <strong>Before you ship</strong>
+(Chapters 3 to 34, 37 and 38) is a checklist to run against your own system before a launch, and
+<strong>Further reading</strong> points to the primary sources behind the chapter. Come back to both when you
+build the real thing.</p>
+<p>A recall note for Chapter 12, as an illustration of the expected length:</p>
+<blockquote>
+<p><strong>Concepts:</strong> BM25, dense retrieval, reciprocal rank fusion, cross-encoder reranking, query rewriting.
+<strong>Mechanism:</strong> RRF score = sum over lists of 1 / (k + rank), k around 60, so a document ranked first in one list and tenth in another beats one ranked fifth in both.
+<strong>Trade-off:</strong> rerankers raise precision at the top of the list at the cost of one extra model call per query, typically the largest single latency item in the retrieval budget.
+<strong>Failure mode:</strong> HyDE on a question whose answer the model does not know produces a confident, wrong hypothetical document and pulls in confident, wrong evidence.
+<strong>Do not use:</strong> hybrid retrieval when the corpus is a few hundred short FAQs; exact dense search plus a filter is enough and has fewer moving parts.</p>
+</blockquote>
+<p>Budget the week as roughly one third reading, one half typing and testing, and the rest breaking,
+debugging, and the recall note. If you have read two chapters in a row without running code, stop and
+go back.</p>
+<h2 id="3-how-to-use-exercises-and-solutions">3. How to use <code>exercises/</code> and <code>solutions/</code><a class="headerlink" href="#3-how-to-use-exercises-and-solutions" title="Permanent link">&para;</a></h2>
+<p>Each chapter's exercises are repeated in <code>book/exercises/chNN-exercises.md</code>; answers are in
+<code>book/solutions/chNN-solutions.md</code> under the same identifiers.</p>
+<ul>
+<li><strong>K (knowledge).</strong> A paragraph each. Write your answer before reading the solution.</li>
+<li><strong>E (engineering).</strong> Design decisions. The solution gives a defensible answer and the dimensions that
+  decide it. A different conclusion that names the same dimensions with a stated reason is also good.</li>
+<li><strong>P (practical).</strong> Code on top of the chapter's project. The solution states the expected
+  implementation and acceptance criteria (tests that must pass, metrics that must move). Write the
+  tests from the criteria first, then implement.</li>
+<li><strong>D (debugging).</strong> A described failure, often with a trace excerpt. The solution names the root cause
+  and the telemetry that reveals it. Before reading it, write down the three spans or attributes you
+  would inspect first; the diagnostic path is the point.</li>
+</ul>
+<p>A chapter is finished when its K and E answers are written, at least two P exercises pass their
+acceptance criteria, and every D exercise has a written diagnosis.</p>
+<h2 id="4-the-full-path-16-weeks-at-6-8-hours-per-week">4. The full path: 16 weeks at 6-8 hours per week<a class="headerlink" href="#4-the-full-path-16-weeks-at-6-8-hours-per-week" title="Permanent link">&para;</a></h2>
+<p>The path for an engineer who wants the whole discipline. Every week has a project milestone or a
+wiring task, and from week 13 on each chapter's artifact goes straight into the capstone tree, so week
+16 is acceptance testing rather than assembly. If a week overruns, protect the milestone and let the
+reading slip; the next week builds on the code, not the prose.</p>
+<table>
+<thead>
+<tr>
+<th>Week</th>
+<th>Chapters</th>
+<th>Project milestone</th>
+<th>You can now...</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td>1, 2</td>
+<td>Repo set up; tokenizer cost and sampling experiments run</td>
+<td>Explain why decode is sequential and prefill is not, estimate tokens and cost for a prompt, predict lost-in-the-middle effects.</td>
+</tr>
+<tr>
+<td>2</td>
+<td>3</td>
+<td><code>aie_core</code> built; tests pass offline; one integration run against a real provider</td>
+<td>Call any provider through one interface with retries, timeouts, streaming, structured output, and cost accounting, and fake it in tests.</td>
+</tr>
+<tr>
+<td>3</td>
+<td>4, 5</td>
+<td><code>PromptRegistry</code> with golden tests; <code>ContextBuilder</code> with token budget and compaction</td>
+<td>Treat a prompt as a versioned contract with a regression suite; pack a context window on a budget with a stable prefix and source labels.</td>
+</tr>
+<tr>
+<td>4</td>
+<td>6, 7</td>
+<td><strong>P1 complete</strong>: extraction API with validation, repair loop, review queue, Dockerfile; <code>Router</code> with cascade evaluation</td>
+<td>Ship a structured-output service that never returns unvalidated JSON; choose a model by evaluation, not leaderboard.</td>
+</tr>
+<tr>
+<td>5</td>
+<td>8, 9</td>
+<td><strong>P2 complete</strong>: semantic search over Northwind documents, pgvector with NumPy fallback, recall@k report</td>
+<td>Compute, compare, and store embeddings; decide between brute force, pgvector, and a dedicated store; measure recall before claiming search works.</td>
+</tr>
+<tr>
+<td>6</td>
+<td>10, 11, 12</td>
+<td>Minimal RAG in under 200 lines; chunker comparison; <code>BM25Index</code>, <code>HybridRetriever</code>, <code>Reranker</code></td>
+<td>Build the whole RAG pipeline from parts you wrote; name the stage behind each naive-RAG failure mode.</td>
+</tr>
+<tr>
+<td>7</td>
+<td>13, 14</td>
+<td><code>GroundedGenerator</code> with citation validation and abstention; <code>rag_eval</code> gold set and stage-isolation report</td>
+<td>Produce cite-or-abstain answers, and say which stage lost the evidence when an answer is wrong.</td>
+</tr>
+<tr>
+<td>8</td>
+<td>15</td>
+<td><strong>P3 complete</strong>: ingestion worker, hybrid retrieval, reranking, ACL filter, tracing, Compose, evaluation suite</td>
+<td>Run RAG under tenants and permissions, with incremental indexing, correct cache keys, and a freshness SLO.</td>
+</tr>
+<tr>
+<td>9</td>
+<td>16, 17</td>
+<td><strong>P4 complete</strong>: <code>ToolRegistry</code>, <code>ToolPolicy</code>, idempotency, approval binding, injection test; plain-Python workflow engine</td>
+<td>Let a model propose actions that your code authorizes; choose between workflow and agent from a decision table.</td>
+</tr>
+<tr>
+<td>10</td>
+<td>18, 19</td>
+<td>Small MCP server and client; <code>AgentRuntime</code> with typed state, event log, budgets, termination, replay</td>
+<td>Expose tools over MCP with scoped credentials; run a bounded agent loop you can replay from its event log.</td>
+</tr>
+<tr>
+<td>11</td>
+<td>20, 21</td>
+<td><strong>P5 complete</strong>: incident-research agent with planner, evaluator-optimizer loop, Definition of Done, trajectory tests; memory stores with TTL and provenance</td>
+<td>Pick an agent architecture by failure modes and cost profile; add memory that can be deleted, scoped, and audited.</td>
+</tr>
+<tr>
+<td>12</td>
+<td>22, 23, 38 (read)</td>
+<td><strong>P6 complete</strong>: parallel workers, verifier, supervisor with budgets, compared against the single-agent baseline</td>
+<td>Justify or reject a multi-agent design with numbers; map any framework's abstractions to primitives you built.</td>
+</tr>
+<tr>
+<td>13</td>
+<td>24, 25, 37 (read)</td>
+<td><code>evalkit</code> core; judges calibrated against a human-labeled sample; CI eval gate on P1, P3, P5</td>
+<td>Build golden and synthetic datasets; run a calibrated judge with position randomization; block a release on a metric.</td>
+</tr>
+<tr>
+<td>14</td>
+<td>26, 27</td>
+<td>Threat models for P3 and P4; <code>guardrails</code> package; adversarial suite with indirect injection, exfiltration, tenant-leak tests</td>
+<td>Threat-model an AI system by trust boundaries and defend it with controls outside the prompt.</td>
+</tr>
+<tr>
+<td>15</td>
+<td>28, 29, 30, 31, 34 (read)</td>
+<td>Reliability primitives, <code>CostModel</code>, latency budget tracker, OTel tracing wired into P3 and P4; capstone tree scaffolded</td>
+<td>Draw the reference architecture, set per-stage budgets, estimate capacity with Little's Law, debug a regression from traces.</td>
+</tr>
+<tr>
+<td>16</td>
+<td>32, 33 (read), 35, 36, 39</td>
+<td><strong>Capstone acceptance</strong>: Compose up, release gate green, checklist in section 7 passed; two design cases answered aloud</td>
+<td>Design, build, measure, secure, and explain a production AI system end to end.</td>
+</tr>
+</tbody>
+</table>
+<p>Chapters 33, 34, 37, and 38 are depth chapters, scheduled as reading next to the chapter they extend.
+Implement their code when a real need appears; the capstone does not require it.</p>
+<h2 id="5-the-accelerated-path-8-weeks">5. The accelerated path: 8 weeks<a class="headerlink" href="#5-the-accelerated-path-8-weeks" title="Permanent link">&para;</a></h2>
+<p><strong>First-reading path.</strong> Every chapter opens with a <strong>First reading</strong> line that names the sections to
+read first; the rest are marked <strong>Deep dive</strong> where they start. The first-reading sections are about
+half of each chapter and are enough for the chapter's "Start here" exercises. Both paths below can use
+them: read the first-reading sections on the first pass, do the core exercises, and return to the deep
+dives when a project or a production problem needs them.</p>
+<p>For engineers who already call LLM APIs in production and have shipped at least one prompt-based
+feature. You skip the conceptual on-ramp but not the projects, because the projects are where the
+production habits form.</p>
+<table>
+<thead>
+<tr>
+<th>Week</th>
+<th>Chapters</th>
+<th>Milestone</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td>2 (sections on KV cache, sampling, limits), 3 (read the public API; type the gateway and the structured helper), 4, 5</td>
+<td><code>aie_core</code> tests pass; <code>PromptRegistry</code> and <code>ContextBuilder</code> done</td>
+</tr>
+<tr>
+<td>2</td>
+<td>6, 7, 8, 9</td>
+<td>P1 and P2 complete</td>
+</tr>
+<tr>
+<td>3</td>
+<td>10, 11, 12, 13</td>
+<td>Hybrid retrieval, reranker, grounded generator</td>
+</tr>
+<tr>
+<td>4</td>
+<td>14, 15</td>
+<td>P3 complete with stage-isolation report</td>
+</tr>
+<tr>
+<td>5</td>
+<td>16, 17, 19</td>
+<td>P4 complete; <code>AgentRuntime</code> with replay</td>
+</tr>
+<tr>
+<td>6</td>
+<td>20, 21, 22 (read 18 and 23)</td>
+<td>P5 complete; P6 if time allows</td>
+</tr>
+<tr>
+<td>7</td>
+<td>24, 25, 26, 27</td>
+<td>Eval gate and adversarial suite on P3 and P4</td>
+</tr>
+<tr>
+<td>8</td>
+<td>28, 29, 30, 31, 32, 35</td>
+<td>Reduced capstone: P3 + P4 + gateway + gate + tracing behind one API</td>
+</tr>
+</tbody>
+</table>
+<p>Skip entirely on this path: Chapters 1, 33, 34, 36, 37, 38. Come back to 34 before you self-host, to
+33 before you fine-tune, and to 36-38 when you have time. Do not skip Chapter 14 or Chapter 24; the most
+common gap in engineers who already use LLM APIs is that they have never measured anything.</p>
+<h2 id="6-role-based-paths">6. Role-based paths<a class="headerlink" href="#6-role-based-paths" title="Permanent link">&para;</a></h2>
+<p>Each path lists chapters in reading order and names what to skip. Every path includes Chapter 3,
+because all the code depends on <code>aie_core</code>, and Chapter 24, because every role needs to measure.</p>
+<h3 id="backend-engineer-adding-ai-features-to-an-existing-product">Backend engineer adding AI features to an existing product<a class="headerlink" href="#backend-engineer-adding-ai-features-to-an-existing-product" title="Permanent link">&para;</a></h3>
+<p>Typical work: extraction, classification, a drafting or summarization endpoint, one tool-using
+assistant behind an existing API.</p>
+<p>Read in order: 1 (skim), 2, 3, 4, 5, 6 (build P1), 7, 16 (build P4), 17, 24, 25, 27, 28, 29, 30, 31,
+32. Add 10 as a one-chapter overview of RAG so you recognize when a feature needs it.</p>
+<p>Skip: 8-9, 11-15 (unless the feature is search), 18-23, 26 (read only the injection catalogue), 33-38.
+Chapters 35-36 are optional; the document-processing and support-copilot cases are the useful ones.</p>
+<h3 id="engineer-joining-a-rag-or-search-team">Engineer joining a RAG or search team<a class="headerlink" href="#engineer-joining-a-rag-or-search-team" title="Permanent link">&para;</a></h3>
+<p>Typical work: ingestion, retrieval quality, evaluation, permissions, freshness.</p>
+<p>Read in order: 2 (tokens and context window), 3, 5, 8, 9 (build P2), 10, 11, 12, 13, 14, 15 (build P3),
+24, 25, 26 (index poisoning, exfiltration through documents), 27 (tenant isolation), 30 (caching
+layers), 31, 37. Add 6 if your pipeline extracts metadata with a model.</p>
+<p>Skip: 4 beyond the prompt-registry section, 7, 16-23, 28-29 (read the architecture diagrams only),
+32-34, 38. Chapter 35's enterprise knowledge assistant case is required reading for this role.</p>
+<h3 id="engineer-building-agents-or-automation">Engineer building agents or automation<a class="headerlink" href="#engineer-building-agents-or-automation" title="Permanent link">&para;</a></h3>
+<p>Typical work: tool-using assistants, workflow automation, long-running tasks with approvals.</p>
+<p>Read in order: 2, 3, 4, 5, 6 (schemas for tool arguments), 16 (build P4), 17, 18, 19, 20 (build P5), 21,
+22 (build P6), 23, 24, 25 (agent evaluation), 26, 27, 29 (idempotency, partial failure), 31 (trajectory
+views), 38. Add 10 and 12 as overviews if your agents retrieve.</p>
+<p>Skip: 8-9, 11, 13-15, 30 (read the cost-per-task section), 32-34, 37. Chapter 36's workflow-automation
+and research-agent cases are required for this role.</p>
+<h3 id="platform-or-sre-engineer-running-ai-services">Platform or SRE engineer running AI services<a class="headerlink" href="#platform-or-sre-engineer-running-ai-services" title="Permanent link">&para;</a></h3>
+<p>Typical work: model gateway, serving, quotas, observability, incident response for AI features that
+other teams build.</p>
+<p>Read in order: 1, 2 (prefill and decode, KV cache), 3 (the gateway is your product), 7 (routing and
+fallbacks), 15 (production sections: indexing workers, caching, degraded modes), 16 (sandboxing, side
+effects), 19 (budgets and termination), 26, 27, 28, 29, 30, 31, 32, 34, 35, 36 (the serving platform
+and evaluation platform sketches).</p>
+<p>Skip: 4-6, 8-14, 17-18, 20-23, 33 (read the deployment and rollback section), 37-38. Build the
+reliability primitives from Chapter 29 and the <code>CostModel</code> from Chapter 30 in full; the rest you can
+read.</p>
+<h2 id="7-graduation-criteria-and-capstone-acceptance">7. Graduation criteria and capstone acceptance<a class="headerlink" href="#7-graduation-criteria-and-capstone-acceptance" title="Permanent link">&para;</a></h2>
+<p>The graduation standard is practical. You are done when you can build the systems, measure them,
+secure them, and explain them. Not one of the four, all four.</p>
+<p><strong>You must be able to build:</strong></p>
+<ul>
+<li>a provider-neutral gateway with retries, timeouts, fallbacks, caching, and cost accounting;</li>
+<li>a structured-extraction service whose output is always schema-valid or routed to a human;</li>
+<li>a RAG system with hybrid retrieval, reranking, ACL filtering, and cite-or-abstain generation;</li>
+<li>a tool-using agent whose permissions, budgets, idempotency, and approvals are enforced by code;</li>
+<li>an evaluation pipeline with a golden set, calibrated judges, and a release gate in CI;</li>
+<li>the observability to replay any request from its trace.</li>
+</ul>
+<p><strong>You must be able to measure:</strong></p>
+<ul>
+<li>recall@k, MRR, and nDCG on a gold set you built, and the stage that lost the evidence;</li>
+<li>groundedness and citation precision with a judge whose agreement with humans you checked;</li>
+<li>task completion, tool correctness, and step efficiency for an agent from its event log;</li>
+<li>p50/p95 time-to-first-token and completion latency per stage against a written budget;</li>
+<li>cost per successful task including retries, reranking, tools, and human review;</li>
+<li>the false-positive rate and bypass rate of each guardrail.</li>
+</ul>
+<p><strong>You must be able to secure:</strong></p>
+<ul>
+<li>a written threat model with trust boundaries for both a RAG assistant and a tool-using agent;</li>
+<li>ACL filtering before retrieval, with a test that proves zero cross-tenant leakage;</li>
+<li>tool policy with allowlists, argument constraints, and approval bound to concrete arguments;</li>
+<li>an adversarial suite with direct and indirect injection, exfiltration via URLs, and memory poisoning;</li>
+<li>redaction of PII before the model and in logs, and secrets that never appear in code or traces.</li>
+</ul>
+<p><strong>You must be able to explain</strong>, in the layered form the interview appendix teaches:</p>
+<ul>
+<li>why decode is memory-bandwidth-bound and what that implies for batching and latency;</li>
+<li>why prompt injection is an authorization problem, not a prompt-writing problem;</li>
+<li>when a workflow beats an agent and when retrieval beats fine-tuning, with the deciding dimensions;</li>
+<li>how you would debug a quality regression from traces, by stage and by version diff;</li>
+<li>a complete system design for one Part X case, with SLOs, capacity, and failure modes.</li>
+</ul>
+<h3 id="capstone-acceptance-checklist">Capstone acceptance checklist<a class="headerlink" href="#capstone-acceptance-checklist" title="Permanent link">&para;</a></h3>
+<p>The capstone (Chapter 39) is Northwind Assist as one deployable system. "It answers my demo questions"
+is not acceptance. Every item is a test, a report, or a document in <code>book/capstone/northwind-assist/</code>,
+and the README's "Acceptance checklist mapped to evidence" table names the test or file for each one.</p>
+<p><strong>Build and run</strong></p>
+<ul>
+<li>[ ] <code>docker compose up</code> starts API, UI, worker, PostgreSQL with pgvector, Redis, and the trace collector.</li>
+<li>[ ] <code>pytest</code> passes offline; integration tests (Chapter 39, practical exercise P2) pass against one real provider.</li>
+<li>[ ] CI pipeline runs lint, type check, unit tests, and the evaluation gate, blocks the merge when a threshold fails, and has seen the gate fail on a deliberately broken configuration.</li>
+<li>[ ] Run book covers start, stop, reindex, rotate secrets, roll back a prompt version, and degraded modes.</li>
+</ul>
+<p><strong>Retrieval and grounding</strong></p>
+<ul>
+<li>[ ] Gold set of at least 100 questions with required sources, permission context, and tags.</li>
+<li>[ ] Retrieval report shows recall@k and MRR per configuration and the stage-isolation breakdown.</li>
+<li>[ ] Every answer cites evidence IDs that exist and support the claim, or abstains; citation validator has tests.</li>
+<li>[ ] Incremental indexing with versions and deletion that propagates to index and caches.</li>
+</ul>
+<p><strong>Permissions and tenancy</strong></p>
+<ul>
+<li>[ ] JWT auth with tenant and group claims; ACL filter applied at retrieval, never after generation.</li>
+<li>[ ] A cross-tenant leakage test suite runs in CI with zero leaks across <code>retail</code> and <code>logistics</code>.</li>
+<li>[ ] Cache keys include tenant and permission scope; a test proves a cached answer cannot cross tenants.</li>
+</ul>
+<p><strong>Tools and agents</strong></p>
+<ul>
+<li>[ ] Typed tools with JSON Schema, argument validation outside the model, side-effect classes recorded.</li>
+<li>[ ] <code>send_reply</code> requires approval bound to the exact arguments; changing arguments invalidates approval; an approval whose requester context is lost fails closed.</li>
+<li>[ ] Idempotency keys for every write; a duplicate-suppression test.</li>
+<li>[ ] Agent step, token, and time budgets enforced; termination conditions tested; event log replayable.</li>
+</ul>
+<p><strong>Security</strong></p>
+<ul>
+<li>[ ] Written threat model with trust boundaries diagram.</li>
+<li>[ ] Adversarial suite: direct injection, indirect injection via a document, exfiltration via markdown image URL, memory poisoning attempt; each either blocked or detected and logged.</li>
+<li>[ ] PII redaction before the model and in traces, with tests.</li>
+</ul>
+<p><strong>Evaluation and operations</strong></p>
+<ul>
+<li>[ ] Groundedness judge with its agreement against a human-labeled sample reported; a judge below your agreement bar is reported, not used for quality decisions.</li>
+<li>[ ] Release gate thresholds for retrieval recall, groundedness, citation precision, tool correctness, and injection block rate.</li>
+<li>[ ] OpenTelemetry traces with spans for router, retrieval, rerank, model, tool, validator, and agent step, carrying prompt version, model, tokens, cost, cache hits, evidence IDs, and policy results.</li>
+<li>[ ] Latency report: p50 and p95 time-to-first-token and completion per stage against the budget (illustrative targets: p95 TTFT under 2 s, p95 completion under 8 s).</li>
+<li>[ ] Cost report: cost per successful answer and per tenant, with an alert threshold.</li>
+<li>[ ] Alert rules as code (page on user-visible SLO breaches and any cross-tenant event, ticket on drift), with a test that healthy traffic fires none and an injected fault fires the right one.</li>
+<li>[ ] At least one documented failure analysis: what broke, which span showed it, what changed, how the gate now catches it.</li>
+</ul>
+<p>When every box is checked, you have the skill set this book is meant to build. Then read the interview appendix
+and practice saying it out loud.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+    
+      
+      <nav class="md-footer__inner md-grid" aria-label="Footer" >
+        
+          
+          <a href=".." class="md-footer__link md-footer__link--prev" aria-label="Previous: Home">
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+            </div>
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Previous
+              </span>
+              <div class="md-ellipsis">
+                Home
+              </div>
+            </div>
+          </a>
+        
+        
+          
+          <a href="../chapters/01-what-ai-engineering-is/" class="md-footer__link md-footer__link--next" aria-label="Next: Chapter 1 — What AI Engineering Is">
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Next
+              </span>
+              <div class="md-ellipsis">
+                Chapter 1 — What AI Engineering Is
+              </div>
+            </div>
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11z"/></svg>
+            </div>
+          </a>
+        
+      </nav>
+    
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+    <div class="md-copyright__highlight">
+      Text CC BY 4.0 · Code MIT
+    </div>
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.sections", "navigation.footer", "navigation.top", "navigation.indexes", "search.suggest", "search.highlight", "content.code.copy", "toc.follow"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>

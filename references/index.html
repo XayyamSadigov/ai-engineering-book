@@ -1,0 +1,6062 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="A complete textbook and field guide for building production LLM applications.">
+      
+      
+      
+        <link rel="canonical" href="https://xayyamsadigov.github.io/ai-engineering-book/references/">
+      
+      
+        <link rel="prev" href="../glossary/">
+      
+      
+        <link rel="next" href="../coverage-matrix/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>References - AI Engineering</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="deep-orange">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#references-and-further-reading" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="AI Engineering" class="md-header__button md-logo" aria-label="AI Engineering" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            AI Engineering
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              References
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="deep-orange"  aria-label="Dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="deep-orange"  aria-label="Light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/XayyamSadigov/ai-engineering-book" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    XayyamSadigov/ai-engineering-book
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="AI Engineering" class="md-nav__button md-logo" aria-label="AI Engineering" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    AI Engineering
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/XayyamSadigov/ai-engineering-book" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    XayyamSadigov/ai-engineering-book
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../00-learning-roadmap/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Learning roadmap
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    I. AI Engineering Foundations
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    I. AI Engineering Foundations
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../chapters/01-what-ai-engineering-is/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 1 — What AI Engineering Is
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../chapters/02-how-llms-work-for-engineers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 2 — How LLMs Work, for Engineers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../chapters/03-working-with-llm-apis/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 3 — Working with LLM APIs
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    II. LLM Application Development
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    II. LLM Application Development
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../chapters/04-prompt-engineering/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 4 — Prompt Engineering as Engineering
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../chapters/05-context-engineering/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 5 — Context Engineering
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../chapters/06-structured-output-and-extraction/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 6 — Structured Output and Extraction
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../chapters/07-model-selection-and-routing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 7 — Model Selection and Routing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    III. Embeddings and Retrieval
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    III. Embeddings and Retrieval
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../chapters/08-embeddings/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 8 — Embeddings
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../chapters/09-vector-search-and-vector-databases/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 9 — Vector Search and Vector Databases
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    IV. Production RAG
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    IV. Production RAG
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../chapters/10-rag-fundamentals/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 10 — RAG Fundamentals
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../chapters/11-ingestion-and-chunking/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 11 — Ingestion and Chunking
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../chapters/12-retrieval-engineering/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 12 — Retrieval Engineering
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../chapters/13-grounded-generation-and-citations/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 13 — Grounded Generation and Citations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../chapters/14-rag-evaluation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 14 — RAG Evaluation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../chapters/15-production-rag/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 15 — Production RAG
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_7" >
+        
+          
+          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    V. Tools and Workflows
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    V. Tools and Workflows
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../chapters/16-tool-calling/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 16 — Tool Calling
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../chapters/17-ai-workflows-and-orchestration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 17 — AI Workflows and Orchestration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../chapters/18-mcp-and-tool-ecosystems/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 18 — MCP and Tool Ecosystems
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_8" >
+        
+          
+          <label class="md-nav__link" for="__nav_8" id="__nav_8_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    VI. Agents
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_8">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    VI. Agents
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../chapters/19-the-agent-loop/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 19 — The Agent Loop
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../chapters/20-agent-architectures/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 20 — Agent Architectures
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../chapters/21-memory-systems/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 21 — Memory Systems
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../chapters/22-multi-agent-systems/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 22 — Multi-Agent Systems
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../chapters/23-frameworks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 23 — Frameworks
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_9" >
+        
+          
+          <label class="md-nav__link" for="__nav_9" id="__nav_9_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    VII. Evaluation
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_9_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_9">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    VII. Evaluation
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../chapters/24-evaluation-fundamentals/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 24 — Evaluation Fundamentals
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../chapters/25-evaluating-ai-systems-in-practice/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 25 — Evaluating AI Systems in Practice
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_10" >
+        
+          
+          <label class="md-nav__link" for="__nav_10" id="__nav_10_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    VIII. Security and Guardrails
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_10_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_10">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    VIII. Security and Guardrails
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../chapters/26-threat-modeling-and-prompt-injection/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 26 — Threat Modeling and Prompt Injection
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../chapters/27-guardrails-and-safe-tooling/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 27 — Guardrails and Safe Tooling
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_11" >
+        
+          
+          <label class="md-nav__link" for="__nav_11" id="__nav_11_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    IX. Production AI Engineering
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_11_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_11">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    IX. Production AI Engineering
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../chapters/28-ai-application-architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 28 — AI Application Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../chapters/29-reliability-and-scalability/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 29 — Reliability and Scalability
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../chapters/30-performance-and-cost-engineering/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 30 — Performance and Cost Engineering
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../chapters/31-observability/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 31 — Observability for AI Systems
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../chapters/32-engineering-practices/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 32 — Engineering Practices for AI Systems
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../chapters/33-fine-tuning-for-engineers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 33 — Fine-Tuning for Engineers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../chapters/34-inference-and-serving-essentials/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 34 — Inference and Serving Essentials
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_12" >
+        
+          
+          <label class="md-nav__link" for="__nav_12" id="__nav_12_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    X. AI System Design
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_12_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_12">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    X. AI System Design
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../chapters/35-system-design-method-and-cases-1/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 35 — System Design Method and Cases I
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../chapters/36-system-design-cases-2/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 36 — System Design Cases II
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_13" >
+        
+          
+          <label class="md-nav__link" for="__nav_13" id="__nav_13_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    XI. Advanced Patterns
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_13_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_13">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    XI. Advanced Patterns
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../chapters/37-advanced-retrieval-patterns/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 37 — Advanced Retrieval Patterns
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../chapters/38-durable-and-long-running-agents/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 38 — Durable and Long-Running Agents
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_14" >
+        
+          
+          <label class="md-nav__link" for="__nav_14" id="__nav_14_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    XII. Capstone
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_14_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_14">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    XII. Capstone
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../chapters/39-capstone/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 39 — Capstone: Northwind Assist
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_15" >
+        
+          
+          <label class="md-nav__link" for="__nav_15" id="__nav_15_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Exercises
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_15_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_15">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Exercises
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../exercises/ch01-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 1
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../exercises/ch02-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 2
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../exercises/ch03-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 3
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../exercises/ch04-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 4
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../exercises/ch05-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 5
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../exercises/ch06-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 6
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../exercises/ch07-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 7
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../exercises/ch08-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 8
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../exercises/ch09-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 9
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../exercises/ch10-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 10
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../exercises/ch11-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 11
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../exercises/ch12-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 12
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../exercises/ch13-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 13
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../exercises/ch14-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 14
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../exercises/ch15-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 15
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../exercises/ch16-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 16
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../exercises/ch17-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 17
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../exercises/ch18-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 18
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../exercises/ch19-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 19
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../exercises/ch20-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 20
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../exercises/ch21-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 21
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../exercises/ch22-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 22
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../exercises/ch23-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 23
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../exercises/ch24-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 24
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../exercises/ch25-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 25
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../exercises/ch26-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 26
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../exercises/ch27-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 27
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../exercises/ch28-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 28
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../exercises/ch29-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 29
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../exercises/ch30-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 30
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../exercises/ch31-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 31
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../exercises/ch32-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 32
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../exercises/ch33-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 33
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../exercises/ch34-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 34
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../exercises/ch35-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 35
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../exercises/ch36-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 36
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../exercises/ch37-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 37
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../exercises/ch38-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 38
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../exercises/ch39-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 39
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_16" >
+        
+          
+          <label class="md-nav__link" for="__nav_16" id="__nav_16_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Solutions
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_16_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_16">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Solutions
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../solutions/ch01-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 1
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../solutions/ch02-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 2
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../solutions/ch03-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 3
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../solutions/ch04-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 4
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../solutions/ch05-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 5
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../solutions/ch06-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 6
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../solutions/ch07-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 7
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../solutions/ch08-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 8
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../solutions/ch09-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 9
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../solutions/ch10-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 10
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../solutions/ch11-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 11
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../solutions/ch12-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 12
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../solutions/ch13-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 13
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../solutions/ch14-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 14
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../solutions/ch15-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 15
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../solutions/ch16-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 16
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../solutions/ch17-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 17
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../solutions/ch18-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 18
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../solutions/ch19-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 19
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../solutions/ch20-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 20
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../solutions/ch21-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 21
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../solutions/ch22-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 22
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../solutions/ch23-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 23
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../solutions/ch24-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 24
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../solutions/ch25-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 25
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../solutions/ch26-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 26
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../solutions/ch27-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 27
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../solutions/ch28-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 28
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../solutions/ch29-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 29
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../solutions/ch30-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 30
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../solutions/ch31-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 31
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../solutions/ch32-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 32
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../solutions/ch33-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 33
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../solutions/ch34-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 34
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../solutions/ch35-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 35
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../solutions/ch36-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 36
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../solutions/ch37-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 37
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../solutions/ch38-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 38
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../solutions/ch39-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 39
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_17" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_17" id="__nav_17_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Appendix
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_17_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_17">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Appendix
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../appendix-c-interview-preparation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Appendix — Interview preparation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../glossary/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Glossary
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    References
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    References
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#part-i-ai-engineering-foundations-chapters-1-to-3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Part I: AI Engineering Foundations (Chapters 1 to 3)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#part-ii-llm-application-development-chapters-4-to-7" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Part II: LLM Application Development (Chapters 4 to 7)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#part-iii-embeddings-and-retrieval-chapters-8-and-9" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Part III: Embeddings and Retrieval (Chapters 8 and 9)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#part-iv-production-rag-chapters-10-to-15" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Part IV: Production RAG (Chapters 10 to 15)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#part-v-tools-and-workflows-chapters-16-to-18" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Part V: Tools and Workflows (Chapters 16 to 18)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#part-vi-agents-chapters-19-to-23" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Part VI: Agents (Chapters 19 to 23)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#part-vii-evaluation-chapters-24-and-25" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Part VII: Evaluation (Chapters 24 and 25)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#part-viii-security-and-guardrails-chapters-26-and-27" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Part VIII: Security and Guardrails (Chapters 26 and 27)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#part-ix-production-ai-engineering-chapters-28-to-34" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Part IX: Production AI Engineering (Chapters 28 to 34)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#parts-x-and-xi-system-design-and-advanced-patterns-chapters-35-to-38" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Parts X and XI: System Design and Advanced Patterns (Chapters 35 to 38)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specifications-and-standards" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Specifications and standards
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#documentation-of-tools-used-in-the-book" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Documentation of tools used in the book
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#source-acknowledgement" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Source acknowledgement
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../coverage-matrix/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Coverage matrix
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#part-i-ai-engineering-foundations-chapters-1-to-3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Part I: AI Engineering Foundations (Chapters 1 to 3)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#part-ii-llm-application-development-chapters-4-to-7" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Part II: LLM Application Development (Chapters 4 to 7)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#part-iii-embeddings-and-retrieval-chapters-8-and-9" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Part III: Embeddings and Retrieval (Chapters 8 and 9)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#part-iv-production-rag-chapters-10-to-15" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Part IV: Production RAG (Chapters 10 to 15)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#part-v-tools-and-workflows-chapters-16-to-18" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Part V: Tools and Workflows (Chapters 16 to 18)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#part-vi-agents-chapters-19-to-23" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Part VI: Agents (Chapters 19 to 23)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#part-vii-evaluation-chapters-24-and-25" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Part VII: Evaluation (Chapters 24 and 25)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#part-viii-security-and-guardrails-chapters-26-and-27" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Part VIII: Security and Guardrails (Chapters 26 and 27)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#part-ix-production-ai-engineering-chapters-28-to-34" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Part IX: Production AI Engineering (Chapters 28 to 34)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#parts-x-and-xi-system-design-and-advanced-patterns-chapters-35-to-38" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Parts X and XI: System Design and Advanced Patterns (Chapters 35 to 38)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specifications-and-standards" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Specifications and standards
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#documentation-of-tools-used-in-the-book" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Documentation of tools used in the book
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#source-acknowledgement" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Source acknowledgement
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="references-and-further-reading">References and Further Reading<a class="headerlink" href="#references-and-further-reading" title="Permanent link">&para;</a></h1>
+<p>This book is self-contained. Every concept it relies on is explained in the chapters, and every project
+runs from the code in the repository. The references below are optional: they point to the primary
+papers behind the techniques, the specifications the code follows, and the documentation of the tools
+it uses. Read them when you want the original argument, the full experimental evidence, or the exact
+normative wording.</p>
+<p>Two cautions apply. First, specifications and tool documentation move fast. Protocols such as the Model
+Context Protocol, the OpenTelemetry generative-AI semantic conventions, and the OWASP list for LLM
+applications are revised regularly, so always check the current version rather than relying on what
+the book or a paper describes. Second, a paper's reported numbers come from its own models, data, and
+setup. Treat them as evidence that an idea can work, then measure it on your data with the evaluation
+methods of Part VII.</p>
+<p>Paper links point to the arXiv abstract page where one exists. Entries without an arXiv version give a
+DOI or the publisher's page. Links were last checked in October 2026.</p>
+<hr />
+<h2 id="part-i-ai-engineering-foundations-chapters-1-to-3">Part I: AI Engineering Foundations (Chapters 1 to 3)<a class="headerlink" href="#part-i-ai-engineering-foundations-chapters-1-to-3" title="Permanent link">&para;</a></h2>
+<p><strong>AI engineering as a discipline</strong></p>
+<ul>
+<li>Huyen, C. (2025). <em>AI Engineering: Building Applications with Foundation Models.</em> O'Reilly. A
+  book-length companion on building applications on top of foundation models, with a strong chapter on
+  evaluation. Supports Chapter 1. https://www.oreilly.com/library/view/ai-engineering/9781098166298/</li>
+</ul>
+<p><strong>Transformer and tokenization</strong></p>
+<ul>
+<li>Vaswani, A., Shazeer, N., Parmar, N., Uszkoreit, J., Jones, L., Gomez, A. N., Kaiser, Ł., and
+  Polosukhin, I. (2017). <em>Attention Is All You Need.</em> NeurIPS. https://arxiv.org/abs/1706.03762</li>
+<li>Sennrich, R., Haddow, B., and Birch, A. (2016). <em>Neural Machine Translation of Rare Words with
+  Subword Units.</em> ACL. The paper that brought byte-pair encoding to neural language models.
+  https://arxiv.org/abs/1508.07909</li>
+<li>Kudo, T., and Richardson, J. (2018). <em>SentencePiece: A Simple and Language Independent Subword
+  Tokenizer and Detokenizer for Neural Text Processing.</em> EMNLP (demo). https://arxiv.org/abs/1808.06226</li>
+</ul>
+<p><strong>Sampling, attention variants, and constrained generation</strong></p>
+<ul>
+<li>Holtzman, A., Buys, J., Du, L., Forbes, M., and Choi, Y. (2020). <em>The Curious Case of Neural Text
+  Degeneration.</em> ICLR. Introduces nucleus (top-p) sampling. https://arxiv.org/abs/1904.09751</li>
+<li>Shazeer, N. (2019). <em>Fast Transformer Decoding: One Write-Head is All You Need.</em> Multi-query
+  attention. https://arxiv.org/abs/1911.02150</li>
+<li>Ainslie, J., Lee-Thorp, J., de Jong, M., Zemlyanskiy, Y., Lebrón, F., and Sanghai, S. (2023). <em>GQA:
+  Training Generalized Multi-Query Transformer Models from Multi-Head Checkpoints.</em> EMNLP.
+  https://arxiv.org/abs/2305.13245</li>
+<li>Willard, B. T., and Louf, R. (2023). <em>Efficient Guided Generation for Large Language Models.</em>
+  Grammar- and schema-constrained decoding. https://arxiv.org/abs/2307.09702</li>
+<li>Fedus, W., Zoph, B., and Shazeer, N. (2022). <em>Switch Transformers: Scaling to Trillion Parameter
+  Models with Simple and Efficient Sparsity.</em> JMLR 23. A clear introduction to mixture-of-experts
+  routing, where only a few experts run per token. Supports Chapters 2 and 34.
+  https://arxiv.org/abs/2101.03961</li>
+</ul>
+<p><strong>Model behavior: reasoning, sycophancy, and nondeterminism</strong></p>
+<ul>
+<li>DeepSeek-AI (2025). <em>DeepSeek-R1: Incentivizing Reasoning Capability in LLMs via Reinforcement
+  Learning.</em> Also published in Nature 645. Shows how reinforcement learning produces long reasoning
+  traces, the behavior behind today's reasoning models. Supports Chapters 2 and 3.
+  https://arxiv.org/abs/2501.12948</li>
+<li>Sharma, M., Tong, M., Korbak, T., et al. (2024). <em>Towards Understanding Sycophancy in Language
+  Models.</em> ICLR. Evidence that preference training rewards agreeing with the user over being correct.
+  Supports Chapter 2. https://arxiv.org/abs/2310.13548</li>
+<li>He, H., and Thinking Machines Lab (2025). <em>Defeating Nondeterminism in LLM Inference.</em> Connectionism
+  blog. Explains why temperature 0 is still not reproducible on shared servers: batch size changes the
+  order of floating-point reductions. Supports Chapter 2.
+  https://thinkingmachines.ai/blog/defeating-nondeterminism-in-llm-inference/</li>
+<li>OpenAI. <em>Reasoning models.</em> API guide. Vendor documentation of reasoning effort and reasoning tokens,
+  the controls Chapter 3 discusses. https://platform.openai.com/docs/guides/reasoning</li>
+<li>Anthropic. <em>Building with extended thinking.</em> API documentation. Vendor documentation of thinking
+  budgets and their interaction with tool use; newer models replace fixed budgets with adaptive
+  thinking, so read the current page. Supports Chapter 3.
+  https://platform.claude.com/docs/en/build-with-claude/extended-thinking</li>
+</ul>
+<p><strong>Long context</strong></p>
+<ul>
+<li>Liu, N. F., Lin, K., Hewitt, J., Paranjape, A., Bevilacqua, M., Petroni, F., and Liang, P. (2024).
+  <em>Lost in the Middle: How Language Models Use Long Contexts.</em> TACL. https://arxiv.org/abs/2307.03172</li>
+</ul>
+<p><strong>Reliability patterns used by the gateway</strong></p>
+<ul>
+<li>Brooker, M. (2015). <em>Exponential Backoff and Jitter.</em> AWS Architecture Blog.
+  https://aws.amazon.com/blogs/architecture/exponential-backoff-and-jitter/</li>
+<li>Amazon Builders' Library. <em>Timeouts, retries, and backoff with jitter.</em>
+  https://aws.amazon.com/builders-library/timeouts-retries-and-backoff-with-jitter/</li>
+</ul>
+<h2 id="part-ii-llm-application-development-chapters-4-to-7">Part II: LLM Application Development (Chapters 4 to 7)<a class="headerlink" href="#part-ii-llm-application-development-chapters-4-to-7" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Brown, T. B., et al. (2020). <em>Language Models are Few-Shot Learners.</em> NeurIPS. The paper that made
+  in-context (few-shot) learning a practical technique. https://arxiv.org/abs/2005.14165</li>
+<li>Wei, J., Wang, X., Schuurmans, D., Bosma, M., Ichter, B., Xia, F., Chi, E., Le, Q., and Zhou, D.
+  (2022). <em>Chain-of-Thought Prompting Elicits Reasoning in Large Language Models.</em> NeurIPS.
+  https://arxiv.org/abs/2201.11903</li>
+<li>Wang, X., Wei, J., Schuurmans, D., Le, Q., Chi, E., Narang, S., Chowdhery, A., and Zhou, D. (2023).
+  <em>Self-Consistency Improves Chain of Thought Reasoning in Language Models.</em> ICLR.
+  https://arxiv.org/abs/2203.11171</li>
+<li>Khattab, O., et al. (2023). <em>DSPy: Compiling Declarative Language Model Calls into Self-Improving
+  Pipelines.</em> Prompts as optimizable programs; also relevant to Chapter 23.
+  https://arxiv.org/abs/2310.03714</li>
+<li>Guo, C., Pleiss, G., Sun, Y., and Weinberger, K. Q. (2017). <em>On Calibration of Modern Neural
+  Networks.</em> ICML. Background for confidence thresholds, cascades, and abstention.
+  https://arxiv.org/abs/1706.04599</li>
+<li>Agrawal, L. A., et al. (2025). <em>GEPA: Reflective Prompt Evolution Can Outperform Reinforcement
+  Learning.</em> A prompt optimizer that learns from natural-language feedback on its own rollouts.
+  Supports Chapter 4. https://arxiv.org/abs/2507.19457</li>
+</ul>
+<p><strong>Context engineering and long inputs (Chapter 5)</strong></p>
+<ul>
+<li>Anthropic (2025). <em>Effective context engineering for AI agents.</em> Engineering blog. A practitioner
+  account of treating context as a scarce budget across system prompt, tools, and history. Supports
+  Chapters 5 and 19. https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents</li>
+<li>Hong, K., Troynikov, A., and Huber, J. (2025). <em>Context Rot: How Increasing Input Tokens Impacts
+  LLM Performance.</em> Chroma technical report. Shows quality falling with input length on deliberately
+  simple tasks across 18 models. https://research.trychroma.com/context-rot</li>
+<li>Hsieh, C.-P., Sun, S., Kriman, S., Acharya, S., et al. (2024). <em>RULER: What's the Real Context Size
+  of Your Long-Context Language Models?</em> A synthetic benchmark showing that effective context is often
+  much shorter than the advertised window. https://arxiv.org/abs/2404.06654</li>
+<li>Modarressi, A., et al. (2025). <em>NoLiMa: Long-Context Evaluation Beyond Literal Matching.</em> A
+  needle-in-a-haystack test without lexical overlap, where most models degrade sharply by 32K tokens.
+  https://arxiv.org/abs/2502.05167</li>
+<li>Pan, Z., et al. (2024). <em>LLMLingua-2: Data Distillation for Efficient and Faithful Task-Agnostic
+  Prompt Compression.</em> Findings of ACL. Prompt compression as token classification with a small
+  encoder. https://arxiv.org/abs/2403.12968</li>
+</ul>
+<p><strong>Structured output and confidence (Chapter 6)</strong></p>
+<ul>
+<li>Dong, Y., Ruan, C. F., Cai, Y., Lai, R., Xu, Z., Zhao, Y., and Chen, T. (2025). <em>XGrammar: Flexible
+  and Efficient Structured Generation Engine for Large Language Models.</em> MLSys. How grammar-constrained
+  decoding is made fast enough for production serving. https://arxiv.org/abs/2411.15100</li>
+<li>Geng, S., et al. (2025). <em>JSONSchemaBench: A Rigorous Benchmark of Structured Outputs for Language
+  Models.</em> 10K real-world JSON schemas used to compare constrained-decoding frameworks on coverage,
+  efficiency, and quality. https://arxiv.org/abs/2501.10868</li>
+<li>Tam, Z. R., Wu, C.-K., Tsai, Y.-L., Lin, C.-Y., Lee, H., and Chen, Y.-N. (2024). <em>Let Me Speak
+  Freely? A Study on the Impact of Format Restrictions on Performance of Large Language Models.</em>
+  EMNLP Industry Track. Evidence that strict formats can hurt reasoning, and why to let the model reason
+  before it fills the schema. https://arxiv.org/abs/2408.02442</li>
+<li>Kadavath, S., et al. (2022). <em>Language Models (Mostly) Know What They Know.</em> Early evidence that
+  models can estimate whether their own answers are correct. https://arxiv.org/abs/2207.05221</li>
+<li>Xiong, M., Hu, Z., Lu, X., Li, Y., Fu, J., He, J., and Hooi, B. (2024). <em>Can LLMs Express Their
+  Uncertainty? An Empirical Evaluation of Confidence Elicitation in LLMs.</em> ICLR. Black-box confidence
+  methods and how overconfident verbalized confidence tends to be. https://arxiv.org/abs/2306.13063</li>
+</ul>
+<p><strong>Routing and cascades (Chapter 7)</strong></p>
+<ul>
+<li>Chen, L., Zaharia, M., and Zou, J. (2023). <em>FrugalGPT: How to Use Large Language Models While
+  Reducing Cost and Improving Performance.</em> The paper that framed the LLM cascade.
+  https://arxiv.org/abs/2305.05176</li>
+<li>Ong, I., et al. (2025). <em>RouteLLM: Learning to Route LLMs with Preference Data.</em> ICLR. Routers
+  trained on preference data to choose between a strong and a weak model.
+  https://arxiv.org/abs/2406.18665</li>
+<li>Hu, Q. J., et al. (2024). <em>RouterBench: A Benchmark for Multi-LLM Routing System.</em> Precomputed
+  outputs from many models, so routing policies can be compared without new inference.
+  https://arxiv.org/abs/2403.12031</li>
+</ul>
+<h2 id="part-iii-embeddings-and-retrieval-chapters-8-and-9">Part III: Embeddings and Retrieval (Chapters 8 and 9)<a class="headerlink" href="#part-iii-embeddings-and-retrieval-chapters-8-and-9" title="Permanent link">&para;</a></h2>
+<p><strong>Embedding models</strong></p>
+<ul>
+<li>Reimers, N., and Gurevych, I. (2019). <em>Sentence-BERT: Sentence Embeddings using Siamese
+  BERT-Networks.</em> EMNLP. https://arxiv.org/abs/1908.10084</li>
+<li>Kusupati, A., et al. (2022). <em>Matryoshka Representation Learning.</em> NeurIPS.
+  https://arxiv.org/abs/2205.13147</li>
+<li>Muennighoff, N., Tazi, N., Magne, L., and Reimers, N. (2023). <em>MTEB: Massive Text Embedding
+  Benchmark.</em> EACL. Useful for shortlisting models, never a substitute for evaluation on your data.
+  https://arxiv.org/abs/2210.07316</li>
+<li>Enevoldsen, K., et al. (2025). <em>MMTEB: Massive Multilingual Text Embedding Benchmark.</em> ICLR. The
+  multilingual successor to MTEB, with 500+ tasks across 250+ languages. Supports Chapter 8.
+  https://arxiv.org/abs/2502.13595</li>
+<li>Weller, O., Boratko, M., Naim, I., and Lee, J. (2026). <em>On the Theoretical Limitations of
+  Embedding-Based Retrieval.</em> ICLR. Shows that embedding dimension bounds which top-k result sets a
+  single-vector retriever can return, with a simple dataset where strong models fail. Supports
+  Chapter 8. https://arxiv.org/abs/2508.21038</li>
+<li>Morris, J. X., Kuleshov, V., Shmatikov, V., and Rush, A. M. (2023). <em>Text Embeddings Reveal (Almost)
+  As Much As Text.</em> EMNLP. Embedding inversion recovers most short inputs exactly, so treat stored
+  vectors as sensitive data. Supports Chapters 8 and 15. https://arxiv.org/abs/2310.06816</li>
+</ul>
+<p><strong>Approximate nearest neighbor search</strong></p>
+<ul>
+<li>Malkov, Y. A., and Yashunin, D. A. (2018). <em>Efficient and Robust Approximate Nearest Neighbor Search
+  Using Hierarchical Navigable Small World Graphs.</em> IEEE TPAMI (published 2020).
+  https://arxiv.org/abs/1603.09320</li>
+<li>Jégou, H., Douze, M., and Schmid, C. (2011). <em>Product Quantization for Nearest Neighbor Search.</em>
+  IEEE TPAMI 33(1). https://doi.org/10.1109/TPAMI.2010.57</li>
+<li>Johnson, J., Douze, M., and Jégou, H. (2017). <em>Billion-scale Similarity Search with GPUs.</em> The FAISS
+  paper, covering IVF and PQ at scale. https://arxiv.org/abs/1702.08734</li>
+<li>Douze, M., Guzhva, A., Deng, C., Johnson, J., Szilvasy, G., Mazaré, P.-E., Lomeli, M., Hosseini, L.,
+  and Jégou, H. (2024). <em>The Faiss Library.</em> The design and trade-offs of the library as it stands
+  today, a useful map of the index families. Supports Chapter 9. https://arxiv.org/abs/2401.08281</li>
+<li>Jayaram Subramanya, S., Devvrit, F., Simhadri, H. V., Krishnaswamy, R., and Kadekodi, R. (2019).
+  <em>DiskANN: Fast Accurate Billion-point Nearest Neighbor Search on a Single Node.</em> NeurIPS. Graph search
+  served from SSD when the index does not fit in memory. Supports Chapter 9.
+  https://papers.nips.cc/paper/2019/hash/09853c7fb1d3f8ee67a61b6bf4a7f8e6-Abstract.html</li>
+<li>Aumüller, M., Bernhardsson, E., and Faithfull, A. (2019). <em>ANN-Benchmarks: A Benchmarking Tool for
+  Approximate Nearest Neighbor Algorithms.</em> Information Systems. The standard recall-versus-throughput
+  comparison of ANN libraries. Supports Chapter 9. https://arxiv.org/abs/1807.05614</li>
+</ul>
+<h2 id="part-iv-production-rag-chapters-10-to-15">Part IV: Production RAG (Chapters 10 to 15)<a class="headerlink" href="#part-iv-production-rag-chapters-10-to-15" title="Permanent link">&para;</a></h2>
+<p><strong>Retrieval-augmented generation and dense retrieval</strong></p>
+<ul>
+<li>Lewis, P., et al. (2020). <em>Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks.</em>
+  NeurIPS. https://arxiv.org/abs/2005.11401</li>
+<li>Karpukhin, V., Oğuz, B., Min, S., Lewis, P., Wu, L., Edunov, S., Chen, D., and Yih, W. (2020). <em>Dense
+  Passage Retrieval for Open-Domain Question Answering.</em> EMNLP. https://arxiv.org/abs/2004.04906</li>
+<li>Thakur, N., Reimers, N., Rücklé, A., Srivastava, A., and Gurevych, I. (2021). <em>BEIR: A Heterogeneous
+  Benchmark for Zero-shot Evaluation of Information Retrieval Models.</em> NeurIPS Datasets and Benchmarks.
+  Shows why BM25 remains a strong baseline. https://arxiv.org/abs/2104.08663</li>
+<li>Joren, H., Zhang, J., Ferng, C.-S., Juan, D.-C., Taly, A., and Rashtchian, C. (2025). <em>Sufficient
+  Context: A New Lens on Retrieval Augmented Generation Systems.</em> ICLR. Separates "the retriever missed"
+  from "the model misused good context", and uses the distinction for abstention. Supports Chapter 10.
+  https://arxiv.org/abs/2411.06037</li>
+<li>Jin, B., Yoon, J., Han, J., and Arik, S. O. (2024). <em>Long-Context LLMs Meet RAG: Overcoming
+  Challenges for Long Inputs in RAG.</em> Quality first rises, then falls, as more passages are added; hard
+  negatives are the cause and reordering helps. Supports Chapter 10. https://arxiv.org/abs/2410.05983</li>
+<li>Li, Z., Li, C., Zhang, M., Mei, Q., and Bendersky, M. (2024). <em>Retrieval Augmented Generation or
+  Long-Context LLMs? A Comprehensive Study and Hybrid Approach.</em> EMNLP Industry Track. Compares the two
+  approaches on cost and quality and routes between them. Supports Chapter 10.
+  https://arxiv.org/abs/2407.16833</li>
+</ul>
+<p><strong>Document parsing and chunking (Chapter 11)</strong></p>
+<ul>
+<li>Auer, C., et al. (2024). <em>Docling Technical Report.</em> IBM Research. An open-source PDF conversion
+  pipeline with layout analysis and table structure recognition. https://arxiv.org/abs/2408.09869</li>
+<li>Günther, M., Mohr, I., Williams, D. J., Wang, B., and Xiao, H. (2024). <em>Late Chunking: Contextual
+  Chunk Embeddings Using Long-Context Embedding Models.</em> Embed the whole document first, then pool per
+  chunk, so each chunk embedding keeps its surrounding context. https://arxiv.org/abs/2409.04701</li>
+</ul>
+<p><strong>Lexical retrieval, fusion, and reranking</strong></p>
+<ul>
+<li>Robertson, S., and Zaragoza, H. (2009). <em>The Probabilistic Relevance Framework: BM25 and Beyond.</em>
+  Foundations and Trends in Information Retrieval 3(4). The standard account of BM25, which originated
+  in the Okapi system at City University London in the 1990s. https://doi.org/10.1561/1500000019</li>
+<li>Cormack, G. V., Clarke, C. L. A., and Büttcher, S. (2009). <em>Reciprocal Rank Fusion Outperforms
+  Condorcet and Individual Rank Learning Methods.</em> SIGIR. https://doi.org/10.1145/1571941.1572114</li>
+<li>Nogueira, R., and Cho, K. (2019). <em>Passage Re-ranking with BERT.</em> The cross-encoder reranking
+  baseline. https://arxiv.org/abs/1901.04085</li>
+<li>Gao, L., Ma, X., Lin, J., and Callan, J. (2023). <em>Precise Zero-Shot Dense Retrieval without Relevance
+  Labels.</em> ACL. Introduces HyDE. https://arxiv.org/abs/2212.10496</li>
+<li>Anthropic (2024). <em>Introducing Contextual Retrieval.</em> An engineering write-up of chunk
+  contextualization before indexing. https://www.anthropic.com/news/contextual-retrieval</li>
+<li>Formal, T., Lassance, C., Piwowarski, B., and Clinchant, S. (2021). <em>SPLADE v2: Sparse Lexical and
+  Expansion Model for Information Retrieval.</em> Learned sparse retrieval that still runs on an inverted
+  index. Supports Chapter 12. https://arxiv.org/abs/2109.10086</li>
+<li>Carbonell, J., and Goldstein, J. (1998). <em>The Use of MMR, Diversity-Based Reranking for Reordering
+  Documents and Producing Summaries.</em> SIGIR. The original maximal marginal relevance criterion for
+  trading relevance against redundancy. Supports Chapter 12. https://doi.org/10.1145/290941.291025</li>
+<li>Sun, W., Yan, L., Ma, X., Ren, P., Yin, D., and Ren, Z. (2023). <em>Is ChatGPT Good at Search?
+  Investigating Large Language Models as Re-Ranking Agents.</em> EMNLP. Listwise LLM reranking (RankGPT) and
+  its distillation into a small reranker. Supports Chapter 12. https://arxiv.org/abs/2304.09542</li>
+</ul>
+<p><strong>Deduplication</strong></p>
+<ul>
+<li>Broder, A. Z. (1997). <em>On the Resemblance and Containment of Documents.</em> Proceedings of Compression
+  and Complexity of Sequences. The origin of MinHash for near-duplicate detection.</li>
+</ul>
+<p><strong>Retrieval and RAG evaluation</strong></p>
+<ul>
+<li>Järvelin, K., and Kekäläinen, J. (2002). <em>Cumulated Gain-Based Evaluation of IR Techniques.</em> ACM
+  Transactions on Information Systems 20(4). The definition of (n)DCG.
+  https://doi.org/10.1145/582415.582418</li>
+<li>Es, S., James, J., Espinosa-Anke, L., and Schockaert, S. (2024). <em>RAGAS: Automated Evaluation of
+  Retrieval Augmented Generation.</em> EACL (demo). https://arxiv.org/abs/2309.15217</li>
+<li>Min, S., et al. (2023). <em>FActScore: Fine-grained Atomic Evaluation of Factual Precision in Long Form
+  Text Generation.</em> EMNLP. Claim-level verification. https://arxiv.org/abs/2305.14251</li>
+<li>Gao, T., Yen, H., Yu, J., and Chen, D. (2023). <em>Enabling Large Language Models to Generate Text with
+  Citations.</em> EMNLP. The ALCE benchmark and its citation recall and precision metrics. Supports
+  Chapter 13. https://arxiv.org/abs/2305.14627</li>
+<li>Saad-Falcon, J., Khattab, O., Potts, C., and Zaharia, M. (2024). <em>ARES: An Automated Evaluation
+  Framework for Retrieval-Augmented Generation Systems.</em> NAACL. Small fine-tuned judges corrected with a
+  few hundred human labels through prediction-powered inference. Supports Chapter 14.
+  https://arxiv.org/abs/2311.09476</li>
+<li>Thomas, P., Spielman, S., Craswell, N., and Mitra, B. (2024). <em>Large Language Models Can Accurately
+  Predict Searcher Preferences.</em> SIGIR. How Bing calibrated an LLM relevance labeler against real
+  searcher feedback. Supports Chapter 14. https://arxiv.org/abs/2309.10621</li>
+<li>Upadhyay, S., et al. (2024). <em>UMBRELA: UMbrela is the (Open-Source Reproduction of the) Bing
+  RELevance Assessor.</em> An open-source reproduction of the approach above, tested on TREC Deep Learning
+  tracks. Supports Chapter 14. https://arxiv.org/abs/2406.06519</li>
+</ul>
+<p><strong>Securing the retrieval store (Chapter 15)</strong></p>
+<ul>
+<li>OWASP GenAI Security Project (2025). <em>LLM08:2025 Vector and Embedding Weaknesses.</em> Access control,
+  cross-tenant leakage, embedding inversion, and poisoning risks in RAG stores.
+  https://genai.owasp.org/llmrisk/llm082025-vector-and-embedding-weaknesses/</li>
+</ul>
+<h2 id="part-v-tools-and-workflows-chapters-16-to-18">Part V: Tools and Workflows (Chapters 16 to 18)<a class="headerlink" href="#part-v-tools-and-workflows-chapters-16-to-18" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Schick, T., Dwivedi-Yu, J., Dessì, R., Raileanu, R., Lomeli, M., Zettlemoyer, L., Cancedda, N., and
+  Scialom, T. (2023). <em>Toolformer: Language Models Can Teach Themselves to Use Tools.</em> NeurIPS.
+  https://arxiv.org/abs/2302.04761</li>
+<li>Hardy, N. (1988). <em>The Confused Deputy (or why capabilities might have been invented).</em> ACM SIGOPS
+  Operating Systems Review 22(4). The original confused-deputy paper, directly relevant to tool and MCP
+  security. https://doi.org/10.1145/54289.871709</li>
+<li>Saltzer, J. H., and Schroeder, M. D. (1975). <em>The Protection of Information in Computer Systems.</em>
+  Proceedings of the IEEE 63(9). The source of least privilege and fail-safe defaults.
+  https://doi.org/10.1109/PROC.1975.9939</li>
+</ul>
+<p><strong>Evaluating tool use (Chapter 16)</strong></p>
+<ul>
+<li>Patil, S. G., Mao, H., Yan, F., Ji, C. C.-J., Suresh, V., Stoica, I., and Gonzalez, J. E. (2025). <em>The
+  Berkeley Function Calling Leaderboard (BFCL): From Tool Use to Agentic Evaluation of Large Language
+  Models.</em> ICML. AST-based checking of function calls, plus multi-turn and abstention tests.
+  https://proceedings.mlr.press/v267/patil25a.html</li>
+<li>Yao, S., Shinn, N., Razavi, P., and Narasimhan, K. (2024). <em>τ-bench: A Benchmark for Tool-Agent-User
+  Interaction in Real-World Domains.</em> Simulated users, domain policies, and the pass^k reliability
+  metric. Supports Chapters 16 and 19. https://arxiv.org/abs/2406.12045</li>
+</ul>
+<p><strong>Durable workflows (Chapter 17)</strong></p>
+<ul>
+<li>Horthy, D., and HumanLayer (2025). <em>12-Factor Agents.</em> A design guide for production agents: own
+  your prompts, context, and control flow, and make pause and resume explicit.
+  https://github.com/humanlayer/12-factor-agents</li>
+<li>OpenAI (2025). <em>A practical guide to building agents.</em> Vendor guide covering when to use an agent,
+  orchestration patterns, and guardrails. Supports Chapters 17 and 19.
+  https://cdn.openai.com/business-guides-and-resources/a-practical-guide-to-building-agents.pdf</li>
+</ul>
+<h2 id="part-vi-agents-chapters-19-to-23">Part VI: Agents (Chapters 19 to 23)<a class="headerlink" href="#part-vi-agents-chapters-19-to-23" title="Permanent link">&para;</a></h2>
+<p><strong>Agent loops and architectures</strong></p>
+<ul>
+<li>Yao, S., Zhao, J., Yu, D., Du, N., Shafran, I., Narasimhan, K., and Cao, Y. (2023). <em>ReAct:
+  Synergizing Reasoning and Acting in Language Models.</em> ICLR. https://arxiv.org/abs/2210.03629</li>
+<li>Shinn, N., Cassano, F., Berman, E., Gopinath, A., Narasimhan, K., and Yao, S. (2023). <em>Reflexion:
+  Language Agents with Verbal Reinforcement Learning.</em> NeurIPS. https://arxiv.org/abs/2303.11366</li>
+<li>Madaan, A., et al. (2023). <em>Self-Refine: Iterative Refinement with Self-Feedback.</em> NeurIPS. A
+  generate, critique, revise loop; read alongside Chapter 20's caution about self-critique without new
+  evidence. https://arxiv.org/abs/2303.17651</li>
+<li>Erdogan, L. E., Lee, N., Kim, S., Moon, S., Furuta, H., Anumanchipalli, G., Keutzer, K., and
+  Gholami, A. (2025). <em>Plan-and-Act: Improving Planning of Agents for Long-Horizon Tasks.</em> ICML. A
+  separate planner and executor, with synthetic plan data to train the planner. Supports Chapter 20.
+  https://arxiv.org/abs/2503.09572</li>
+<li>Anthropic (2024). <em>Building effective agents.</em> Engineering blog. Workflows versus agents, and the
+  case for simple, composable patterns before frameworks. Supports Chapters 1, 19, and 23.
+  https://www.anthropic.com/engineering/building-effective-agents</li>
+</ul>
+<p><strong>Memory</strong></p>
+<ul>
+<li>Park, J. S., O'Brien, J. C., Cai, C. J., Morris, M. R., Liang, P., and Bernstein, M. S. (2023).
+  <em>Generative Agents: Interactive Simulacra of Human Behavior.</em> UIST. Memory retrieval by recency,
+  importance, and relevance, plus reflection. https://arxiv.org/abs/2304.03442</li>
+<li>Packer, C., Wooders, S., Lin, K., Fang, V., Patil, S. G., Stoica, I., and Gonzalez, J. E. (2023).
+  <em>MemGPT: Towards LLMs as Operating Systems.</em> Tiered memory with explicit paging.
+  https://arxiv.org/abs/2310.08560</li>
+<li>Sumers, T. R., Yao, S., Narasimhan, K., and Griffiths, T. L. (2024). <em>Cognitive Architectures for
+  Language Agents.</em> TMLR. The CoALA framework: working, episodic, semantic, and procedural memory as
+  parts of one agent design. Supports Chapter 21. https://arxiv.org/abs/2309.02427</li>
+<li>Chhikara, P., Khant, D., Aryan, S., Singh, T., and Yadav, D. (2025). <em>Mem0: Building
+  Production-Ready AI Agents with Scalable Long-Term Memory.</em> Extract, consolidate, and retrieve memories
+  instead of replaying whole histories; reports latency and token savings. Supports Chapter 21.
+  https://arxiv.org/abs/2504.19413</li>
+<li>Xu, W., Mei, K., Gao, H., Tan, J., Liang, Z., and Zhang, Y. (2025). <em>A-MEM: Agentic Memory for LLM
+  Agents.</em> Memories stored as linked notes that the agent itself organizes. Supports Chapter 21.
+  https://arxiv.org/abs/2502.12110</li>
+<li>AGENTS.md. <em>A simple, open format for guiding coding agents.</em> A repository-level instruction file,
+  now stewarded by the Agentic AI Foundation, and an example of procedural memory kept in version
+  control. Supports Chapter 21. https://agents.md</li>
+</ul>
+<p><strong>Long-term memory benchmarks</strong></p>
+<ul>
+<li>Wu, D., Wang, H., Yu, W., Zhang, Y., Chang, K.-W., and Yu, D. (2025). <em>LongMemEval: Benchmarking Chat
+  Assistants on Long-Term Interactive Memory.</em> ICLR. Tests extraction, multi-session and temporal
+  reasoning, knowledge updates, and abstention over long chat histories. Supports Chapter 21.
+  https://arxiv.org/abs/2410.10813</li>
+</ul>
+<p><strong>Multi-agent systems</strong></p>
+<ul>
+<li>Wu, Q., et al. (2023). <em>AutoGen: Enabling Next-Gen LLM Applications via Multi-Agent Conversation.</em>
+  https://arxiv.org/abs/2308.08155</li>
+<li>Du, Y., Li, S., Torralba, A., Tenenbaum, J. B., and Mordatch, I. (2023). <em>Improving Factuality and
+  Reasoning in Language Models through Multiagent Debate.</em> https://arxiv.org/abs/2305.14325</li>
+<li>Cemri, M., et al. (2025). <em>Why Do Multi-Agent LLM Systems Fail?</em> The MAST taxonomy of 14 failure
+  modes, most of them design and coordination problems rather than model limits. Supports Chapter 22.
+  https://arxiv.org/abs/2503.13657</li>
+<li>Anthropic (2025). <em>How we built our multi-agent research system.</em> Engineering blog. An
+  orchestrator with parallel subagents, and the token cost and evaluation lessons that came with it.
+  Supports Chapter 22. https://www.anthropic.com/engineering/multi-agent-research-system</li>
+<li>Yan, W., and Cognition (2025). <em>Don't Build Multi-Agents.</em> Blog post. The opposing view: split
+  context causes conflicting decisions, so prefer a single-threaded agent. Read it next to the previous
+  entry. Supports Chapter 22. https://cognition.ai/blog/dont-build-multi-agents</li>
+</ul>
+<h2 id="part-vii-evaluation-chapters-24-and-25">Part VII: Evaluation (Chapters 24 and 25)<a class="headerlink" href="#part-vii-evaluation-chapters-24-and-25" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Zheng, L., et al. (2023). <em>Judging LLM-as-a-Judge with MT-Bench and Chatbot Arena.</em> NeurIPS Datasets
+  and Benchmarks. Documents position, verbosity, and self-enhancement biases.
+  https://arxiv.org/abs/2306.05685</li>
+<li>Liu, Y., Iter, D., Xu, Y., Wang, S., Xu, R., and Zhu, C. (2023). <em>G-Eval: NLG Evaluation using GPT-4
+  with Better Human Alignment.</em> EMNLP. https://arxiv.org/abs/2303.16634</li>
+<li>Wang, P., et al. (2023). <em>Large Language Models are not Fair Evaluators.</em> Position bias in pairwise
+  judging and mitigations. https://arxiv.org/abs/2305.17926</li>
+<li>Liang, P., et al. (2022). <em>Holistic Evaluation of Language Models (HELM).</em> Multi-metric,
+  scenario-based evaluation design. https://arxiv.org/abs/2211.09110</li>
+<li>Cohen, J. (1960). <em>A Coefficient of Agreement for Nominal Scales.</em> Educational and Psychological
+  Measurement 20(1). The original kappa statistic. https://doi.org/10.1177/001316446002000104</li>
+<li>Efron, B. (1979). <em>Bootstrap Methods: Another Look at the Jackknife.</em> The Annals of Statistics 7(1).
+  https://doi.org/10.1214/aos/1176344552</li>
+<li>Kohavi, R., Tang, D., and Xu, Y. (2020). <em>Trustworthy Online Controlled Experiments: A Practical
+  Guide to A/B Testing.</em> Cambridge University Press. Background for online evaluation and canaries.</li>
+</ul>
+<p><strong>Judges, error bars, and online tests</strong></p>
+<ul>
+<li>Shankar, S., Zamfirescu-Pereira, J. D., Hartmann, B., Parameswaran, A. G., and Arawjo, I. (2024).
+  <em>Who Validates the Validators? Aligning LLM-Assisted Evaluation of LLM Outputs with Human
+  Preferences.</em> Introduces "criteria drift": grading outputs is how people discover their criteria.
+  Supports Chapters 1 and 24. https://arxiv.org/abs/2404.12272</li>
+<li>Miller, E. (2024). <em>Adding Error Bars to Evals: A Statistical Approach to Language Model
+  Evaluations.</em> Standard errors, clustered questions, and paired comparisons for eval scores. Supports
+  Chapter 24. https://arxiv.org/abs/2411.00640</li>
+<li>Ye, J., et al. (2025). <em>Justice or Prejudice? Quantifying Biases in LLM-as-a-Judge.</em> ICLR. A catalog
+  of 12 judge biases and a framework for measuring each. Supports Chapter 24.
+  https://arxiv.org/abs/2410.02736</li>
+<li>Thakur, A. S., Choudhary, K., Ramayapally, V. S., Vaidyanathan, S., and Hupkes, D. (2025). <em>Judging
+  the Judges: Evaluating Alignment and Vulnerabilities in LLMs-as-Judges.</em> GEM Workshop. Even the best
+  judges diverge from humans and lean toward leniency. Supports Chapter 24.
+  https://arxiv.org/abs/2406.12624</li>
+<li>Gu, J., et al. (2024). <em>A Survey on LLM-as-a-Judge.</em> A broad map of judge designs, bias mitigations,
+  and ways to test judge reliability. Supports Chapter 24. https://arxiv.org/abs/2411.15594</li>
+<li>Chen, M., et al. (2021). <em>Evaluating Large Language Models Trained on Code.</em> The Codex paper; defines
+  HumanEval and the unbiased pass@k estimator. Supports Chapter 25. https://arxiv.org/abs/2107.03374</li>
+<li>Johari, R., Koomen, P., Pekelis, L., and Walsh, D. (2022). <em>Always Valid Inference: Continuous
+  Monitoring of A/B Tests.</em> Operations Research 70(3). How to peek at a running experiment without
+  inflating false positives. Supports Chapter 25. https://arxiv.org/abs/1512.04922</li>
+</ul>
+<h2 id="part-viii-security-and-guardrails-chapters-26-and-27">Part VIII: Security and Guardrails (Chapters 26 and 27)<a class="headerlink" href="#part-viii-security-and-guardrails-chapters-26-and-27" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Perez, F., and Ribeiro, I. (2022). <em>Ignore Previous Prompt: Attack Techniques For Language Models.</em>
+  NeurIPS ML Safety Workshop. https://arxiv.org/abs/2211.09527</li>
+<li>Greshake, K., Abdelnabi, S., Mishra, S., Endres, C., Holz, T., and Fritz, M. (2023). <em>Not What You've
+  Signed Up For: Compromising Real-World LLM-Integrated Applications with Indirect Prompt Injection.</em>
+  AISec. https://arxiv.org/abs/2302.12173</li>
+<li>Zou, A., Wang, Z., Carlini, N., Nasr, M., Kolter, J. Z., and Fredrikson, M. (2023). <em>Universal and
+  Transferable Adversarial Attacks on Aligned Language Models.</em> Automated jailbreak suffixes.
+  https://arxiv.org/abs/2307.15043</li>
+<li>Hines, K., Lopez, G., Hall, M., Zarfati, F., Zunger, Y., and Kiciman, E. (2024). <em>Defending Against
+  Indirect Prompt Injection Attacks With Spotlighting.</em> Delimiting and datamarking untrusted input.
+  https://arxiv.org/abs/2403.14720</li>
+<li>Wallace, E., Xiao, K., Leike, R., Weng, L., Heidecke, J., and Beutel, A. (2024). <em>The Instruction
+  Hierarchy: Training LLMs to Prioritize Privileged Instructions.</em> https://arxiv.org/abs/2404.13208</li>
+<li>Debenedetti, E., Zhang, J., Balunović, M., Beurer-Kellner, L., Fischer, M., and Tramèr, F. (2024).
+  <em>AgentDojo: A Dynamic Environment to Evaluate Prompt Injection Attacks and Defenses for LLM Agents.</em>
+  NeurIPS Datasets and Benchmarks. https://arxiv.org/abs/2406.13352</li>
+</ul>
+<p><strong>Injection-resistant agent design</strong></p>
+<ul>
+<li>Willison, S. (2023). <em>The Dual LLM pattern for building AI assistants that can resist prompt
+  injection.</em> Blog post. A privileged model that never sees untrusted text, and a quarantined model
+  that has no tools. Supports Chapter 26. https://simonwillison.net/2023/Apr/25/dual-llm-pattern/</li>
+<li>Debenedetti, E., et al. (2025). <em>Defeating Prompt Injections by Design.</em> CaMeL: the control flow is
+  derived from the trusted query, and capabilities track where untrusted data may flow. Supports
+  Chapter 26. https://arxiv.org/abs/2503.18813</li>
+<li>Beurer-Kellner, L., et al. (2025). <em>Design Patterns for Securing LLM Agents against Prompt
+  Injections.</em> Six patterns, such as plan-then-execute and action selectors, that give up some
+  generality in exchange for injection resistance. Supports Chapters 4 and 26.
+  https://arxiv.org/abs/2506.08837</li>
+</ul>
+<p><strong>Guardrail models and toolkits (Chapter 27)</strong></p>
+<ul>
+<li>Inan, H., et al. (2023). <em>Llama Guard: LLM-based Input-Output Safeguard for Human-AI Conversations.</em>
+  An instruction-tuned classifier for prompts and responses against a customizable risk taxonomy.
+  https://arxiv.org/abs/2312.06674</li>
+<li>Zeng, W., et al. (2024). <em>ShieldGemma: Generative AI Content Moderation Based on Gemma.</em> Open
+  safety classifiers trained largely on synthetic data. https://arxiv.org/abs/2407.21772</li>
+<li>Rebedea, T., Dinu, R., Sreedhar, M., Parisien, C., and Cohen, J. (2023). <em>NeMo Guardrails: A Toolkit
+  for Controllable and Safe LLM Applications with Programmable Rails.</em> EMNLP (demo). Programmable input,
+  output, and dialogue rails around any model. https://arxiv.org/abs/2310.10501</li>
+</ul>
+<h2 id="part-ix-production-ai-engineering-chapters-28-to-34">Part IX: Production AI Engineering (Chapters 28 to 34)<a class="headerlink" href="#part-ix-production-ai-engineering-chapters-28-to-34" title="Permanent link">&para;</a></h2>
+<p><strong>Reliability, scalability, and architecture</strong></p>
+<ul>
+<li>Beyer, B., Jones, C., Petoff, J., and Murphy, N. R. (eds.) (2016). <em>Site Reliability Engineering.</em>
+  O'Reilly. Free online with its companion books; the reference for SLOs and error budgets.
+  https://sre.google/books/</li>
+<li>Dean, J., and Barroso, L. A. (2013). <em>The Tail at Scale.</em> Communications of the ACM 56(2).
+  https://doi.org/10.1145/2408776.2408794</li>
+<li>Little, J. D. C. (1961). <em>A Proof for the Queuing Formula: L = λW.</em> Operations Research 9(3).
+  https://doi.org/10.1287/opre.9.3.383</li>
+<li>Nygard, M. T. (2018). <em>Release It! Design and Deploy Production-Ready Software</em>, 2nd ed. Pragmatic
+  Bookshelf. Circuit breakers, bulkheads, timeouts, and stability anti-patterns.</li>
+<li>Beyer, B., Murphy, N. R., Rensin, D. K., Kawahara, K., and Thorne, S. (eds.) (2018). <em>The Site
+  Reliability Workbook</em>, Chapter 5: <em>Alerting on SLOs.</em> O'Reilly. Burn-rate alerts built step by step
+  from an SLO. Supports Chapter 29. https://sre.google/workbook/alerting-on-slos/</li>
+<li>Yanacek, D. <em>Using load shedding to avoid overload.</em> Amazon Builders' Library. Rejecting excess work
+  early so accepted requests keep their latency. Supports Chapter 29.
+  https://aws.amazon.com/builders-library/using-load-shedding-to-avoid-overload/</li>
+<li>Fowler, M. <em>CircuitBreaker.</em> https://martinfowler.com/bliki/CircuitBreaker.html</li>
+<li>Kleppmann, M. (2017). <em>Designing Data-Intensive Applications.</em> O'Reilly. Queues, idempotence,
+  delivery guarantees, and event logs. A second edition by Kleppmann, M., and Riccomini, C. was
+  published in 2026. https://www.oreilly.com/library/view/designing-data-intensive-applications/9781098119058/</li>
+</ul>
+<p><strong>Engineering practices</strong></p>
+<ul>
+<li>Sculley, D., et al. (2015). <em>Hidden Technical Debt in Machine Learning Systems.</em> NeurIPS. Still the
+  best short account of why the model is the small part of the system.</li>
+<li>Evans, E. (2003). <em>Domain-Driven Design.</em> Addison-Wesley. The anti-corruption layer pattern used for
+  provider abstraction.</li>
+<li>Nygard, M. (2011). <em>Documenting Architecture Decisions.</em> The original proposal for ADRs.
+  https://cognitect.com/blog/2011/11/15/documenting-architecture-decisions</li>
+<li>Zinkevich, M. <em>Rules of Machine Learning: Best Practices for ML Engineering.</em> Google for Developers.
+  Forty-three rules, most of them about pipelines, metrics, and launching simple first. Supports
+  Chapter 32. https://developers.google.com/machine-learning/guides/rules-of-ml/</li>
+</ul>
+<p><strong>Caching (Chapter 30)</strong></p>
+<ul>
+<li>Gim, I., Chen, G., Lee, S., Sarda, N., Khandelwal, A., and Zhong, L. (2024). <em>Prompt Cache: Modular
+  Attention Reuse for Low-Latency Inference.</em> MLSys. Reusing precomputed attention states for shared
+  prompt segments, the idea behind provider prompt caching. https://arxiv.org/abs/2311.04934</li>
+<li>Bang, F. (2023). <em>GPTCache: An Open-Source Semantic Cache for LLM Applications Enabling Faster Answers
+  and Cost Savings.</em> NLP-OSS Workshop. A reference design for embedding-keyed response caching.
+  https://aclanthology.org/2023.nlposs-1.24/</li>
+</ul>
+<p><strong>Fine-tuning and preference optimization (Chapter 33)</strong></p>
+<ul>
+<li>Houlsby, N., et al. (2019). <em>Parameter-Efficient Transfer Learning for NLP.</em> ICML. Adapter modules.
+  https://arxiv.org/abs/1902.00751</li>
+<li>Hu, E. J., Shen, Y., Wallis, P., Allen-Zhu, Z., Li, Y., Wang, S., Wang, L., and Chen, W. (2022).
+  <em>LoRA: Low-Rank Adaptation of Large Language Models.</em> ICLR. https://arxiv.org/abs/2106.09685</li>
+<li>Dettmers, T., Pagnoni, A., Holtzman, A., and Zettlemoyer, L. (2023). <em>QLoRA: Efficient Finetuning of
+  Quantized LLMs.</em> NeurIPS. https://arxiv.org/abs/2305.14314</li>
+<li>Christiano, P., Leike, J., Brown, T. B., Martic, M., Legg, S., and Amodei, D. (2017). <em>Deep
+  Reinforcement Learning from Human Preferences.</em> NeurIPS. https://arxiv.org/abs/1706.03741</li>
+<li>Ouyang, L., et al. (2022). <em>Training Language Models to Follow Instructions with Human Feedback.</em>
+  NeurIPS. The InstructGPT paper: SFT followed by RLHF. https://arxiv.org/abs/2203.02155</li>
+<li>Rafailov, R., Sharma, A., Mitchell, E., Ermon, S., Manning, C. D., and Finn, C. (2023). <em>Direct
+  Preference Optimization: Your Language Model is Secretly a Reward Model.</em> NeurIPS.
+  https://arxiv.org/abs/2305.18290</li>
+<li>Zhou, C., et al. (2023). <em>LIMA: Less Is More for Alignment.</em> NeurIPS. Evidence that a small,
+  high-quality SFT set can go far. https://arxiv.org/abs/2305.11206</li>
+<li>Hinton, G., Vinyals, O., and Dean, J. (2015). <em>Distilling the Knowledge in a Neural Network.</em>
+  https://arxiv.org/abs/1503.02531</li>
+<li>Kirkpatrick, J., et al. (2017). <em>Overcoming Catastrophic Forgetting in Neural Networks.</em> PNAS.
+  https://arxiv.org/abs/1612.00796</li>
+<li>Biderman, D., et al. (2024). <em>LoRA Learns Less and Forgets Less.</em> TMLR. LoRA trails full fine-tuning
+  on new domains but preserves more of the base model's other skills. https://arxiv.org/abs/2405.09673</li>
+<li>Shao, Z., et al. (2024). <em>DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open Language
+  Models.</em> Introduces GRPO, the group-relative policy optimization used in later reasoning models.
+  https://arxiv.org/abs/2402.03300</li>
+<li>OpenAI. <em>Reinforcement fine-tuning.</em> API guide. Vendor documentation of grader-driven fine-tuning,
+  an example of reinforcement fine-tuning offered as a managed service.
+  https://platform.openai.com/docs/guides/reinforcement-fine-tuning</li>
+</ul>
+<p><strong>Inference and serving (Chapter 34)</strong></p>
+<ul>
+<li>Pope, R., et al. (2023). <em>Efficiently Scaling Transformer Inference.</em> MLSys. Prefill versus decode,
+  memory bandwidth, and KV cache costs. https://arxiv.org/abs/2211.05102</li>
+<li>Dao, T., Fu, D. Y., Ermon, S., Rudra, A., and Ré, C. (2022). <em>FlashAttention: Fast and
+  Memory-Efficient Exact Attention with IO-Awareness.</em> NeurIPS. https://arxiv.org/abs/2205.14135</li>
+<li>Yu, G.-I., Jeong, J. S., Kim, G.-W., Kim, S., and Chun, B.-G. (2022). <em>Orca: A Distributed Serving
+  System for Transformer-Based Generative Models.</em> OSDI. Iteration-level (continuous) batching.
+  https://www.usenix.org/conference/osdi22/presentation/yu</li>
+<li>Kwon, W., Li, Z., Zhuang, S., Sheng, Y., Zheng, L., Yu, C. H., Gonzalez, J. E., Zhang, H., and Stoica,
+  I. (2023). <em>Efficient Memory Management for Large Language Model Serving with PagedAttention.</em> SOSP.
+  The vLLM paper. https://arxiv.org/abs/2309.06180</li>
+<li>Zheng, L., et al. (2024). <em>SGLang: Efficient Execution of Structured Language Model Programs.</em>
+  NeurIPS. Prefix sharing with RadixAttention. https://arxiv.org/abs/2312.07104</li>
+<li>Zhong, Y., et al. (2024). <em>DistServe: Disaggregating Prefill and Decoding for Goodput-optimized Large
+  Language Model Serving.</em> OSDI. A source of the goodput framing. https://arxiv.org/abs/2401.09670</li>
+<li>Leviathan, Y., Kalman, M., and Matias, Y. (2023). <em>Fast Inference from Transformers via Speculative
+  Decoding.</em> ICML. https://arxiv.org/abs/2211.17192</li>
+<li>Chen, C., Borgeaud, S., Irving, G., Lespiau, J.-B., Sifre, L., and Jumper, J. (2023). <em>Accelerating
+  Large Language Model Decoding with Speculative Sampling.</em> https://arxiv.org/abs/2302.01318</li>
+<li>Cai, T., Li, Y., Geng, Z., Peng, H., Lee, J. D., Chen, D., and Dao, T. (2024). <em>Medusa: Simple LLM
+  Inference Acceleration Framework with Multiple Decoding Heads.</em> ICML.
+  https://arxiv.org/abs/2401.10774</li>
+<li>Li, Y., Wei, F., Zhang, C., and Zhang, H. (2024). <em>EAGLE: Speculative Sampling Requires Rethinking
+  Feature Uncertainty.</em> ICML. https://arxiv.org/abs/2401.15077</li>
+<li>Dettmers, T., Lewis, M., Belkada, Y., and Zettlemoyer, L. (2022). <em>LLM.int8(): 8-bit Matrix
+  Multiplication for Transformers at Scale.</em> NeurIPS. https://arxiv.org/abs/2208.07339</li>
+<li>Frantar, E., Ashkboos, S., Hoefler, T., and Alistarh, D. (2023). <em>GPTQ: Accurate Post-Training
+  Quantization for Generative Pre-trained Transformers.</em> ICLR. https://arxiv.org/abs/2210.17323</li>
+<li>Lin, J., et al. (2024). <em>AWQ: Activation-aware Weight Quantization for LLM Compression and
+  Acceleration.</em> MLSys. https://arxiv.org/abs/2306.00978</li>
+</ul>
+<p><strong>Serving: mixture of experts and multi-adapter serving (Chapter 34)</strong></p>
+<ul>
+<li>Jiang, A. Q., et al. (2024). <em>Mixtral of Experts.</em> An open sparse mixture-of-experts model: 47B
+  parameters, of which about 13B are active per token. https://arxiv.org/abs/2401.04088</li>
+<li>DeepSeek-AI (2024). <em>DeepSeek-V2: A Strong, Economical, and Efficient Mixture-of-Experts Language
+  Model.</em> Introduces multi-head latent attention, which compresses the KV cache.
+  https://arxiv.org/abs/2405.04434</li>
+<li>Sheng, Y., et al. (2024). <em>S-LoRA: Serving Thousands of Concurrent LoRA Adapters.</em> MLSys. Unified
+  paging of adapters and KV cache to serve many fine-tunes on one base model.
+  https://arxiv.org/abs/2311.03285</li>
+<li>Chen, L., et al. (2024). <em>Punica: Multi-Tenant LoRA Serving.</em> MLSys. A batched kernel that runs
+  requests for different adapters in one batch. https://arxiv.org/abs/2310.18547</li>
+<li>Qin, R., et al. (2024). <em>Mooncake: A KVCache-centric Disaggregated Architecture for LLM Serving.</em>
+  The production design behind Kimi: disaggregated prefill and decode with a KV cache pool across CPU,
+  DRAM, and SSD. A revised version appeared at FAST 2025. https://arxiv.org/abs/2407.00079</li>
+</ul>
+<h2 id="parts-x-and-xi-system-design-and-advanced-patterns-chapters-35-to-38">Parts X and XI: System Design and Advanced Patterns (Chapters 35 to 38)<a class="headerlink" href="#parts-x-and-xi-system-design-and-advanced-patterns-chapters-35-to-38" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Khattab, O., and Zaharia, M. (2020). <em>ColBERT: Efficient and Effective Passage Search via
+  Contextualized Late Interaction over BERT.</em> SIGIR. https://arxiv.org/abs/2004.12832</li>
+<li>Santhanam, K., Khattab, O., Saad-Falcon, J., Potts, C., and Zaharia, M. (2022). <em>ColBERTv2:
+  Effective and Efficient Retrieval via Lightweight Late Interaction.</em> NAACL.
+  https://arxiv.org/abs/2112.01488</li>
+<li>Edge, D., et al. (2024). <em>From Local to Global: A Graph RAG Approach to Query-Focused
+  Summarization.</em> The GraphRAG paper. https://arxiv.org/abs/2404.16130</li>
+<li>Asai, A., Wu, Z., Wang, Y., Sil, A., and Hajishirzi, H. (2024). <em>Self-RAG: Learning to Retrieve,
+  Generate, and Critique through Self-Reflection.</em> ICLR. An adaptive-retrieval approach related to
+  agentic RAG. https://arxiv.org/abs/2310.11511</li>
+<li>Yu, T., et al. (2018). <em>Spider: A Large-Scale Human-Labeled Dataset for Complex and Cross-Domain
+  Semantic Parsing and Text-to-SQL Task.</em> EMNLP. The benchmark that made execution-based evaluation of
+  text-to-SQL standard; background for Chapter 36's analytics case. https://arxiv.org/abs/1809.08887</li>
+<li>Jimenez, C. E., Yang, J., Wettig, A., Yao, S., Pei, K., Press, O., and Narasimhan, K. (2024).
+  <em>SWE-bench: Can Language Models Resolve Real-World GitHub Issues?</em> ICLR. The standard benchmark
+  framing for coding agents. https://arxiv.org/abs/2310.06770</li>
+<li>Yang, J., Jimenez, C. E., Wettig, A., Lieret, K., Yao, S., Narasimhan, K., and Press, O. (2024).
+  <em>SWE-agent: Agent-Computer Interfaces Enable Automated Software Engineering.</em> NeurIPS. Harness and
+  interface design for coding agents. https://arxiv.org/abs/2405.15793</li>
+<li>Aminian, A., and Sheng, H. (2024). <em>Generative AI System Design Interview.</em> ByteByteGo. Worked
+  system design cases for generative AI products, in the interview format of Chapter 35.</li>
+<li>Sarthi, P., Abdullah, S., Tuli, A., Khanna, S., Goldie, A., and Manning, C. D. (2024). <em>RAPTOR:
+  Recursive Abstractive Processing for Tree-Organized Retrieval.</em> ICLR. A tree of recursive summaries
+  for questions that need a whole document. Supports Chapter 37. https://arxiv.org/abs/2401.18059</li>
+<li>Faysse, M., et al. (2025). <em>ColPali: Efficient Document Retrieval with Vision Language Models.</em>
+  ICLR. Retrieves page images directly with late interaction, skipping text extraction. Supports
+  Chapter 37. https://arxiv.org/abs/2407.01449</li>
+<li>Jin, B., et al. (2025). <em>Search-R1: Training LLMs to Reason and Leverage Search Engines with
+  Reinforcement Learning.</em> Trains the model to decide when and what to search during reasoning.
+  Supports Chapter 37. https://arxiv.org/abs/2503.09516</li>
+<li>Anthropic (2025). <em>Equipping agents for the real world with Agent Skills.</em> Engineering blog. Folders
+  of instructions and scripts that an agent loads on demand, a packaging format for procedural
+  knowledge. Supports Chapter 38.
+  https://www.anthropic.com/engineering/equipping-agents-for-the-real-world-with-agent-skills</li>
+</ul>
+<hr />
+<h2 id="specifications-and-standards">Specifications and standards<a class="headerlink" href="#specifications-and-standards" title="Permanent link">&para;</a></h2>
+<p>Check the current version of each before relying on details; several are revised more than once a
+year.</p>
+<ul>
+<li><strong>Model Context Protocol (MCP).</strong> Specification, concepts, and SDKs. The current revision as of this
+  edition is 2026-07-28, which makes the protocol core stateless and retires the initialize handshake;
+  the previous revision was 2025-11-25. Read the changelog of whichever revision your SDK targets.
+  Supports Chapter 18. https://modelcontextprotocol.io/specification/2026-07-28/changelog</li>
+<li><strong>MCP Registry.</strong> The official catalog and API for publicly available MCP servers.
+  https://registry.modelcontextprotocol.io</li>
+<li><strong>Agent2Agent (A2A) Protocol.</strong> An open protocol, now under the Linux Foundation, for agents to
+  discover each other through Agent Cards and delegate tasks over HTTP, JSON-RPC, gRPC, or SSE.
+  Supports Chapters 18 and 22. https://a2a-protocol.org/latest/specification/</li>
+<li><strong>JSON-RPC 2.0 Specification.</strong> The message format MCP builds on. https://www.jsonrpc.org/specification</li>
+<li><strong>RFC 9728, OAuth 2.0 Protected Resource Metadata (2025).</strong> How a client discovers which
+  authorization server protects a resource; MCP authorization relies on it.
+  https://www.rfc-editor.org/rfc/rfc9728</li>
+<li><strong>RFC 8707, Resource Indicators for OAuth 2.0 (2020).</strong> Lets a client name the resource a token is
+  for, so the token can be restricted to that one server. https://www.rfc-editor.org/rfc/rfc8707</li>
+<li><strong>OpenTelemetry Semantic Conventions for Generative AI.</strong> Standard attribute names for model calls,
+  token usage, agent operations, and MCP. In June 2026 the conventions moved to their own repository,
+  where they are still marked Development; the old pages on opentelemetry.io now redirect.
+  https://github.com/open-telemetry/semantic-conventions-genai</li>
+<li><strong>W3C Trace Context.</strong> How trace identifiers propagate across services.
+  https://www.w3.org/TR/trace-context/</li>
+<li><strong>OWASP Top 10 for LLM Applications 2025.</strong> The current edition, published in November 2024 by the
+  OWASP GenAI Security Project; it adds System Prompt Leakage and Vector and Embedding Weaknesses and
+  widens Denial of Service into Unbounded Consumption.
+  https://genai.owasp.org/resource/owasp-top-10-for-llm-applications-2025/</li>
+<li><strong>OWASP Agentic AI: Threats and Mitigations.</strong> The first guide from the OWASP Agentic Security
+  Initiative, a threat-model reference for tool use, memory, and multi-agent delegation. Supports
+  Chapter 26. https://genai.owasp.org/resource/agentic-ai-threats-and-mitigations/</li>
+<li><strong>NIST AI Risk Management Framework (AI RMF 1.0, NIST AI 100-1, 2023).</strong>
+  https://www.nist.gov/itl/ai-risk-management-framework</li>
+<li><strong>NIST AI 600-1, Generative Artificial Intelligence Profile (2024).</strong> The generative-AI companion to
+  the AI RMF. https://doi.org/10.6028/NIST.AI.600-1</li>
+<li><strong>MITRE ATLAS.</strong> A knowledge base of adversary tactics and techniques against AI systems.
+  https://atlas.mitre.org</li>
+<li><strong>JSON Schema.</strong> The schema language for tool parameters and structured outputs.
+  https://json-schema.org</li>
+<li><strong>Server-sent events, HTML Living Standard.</strong>
+  https://html.spec.whatwg.org/multipage/server-sent-events.html</li>
+<li><strong>RFC 6585, Additional HTTP Status Codes.</strong> Defines 429 Too Many Requests.
+  https://www.rfc-editor.org/rfc/rfc6585</li>
+<li><strong>RFC 9110, HTTP Semantics.</strong> Includes the Retry-After header and the meaning of status codes.
+  https://www.rfc-editor.org/rfc/rfc9110</li>
+<li><strong>RFC 7519, JSON Web Token (JWT).</strong> https://www.rfc-editor.org/rfc/rfc7519</li>
+</ul>
+<h2 id="documentation-of-tools-used-in-the-book">Documentation of tools used in the book<a class="headerlink" href="#documentation-of-tools-used-in-the-book" title="Permanent link">&para;</a></h2>
+<p><strong>Core stack</strong></p>
+<ul>
+<li>Python packaging with uv: https://docs.astral.sh/uv/</li>
+<li>Pydantic (v2): https://docs.pydantic.dev</li>
+<li>FastAPI: https://fastapi.tiangolo.com</li>
+<li>HTTPX: https://www.python-httpx.org</li>
+<li>pytest: https://docs.pytest.org</li>
+<li>Hypothesis (property-based testing): https://hypothesis.readthedocs.io</li>
+<li>OpenTelemetry for Python: https://opentelemetry.io/docs/languages/python/</li>
+<li>tiktoken (tokenizer used by <code>aie_core.llm.tokens</code> when installed): https://github.com/openai/tiktoken</li>
+<li>Jinja (templating): https://jinja.palletsprojects.com</li>
+<li>Docker Compose: https://docs.docker.com/compose/</li>
+<li>Redis: https://redis.io/docs/</li>
+</ul>
+<p><strong>Data and retrieval</strong></p>
+<ul>
+<li>pgvector: https://github.com/pgvector/pgvector</li>
+<li>PostgreSQL full-text search (<code>tsvector</code>, <code>tsquery</code>, ranking):
+  https://www.postgresql.org/docs/current/textsearch.html</li>
+<li>Sentence Transformers (local embedding and cross-encoder models): https://www.sbert.net</li>
+<li>FAISS: https://github.com/facebookresearch/faiss</li>
+<li>sqlglot (SQL parser used by the Chapter 36 SQL guard when installed): https://github.com/tobymao/sqlglot</li>
+</ul>
+<p><strong>Protocols, frameworks, and serving engines discussed as options</strong></p>
+<ul>
+<li>MCP Python SDK: https://github.com/modelcontextprotocol/python-sdk</li>
+<li>LangChain: https://python.langchain.com</li>
+<li>LangGraph: https://langchain-ai.github.io/langgraph/</li>
+<li>LlamaIndex: https://docs.llamaindex.ai</li>
+<li>DSPy: https://dspy.ai</li>
+<li>vLLM: https://docs.vllm.ai</li>
+<li>SGLang: https://github.com/sgl-project/sglang</li>
+<li>llama.cpp and the GGUF format: https://github.com/ggml-org/llama.cpp</li>
+<li>LiteLLM (one API across many model providers; Chapter 3): https://docs.litellm.ai</li>
+<li>OpenAI Agents SDK (Chapter 23): https://openai.github.io/openai-agents-python/</li>
+<li>Google Agent Development Kit (ADK) (Chapter 23): https://google.github.io/adk-docs/</li>
+<li>Pydantic AI (Chapter 23): https://ai.pydantic.dev</li>
+<li>Claude Agent SDK (Chapter 23): https://platform.claude.com/docs/en/agent-sdk/overview</li>
+</ul>
+<p><strong>Durable execution engines (Chapters 17 and 38)</strong></p>
+<ul>
+<li>Temporal: https://docs.temporal.io</li>
+<li>AWS Step Functions: https://docs.aws.amazon.com/step-functions/latest/dg/welcome.html</li>
+<li>DBOS (durable workflows on Postgres): https://docs.dbos.dev</li>
+<li>Restate: https://docs.restate.dev</li>
+</ul>
+<p>Framework and engine APIs change between minor versions. The book teaches the underlying primitives
+first so that these projects remain interchangeable implementation choices.</p>
+<hr />
+<h2 id="source-acknowledgement">Source acknowledgement<a class="headerlink" href="#source-acknowledgement" title="Permanent link">&para;</a></h2>
+<p>This book was built from the <em>AI Engineering Complete Study Book v2 (2026)</em>, which follows the topic map
+of Amit Shekhar's public AI Engineering Course (https://github.com/amitshekhariitbhu/ai-engineering-course).
+The chapters, code, projects, and exercises here were written anew on that foundation; the topic map and
+much of the source's case material and failure catalogue shaped what the book covers.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+    
+      
+      <nav class="md-footer__inner md-grid" aria-label="Footer" >
+        
+          
+          <a href="../glossary/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Glossary">
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+            </div>
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Previous
+              </span>
+              <div class="md-ellipsis">
+                Glossary
+              </div>
+            </div>
+          </a>
+        
+        
+          
+          <a href="../coverage-matrix/" class="md-footer__link md-footer__link--next" aria-label="Next: Coverage matrix">
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Next
+              </span>
+              <div class="md-ellipsis">
+                Coverage matrix
+              </div>
+            </div>
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11z"/></svg>
+            </div>
+          </a>
+        
+      </nav>
+    
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+    <div class="md-copyright__highlight">
+      Text CC BY 4.0 · Code MIT
+    </div>
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.sections", "navigation.footer", "navigation.top", "navigation.indexes", "search.suggest", "search.highlight", "content.code.copy", "toc.follow"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>

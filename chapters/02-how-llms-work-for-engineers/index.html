@@ -1,0 +1,6367 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="A complete textbook and field guide for building production LLM applications.">
+      
+      
+      
+        <link rel="canonical" href="https://xayyamsadigov.github.io/ai-engineering-book/chapters/02-how-llms-work-for-engineers/">
+      
+      
+        <link rel="prev" href="../01-what-ai-engineering-is/">
+      
+      
+        <link rel="next" href="../03-working-with-llm-apis/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>Chapter 2 — How LLMs Work, for Engineers - AI Engineering</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="deep-orange">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#chapter-2-how-llms-work-for-engineers" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="AI Engineering" class="md-header__button md-logo" aria-label="AI Engineering" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            AI Engineering
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Chapter 2 — How LLMs Work, for Engineers
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="deep-orange"  aria-label="Dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="deep-orange"  aria-label="Light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/XayyamSadigov/ai-engineering-book" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    XayyamSadigov/ai-engineering-book
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="AI Engineering" class="md-nav__button md-logo" aria-label="AI Engineering" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    AI Engineering
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/XayyamSadigov/ai-engineering-book" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    XayyamSadigov/ai-engineering-book
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../00-learning-roadmap/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Learning roadmap
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    I. AI Engineering Foundations
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    I. AI Engineering Foundations
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../01-what-ai-engineering-is/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 1 — What AI Engineering Is
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 2 — How LLMs Work, for Engineers
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 2 — How LLMs Work, for Engineers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#why-this-matters" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Why this matters
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#mental-model" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Mental model
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#core-concepts" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Core concepts
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Core concepts">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#tokens-the-unit-of-cost-context-and-confusion" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tokens: the unit of cost, context, and confusion
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#two-things-called-embedding" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Two things called "embedding"
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-transformer-as-a-block-diagram" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The transformer as a block diagram
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#attention-every-token-reads-from-every-earlier-token" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Attention: every token reads from every earlier token
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-context-window-working-memory-and-a-budget" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The context window: working memory and a budget
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#from-base-model-to-assistant" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        From base model to assistant
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#how-it-works-the-life-of-a-request" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How it works: the life of a request
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="How it works: the life of a request">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#prefill-and-decode" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Prefill and decode
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-kv-cache-and-why-long-context-plus-concurrency-runs-out-of-memory" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The KV cache and why long context plus concurrency runs out of memory
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#why-decode-is-sequential-and-what-engines-do-about-it" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Why decode is sequential, and what engines do about it
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#from-logits-to-a-token-the-sampling-pipeline" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        From logits to a token: the sampling pipeline
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#determinism-and-the-myths-around-it" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Determinism, and the myths around it
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#structured-and-constrained-generation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Structured and constrained generation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#lost-in-the-middle" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Lost in the middle
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#model-types-and-what-they-change-for-an-engineer" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Model types and what they change for an engineer
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#capability-limits-that-the-mechanism-predicts" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Capability limits that the mechanism predicts
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#how-to-read-a-model-card-or-a-benchmark-claim" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How to read a model card or a benchmark claim
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#implementation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Implementation
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#code-walkthrough" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Code walkthrough
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#production-considerations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Production considerations
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#common-mistakes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Common mistakes
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#failure-modes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Failure modes
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#tradeoffs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tradeoffs
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#evaluation-and-testing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Evaluation and testing
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#exercises" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Exercises
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Exercises">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#knowledge-questions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Knowledge questions
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#engineering-questions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Engineering questions
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#practical-exercises" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Practical exercises
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#debugging-exercises" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Debugging exercises
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#key-takeaways" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Key takeaways
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#further-reading" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Further reading
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../03-working-with-llm-apis/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 3 — Working with LLM APIs
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    II. LLM Application Development
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    II. LLM Application Development
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../04-prompt-engineering/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 4 — Prompt Engineering as Engineering
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../05-context-engineering/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 5 — Context Engineering
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../06-structured-output-and-extraction/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 6 — Structured Output and Extraction
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../07-model-selection-and-routing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 7 — Model Selection and Routing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    III. Embeddings and Retrieval
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    III. Embeddings and Retrieval
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../08-embeddings/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 8 — Embeddings
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../09-vector-search-and-vector-databases/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 9 — Vector Search and Vector Databases
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    IV. Production RAG
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    IV. Production RAG
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../10-rag-fundamentals/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 10 — RAG Fundamentals
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../11-ingestion-and-chunking/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 11 — Ingestion and Chunking
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../12-retrieval-engineering/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 12 — Retrieval Engineering
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../13-grounded-generation-and-citations/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 13 — Grounded Generation and Citations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../14-rag-evaluation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 14 — RAG Evaluation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../15-production-rag/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 15 — Production RAG
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_7" >
+        
+          
+          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    V. Tools and Workflows
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    V. Tools and Workflows
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../16-tool-calling/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 16 — Tool Calling
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../17-ai-workflows-and-orchestration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 17 — AI Workflows and Orchestration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../18-mcp-and-tool-ecosystems/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 18 — MCP and Tool Ecosystems
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_8" >
+        
+          
+          <label class="md-nav__link" for="__nav_8" id="__nav_8_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    VI. Agents
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_8">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    VI. Agents
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../19-the-agent-loop/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 19 — The Agent Loop
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../20-agent-architectures/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 20 — Agent Architectures
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../21-memory-systems/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 21 — Memory Systems
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../22-multi-agent-systems/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 22 — Multi-Agent Systems
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../23-frameworks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 23 — Frameworks
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_9" >
+        
+          
+          <label class="md-nav__link" for="__nav_9" id="__nav_9_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    VII. Evaluation
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_9_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_9">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    VII. Evaluation
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../24-evaluation-fundamentals/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 24 — Evaluation Fundamentals
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../25-evaluating-ai-systems-in-practice/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 25 — Evaluating AI Systems in Practice
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_10" >
+        
+          
+          <label class="md-nav__link" for="__nav_10" id="__nav_10_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    VIII. Security and Guardrails
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_10_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_10">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    VIII. Security and Guardrails
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../26-threat-modeling-and-prompt-injection/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 26 — Threat Modeling and Prompt Injection
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../27-guardrails-and-safe-tooling/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 27 — Guardrails and Safe Tooling
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_11" >
+        
+          
+          <label class="md-nav__link" for="__nav_11" id="__nav_11_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    IX. Production AI Engineering
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_11_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_11">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    IX. Production AI Engineering
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../28-ai-application-architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 28 — AI Application Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../29-reliability-and-scalability/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 29 — Reliability and Scalability
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../30-performance-and-cost-engineering/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 30 — Performance and Cost Engineering
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../31-observability/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 31 — Observability for AI Systems
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../32-engineering-practices/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 32 — Engineering Practices for AI Systems
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../33-fine-tuning-for-engineers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 33 — Fine-Tuning for Engineers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../34-inference-and-serving-essentials/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 34 — Inference and Serving Essentials
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_12" >
+        
+          
+          <label class="md-nav__link" for="__nav_12" id="__nav_12_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    X. AI System Design
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_12_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_12">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    X. AI System Design
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../35-system-design-method-and-cases-1/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 35 — System Design Method and Cases I
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../36-system-design-cases-2/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 36 — System Design Cases II
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_13" >
+        
+          
+          <label class="md-nav__link" for="__nav_13" id="__nav_13_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    XI. Advanced Patterns
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_13_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_13">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    XI. Advanced Patterns
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../37-advanced-retrieval-patterns/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 37 — Advanced Retrieval Patterns
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../38-durable-and-long-running-agents/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 38 — Durable and Long-Running Agents
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_14" >
+        
+          
+          <label class="md-nav__link" for="__nav_14" id="__nav_14_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    XII. Capstone
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_14_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_14">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    XII. Capstone
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../39-capstone/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 39 — Capstone: Northwind Assist
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_15" >
+        
+          
+          <label class="md-nav__link" for="__nav_15" id="__nav_15_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Exercises
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_15_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_15">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Exercises
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../exercises/ch01-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 1
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../exercises/ch02-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 2
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../exercises/ch03-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 3
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../exercises/ch04-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 4
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../exercises/ch05-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 5
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../exercises/ch06-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 6
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../exercises/ch07-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 7
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../exercises/ch08-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 8
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../exercises/ch09-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 9
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../exercises/ch10-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 10
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../exercises/ch11-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 11
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../exercises/ch12-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 12
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../exercises/ch13-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 13
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../exercises/ch14-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 14
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../exercises/ch15-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 15
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../exercises/ch16-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 16
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../exercises/ch17-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 17
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../exercises/ch18-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 18
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../exercises/ch19-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 19
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../exercises/ch20-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 20
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../exercises/ch21-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 21
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../exercises/ch22-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 22
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../exercises/ch23-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 23
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../exercises/ch24-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 24
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../exercises/ch25-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 25
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../exercises/ch26-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 26
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../exercises/ch27-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 27
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../exercises/ch28-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 28
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../exercises/ch29-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 29
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../exercises/ch30-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 30
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../exercises/ch31-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 31
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../exercises/ch32-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 32
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../exercises/ch33-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 33
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../exercises/ch34-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 34
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../exercises/ch35-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 35
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../exercises/ch36-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 36
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../exercises/ch37-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 37
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../exercises/ch38-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 38
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../exercises/ch39-exercises/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 39
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_16" >
+        
+          
+          <label class="md-nav__link" for="__nav_16" id="__nav_16_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Solutions
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_16_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_16">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Solutions
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../solutions/ch01-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 1
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../solutions/ch02-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 2
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../solutions/ch03-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 3
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../solutions/ch04-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 4
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../solutions/ch05-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 5
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../solutions/ch06-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 6
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../solutions/ch07-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 7
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../solutions/ch08-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 8
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../solutions/ch09-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 9
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../solutions/ch10-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 10
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../solutions/ch11-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 11
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../solutions/ch12-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 12
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../solutions/ch13-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 13
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../solutions/ch14-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 14
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../solutions/ch15-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 15
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../solutions/ch16-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 16
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../solutions/ch17-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 17
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../solutions/ch18-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 18
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../solutions/ch19-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 19
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../solutions/ch20-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 20
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../solutions/ch21-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 21
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../solutions/ch22-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 22
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../solutions/ch23-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 23
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../solutions/ch24-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 24
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../solutions/ch25-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 25
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../solutions/ch26-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 26
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../solutions/ch27-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 27
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../solutions/ch28-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 28
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../solutions/ch29-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 29
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../solutions/ch30-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 30
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../solutions/ch31-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 31
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../solutions/ch32-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 32
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../solutions/ch33-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 33
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../solutions/ch34-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 34
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../solutions/ch35-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 35
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../solutions/ch36-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 36
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../solutions/ch37-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 37
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../solutions/ch38-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 38
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../solutions/ch39-solutions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Chapter 39
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_17" >
+        
+          
+          <label class="md-nav__link" for="__nav_17" id="__nav_17_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Appendix
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_17_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_17">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Appendix
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../appendix-c-interview-preparation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Appendix — Interview preparation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../glossary/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Glossary
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../references/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    References
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../coverage-matrix/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Coverage matrix
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#why-this-matters" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Why this matters
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#mental-model" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Mental model
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#core-concepts" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Core concepts
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Core concepts">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#tokens-the-unit-of-cost-context-and-confusion" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tokens: the unit of cost, context, and confusion
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#two-things-called-embedding" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Two things called "embedding"
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-transformer-as-a-block-diagram" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The transformer as a block diagram
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#attention-every-token-reads-from-every-earlier-token" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Attention: every token reads from every earlier token
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-context-window-working-memory-and-a-budget" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The context window: working memory and a budget
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#from-base-model-to-assistant" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        From base model to assistant
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#how-it-works-the-life-of-a-request" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How it works: the life of a request
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="How it works: the life of a request">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#prefill-and-decode" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Prefill and decode
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-kv-cache-and-why-long-context-plus-concurrency-runs-out-of-memory" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The KV cache and why long context plus concurrency runs out of memory
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#why-decode-is-sequential-and-what-engines-do-about-it" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Why decode is sequential, and what engines do about it
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#from-logits-to-a-token-the-sampling-pipeline" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        From logits to a token: the sampling pipeline
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#determinism-and-the-myths-around-it" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Determinism, and the myths around it
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#structured-and-constrained-generation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Structured and constrained generation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#lost-in-the-middle" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Lost in the middle
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#model-types-and-what-they-change-for-an-engineer" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Model types and what they change for an engineer
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#capability-limits-that-the-mechanism-predicts" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Capability limits that the mechanism predicts
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#how-to-read-a-model-card-or-a-benchmark-claim" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How to read a model card or a benchmark claim
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#implementation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Implementation
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#code-walkthrough" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Code walkthrough
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#production-considerations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Production considerations
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#common-mistakes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Common mistakes
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#failure-modes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Failure modes
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#tradeoffs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tradeoffs
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#evaluation-and-testing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Evaluation and testing
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#exercises" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Exercises
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Exercises">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#knowledge-questions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Knowledge questions
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#engineering-questions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Engineering questions
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#practical-exercises" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Practical exercises
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#debugging-exercises" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Debugging exercises
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#key-takeaways" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Key takeaways
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#further-reading" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Further reading
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="chapter-2-how-llms-work-for-engineers">Chapter 2 — How LLMs Work, for Engineers<a class="headerlink" href="#chapter-2-how-llms-work-for-engineers" title="Permanent link">&para;</a></h1>
+<p>This chapter covers the minimum of model internals an engineer must design around, so you can predict an LLM-backed system's behavior from the mechanism underneath. Why did a bill double when you switched languages? Why does the first token take two seconds and the rest stream fast? Why did "temperature 0" return two different answers, why did a 200k-token context miss the fact on page 40, and why can a model that writes fluent SQL not count the rows in a table you paste? None of it is research mathematics, and training appears only to the depth that explains behavior.</p>
+<p><strong>You will be able to:</strong>
+- Measure token cost per language and content type with the real tokenizer, and explain why it varies.
+- Explain prefill and decode, and attribute a latency problem to time-to-first-token or time-per-output-token.
+- Compute KV-cache memory for a model configuration and turn it into a concurrency limit.
+- Choose sampling settings (temperature, top-k, top-p, stopping) per task and explain why temperature 0 is not reproducible.
+- Explain how a pretrained model becomes a chat assistant, and use that to predict instruction-following failures, refusals, and sycophancy.
+- Predict which tasks the mechanism makes unreliable (facts, arithmetic, trust) and where the system must compensate.</p>
+<p><strong>Prerequisites:</strong> Chapter 1 (the running Northwind example and the idea of a model as an untrusted component). | <strong>Code:</strong> <code>book/projects/examples/ch02/</code> (run: <code>cd book/projects/examples/ch02 &amp;&amp; pytest -q</code>) | <strong>Builds:</strong> three small experiments: a tokenizer cost table, a sampling demonstration, and a KV-cache calculator.</p>
+<p><strong>First reading:</strong> Mental model; Tokens; The transformer as a block diagram; Attention; The context window; Prefill and decode; The KV cache; From logits to a token; Determinism; Structured and constrained generation; Lost in the middle; Capability limits; then Implementation. <strong>Deep dives</strong> (skip on a first pass): Two things called "embedding"; From base model to assistant; Why decode is sequential; Model types; How to read a model card.</p>
+<h2 id="why-this-matters">Why this matters<a class="headerlink" href="#why-this-matters" title="Permanent link">&para;</a></h2>
+<p>An LLM's unusual failure modes mostly trace back to a handful of mechanical facts, and engineers who do not know them debug by superstition. They add "please be accurate" to a prompt when the evidence sits in the middle of a 60k-token context. They call temperature 0 deterministic and are surprised by a flaky test. They size a self-hosted deployment by parameter count and run out of GPU memory at a dozen concurrent long chats.</p>
+<p>One filter chose what is here: does this internal detail predict something an engineer must handle? Position encodings, backpropagation, and normalization variants fail it.</p>
+<h2 id="mental-model">Mental model<a class="headerlink" href="#mental-model" title="Permanent link">&para;</a></h2>
+<blockquote>
+<p><strong>Mental model:</strong> The model is a <strong>next-token probability machine wrapped in a loop</strong>. The machine takes a sequence of token IDs and returns a score for every vocabulary entry at the next position. The loop turns those scores into one chosen token, appends it, and calls the machine again until a stop condition fires. Everything you control (prompt, sampling settings, schema, stop sequences, maximum length) is an input to the machine or a rule in the loop. Nothing you do changes the weights.</p>
+</blockquote>
+<p>Three consequences recur throughout the book. Cost and latency follow token counts, not question difficulty, so context is a budget, not a bucket. The model has no state between calls, so whatever it should remember must be sent again. The output is a sample, so ground truth and any property you need with certainty must come from outside the model.</p>
+<h2 id="core-concepts">Core concepts<a class="headerlink" href="#core-concepts" title="Permanent link">&para;</a></h2>
+<h3 id="tokens-the-unit-of-cost-context-and-confusion">Tokens: the unit of cost, context, and confusion<a class="headerlink" href="#tokens-the-unit-of-cost-context-and-confusion" title="Permanent link">&para;</a></h3>
+<p>A tokenizer maps text to integer IDs from a fixed vocabulary, typically tens to a few hundred thousand entries, and back. Most use Byte Pair Encoding (BPE) or a close relative: start from single bytes and repeatedly merge the most frequent adjacent pair in a large corpus into a new entry, so common words like <code>policy</code> become single tokens. A Northwind ticket ID such as <code>NW-48213</code> never appeared often enough to earn merges, so it stays in fragments, and rare text falls back toward individual bytes. The vocabulary is frozen with the model. Four consequences follow.</p>
+<p><strong>Tokens are not words.</strong> For English prose a token is roughly four characters, and the ratio shifts with content. The experiment in this chapter tokenizes the same vacation-policy sentence in four languages, plus code, JSON, numbers, and identifiers, with one public BPE vocabulary (<code>tiktoken</code>'s <code>o200k_base</code>; words are split on spaces, so Japanese shows one):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>sample                          chars  bytes  words  tokens chars/tok tok/word
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>------------------------------------------------------------------------------
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>English prose                     173    173     29      32      5.41     1.10
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>Russian prose (same text)         177    329     23      42      4.21     1.83
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>Azerbaijani prose (same text)     163    195     21      55      2.96     2.62
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>Japanese prose (same text)         66    196      1      57      1.16    57.00
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>Python function                   216    216     24      48      4.50     2.00
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>JSON, compact                     247    247      6      76      3.25    12.67
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>JSON, indent=2                    309    309     30     112      2.76     3.73
+<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>Decimal numbers                    82     82     10      47      1.74     4.70
+<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>UUIDs and hashes                  124    124      6      98      1.27    16.33
+</code></pre></div>
+<p>The same statement costs 32 tokens in English, 42 in Russian, and 55 in Azerbaijani, a Latin-alphabet language with diacritics and morphology the vocabulary rarely saw. An older vocabulary from the same family (<code>cl100k_base</code>) charges 80 for the Russian sentence. Your provider's vocabulary can change a multilingual cost model by a factor of two, and only measuring tells you.</p>
+<p><strong>Structure is expensive.</strong> Pretty-printing the same ticket JSON raises its cost from 76 to 112 tokens for zero information, and a schema sent with every request pays that tax on every call. Compact serialization is one of the cheapest optimizations in the book.</p>
+<p><strong>Numbers and identifiers shatter.</strong> A ten-digit number becomes four pieces (<code>123 | 456 | 789 | 0</code>), and 124 characters of UUIDs and hashes become 98 tokens. Fragmentation is one reason arithmetic and exact copying are weak: <code>1234567890</code> is four arbitrary symbols, not a quantity. When extraction must preserve an invoice number exactly, verify the copied value against the source.</p>
+<p><strong>Count with the real tokenizer.</strong> Character-based estimates are wrong by two to four times in exactly the cases that matter. Use exact counts (the provider's counting endpoint or published tokenizer) for budget enforcement and billing, heuristics only for early estimates, and log which one you used. The tokenizer is part of the model: when you switch models, re-measure.</p>
+<h3 id="two-things-called-embedding">Two things called "embedding"<a class="headerlink" href="#two-things-called-embedding" title="Permanent link">&para;</a></h3>
+<blockquote>
+<p><strong>Deep dive.</strong> Separates the model's internal token vectors from the retrieval embeddings of Part IV; skip on a first reading.</p>
+</blockquote>
+<p>Inside the model, each token ID first selects a row of an embedding matrix, a vector of a few thousand numbers learned with the rest of the network and never exposed through an API. A retrieval embedding model is a separate, usually smaller network trained to map a whole passage to one vector so that related passages land near each other; its output is what you store in a vector index.</p>
+<p>You cannot pull "the LLM's embeddings" out of a chat model for search, you cannot switch retrieval embedding models without re-indexing, and an LLM reading a retrieved chunk sees its tokens, never its vector. Chapter 8 develops the retrieval side.</p>
+<h3 id="the-transformer-as-a-block-diagram">The transformer as a block diagram<a class="headerlink" href="#the-transformer-as-a-block-diagram" title="Permanent link">&para;</a></h3>
+<p>The shape of the computation, not the equations, determines cost.</p>
+<pre class="mermaid"><code>flowchart TD
+    T["token IDs t1 .. tn"] --&gt; E["embedding lookup + position info"]
+    E --&gt; B1["block 1 attention + MLP"]
+    B1 --&gt; B2["block 2 attention + MLP"]
+    B2 --&gt; Bd["..."]
+    Bd --&gt; BN["block N attention + MLP"]
+    BN --&gt; NM["final norm"]
+    NM --&gt; L["output projection logits over vocabulary"]
+    L --&gt; S["sampling policy T, top-k, top-p, grammar"]
+    S --&gt; NT["next token"]
+    NT --&gt;|append and repeat| T</code></pre>
+<p>Token IDs become vectors, the vectors pass through N identical blocks (tens to around a hundred), and the final vector at the last position is projected to one raw score per vocabulary entry, called a <strong>logit</strong>. A sampling policy picks a token, it is appended, and the whole thing runs again. Each block does two things. <strong>Attention</strong> moves information between positions: each token's vector is updated with a weighted mix of information from earlier tokens. <strong>The MLP</strong> (a feed-forward network) transforms each position independently and holds most of the parameters.</p>
+<p>The loop at the bottom is why generation is sequential and output tokens cost more latency than input tokens. The absence of any box labeled "memory" or "truth" is why the model knows only what is in <code>t1 .. tn</code> and in its weights.</p>
+<p><strong>Mixture of experts (MoE)</strong> replaces each MLP with many "experts" plus a router that sends each token through only a few. Such a model has <strong>total parameters</strong>, which must all sit in accelerator memory, and fewer <strong>active parameters</strong>, which run per token and set the per-step cost. An illustrative MoE model with 100 billion total and 15 billion active parameters needs the memory of a large model and decodes at roughly the speed of a mid-sized one (Chapter 34).</p>
+<h3 id="attention-every-token-reads-from-every-earlier-token">Attention: every token reads from every earlier token<a class="headerlink" href="#attention-every-token-reads-from-every-earlier-token" title="Permanent link">&para;</a></h3>
+<p>Think of attention as a fuzzy dictionary lookup that runs at every position. Each position builds a <em>query</em> vector (what it is looking for). Every earlier position offers a <em>key</em> vector (what it can answer) and a <em>value</em> vector (what it hands over if picked). The query is compared with every key, the match scores become weights that add up to one (a softmax), and the position receives a weighted average of all the values. When Northwind Assist answers "Can I carry over unused vacation days?", the positions writing the answer match the keys of the carry-over clause, so that clause's values dominate the mix.</p>
+<p>Each layer runs several of these lookups in parallel, called <em>heads</em>, each with vectors of length <code>head_dim</code>; this matters for the KV cache below. The operational content: <strong>any token can read from any earlier token, with learned weights, in every layer</strong>. That is how a model uses a definition from the system prompt, and why an instruction inside a retrieved document can steer the output: attention does not know which tokens you trust (Chapter 26).</p>
+<p>The cost follows. Attention compares n queries against n keys, so its work grows with n², while the MLP grows linearly. A 2,000-token prompt means about 4 million query-key comparisons per head per layer; a 64,000-token prompt, about 4 billion: thirty-two times the tokens, a thousand times the work. So doubling a long prompt more than doubles the wait before the first output token.</p>
+<p>Models also degrade, sometimes sharply, beyond the sequence lengths they were trained on, even when the API accepts the tokens. An advertised context size says what the input will accept, not how well the model uses position 150,000.</p>
+<h3 id="the-context-window-working-memory-and-a-budget">The context window: working memory and a budget<a class="headerlink" href="#the-context-window-working-memory-and-a-budget" title="Permanent link">&para;</a></h3>
+<p>The context window is the maximum number of tokens the model can attend over: system prompt, history, retrieved documents, tool results, and generated tokens all share it. It is the model's entire working memory; a fact in neither the window nor the weights gets replaced by something plausible.</p>
+<p>The window is a budget with four costs. <strong>Money:</strong> every input token is billed. <strong>Latency:</strong> reading the prompt grows at least linearly with its length. <strong>Serving memory:</strong> every token holds its keys and values in GPU memory (the KV cache, below) for the whole request, which caps concurrency. <strong>Attention dilution:</strong> the more tokens compete, the less reliably any one is used (see Lost in the middle). Deciding what goes in is context engineering (Chapter 5).</p>
+<h3 id="from-base-model-to-assistant">From base model to assistant<a class="headerlink" href="#from-base-model-to-assistant" title="Permanent link">&para;</a></h3>
+<blockquote>
+<p><strong>Deep dive.</strong> Explains instruction-following, refusals, sycophancy, and reasoning tokens from the training stages; skip on a first reading.</p>
+</blockquote>
+<p>The model behind a chat API went through several training stages, and each leaves fingerprints you will debug (Chapter 33 covers running them yourself).</p>
+<p><strong>Pretraining</strong> teaches next-token prediction on a very large corpus. The result is a <em>base model</em>: a document continuer. Ask it "How many vacation days carry over?" and it may continue with three more questions, because a list of questions is a plausible document. Almost everything the model knows, and its knowledge cutoff, comes from this stage.</p>
+<p><strong>Instruction tuning</strong> (supervised fine-tuning on curated conversations) teaches the format: after a marker that says "the assistant speaks now," a helpful answer follows, then an end-of-turn token.</p>
+<p><strong>Preference tuning</strong> shapes which of several acceptable answers the model prefers, from pairwise comparisons by people or models (RLHF trains a reward model on them; DPO-style methods use the pairs directly). Tone, helpfulness, and refusals are mostly set here.</p>
+<p><strong>Chat templates.</strong> The list of messages your code sends is not a structure the model sees. The server serializes it into one token sequence with a <em>chat template</em>, using special tokens that mark each role's turn:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>messages your code sends                     token stream the model reads (illustrative)
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>[{"role": "system", "content": "You are     &lt;|start|&gt;system&lt;|sep|&gt;You are Northwind Assist ...&lt;|end|&gt;
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>   Northwind Assist ..."},               -&gt;  &lt;|start|&gt;user&lt;|sep|&gt;How many vacation days carry over?&lt;|end|&gt;
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a> {"role": "user", "content": "How many       &lt;|start|&gt;assistant&lt;|sep|&gt;      &lt;- generation starts here
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>   vacation days carry over?"}]
+</code></pre></div>
+<p>Each model family has its own markers. Generation begins right after the assistant marker, and the end-of-turn token is the "natural stop" in the stopping rules below. If you self-host, apply the exact template from the model's tokenizer configuration: a wrong template raises no error, it silently lowers quality.</p>
+<p>Three behaviors follow from these stages.</p>
+<ul>
+<li><strong>The instruction hierarchy is learned, not enforced.</strong> Models follow the system segment over a conflicting user segment because training rewarded that, not because anything blocks the user tokens; a persuasive user message or a retrieved instruction can still win (Chapters 4 and 26).</li>
+<li><strong>Refusals are a learned pattern.</strong> The model learns surface cues, not your policy. It over-refuses benign requests that resemble harmful ones (an HR question about "terminating" an employee's access) and can under-refuse a rephrased harmful one. Enforce your actual policy in code (Chapter 27).</li>
+<li><strong>Sycophancy is a learned preference.</strong> Raters tend to prefer answers that agree with them and sound confident. The model accepts false premises ("since carry-over is unlimited, how do I ...") and flips a correct answer under pushback. Ground answers in retrieved evidence and include leading-question cases in your evaluation set (Chapter 24).</li>
+</ul>
+<p><strong>Reasoning models</strong> add a stage, typically reinforcement learning on problems with checkable answers, that rewards a long stretch of "thinking" tokens before the answer. Each thinking token is an ordinary decode step (both described below): it takes time, occupies KV cache, and is usually billed as output even when hidden. A visible 200-token answer may sit behind thousands of them, so the wait grows, cost varies widely between requests, and <code>max_tokens</code> must leave room. The extra computation helps on multi-step math, code, and planning, and buys little on lookup, extraction, or classification. Chapter 7 routes effort per request.</p>
+<h2 id="how-it-works-the-life-of-a-request">How it works: the life of a request<a class="headerlink" href="#how-it-works-the-life-of-a-request" title="Permanent link">&para;</a></h2>
+<h3 id="prefill-and-decode">Prefill and decode<a class="headerlink" href="#prefill-and-decode" title="Permanent link">&para;</a></h3>
+<p>Follow one Northwind request through the engine: a 6,000-token prompt (system contract, three HR policy chunks, and the question "How many vacation days carry over?") that produces a 150-token answer. It runs in two phases with different performance character.</p>
+<pre class="mermaid"><code>sequenceDiagram
+    participant C as Client
+    participant G as Gateway / tokenizer
+    participant E as Inference engine
+    participant K as KV cache
+    C-&gt;&gt;G: prompt text
+    G-&gt;&gt;E: token IDs (n tokens)
+    Note over E: prefill: all n positions in parallel, compute-bound, linear MLP work plus quadratic attention
+    E-&gt;&gt;K: write K,V for n tokens in every layer
+    E--&gt;&gt;C: first token (TTFT ends here)
+    loop decode, one token per step
+        E-&gt;&gt;K: read all stored K,V
+        Note over E: one new position, memory-bandwidth-bound
+        E-&gt;&gt;K: append K,V for the new token
+        E--&gt;&gt;C: stream token (TPOT per step)
+    end
+    Note over E: stop: EOS, stop sequence, max tokens, or grammar end</code></pre>
+<p>Prefill is reading the whole question; decode is writing the answer one token at a time. <strong>Prefill</strong> pushes all n prompt positions through all blocks together in large matrix multiplications. It is compute-bound, holds the quadratic attention term, writes the prompt's keys and values to the KV cache, and ends with logits for the first output token.</p>
+<p><strong>Decode</strong> then generates one token per step. Each step reads all the weights and all cached keys and values to do a little arithmetic for one new position, then appends its key and value to the cache. The phase is memory-bandwidth-bound, like a full table scan to return one row. With an illustrative 8-billion-parameter model at 16 bits, each step reads about 16 GB of weights; at about 3 TB/s of bandwidth that sets a floor of roughly 5 ms per token. It is also why batching helps: one pass over the weights serves every sequence in the batch.</p>
+<p>The split needs two latency metrics. <strong>Time to first token (TTFT)</strong> is the server-side time from receiving the request to producing the first output token: queueing plus prefill. <strong>Time per output token (TPOT)</strong> is the decode cadence, set by model size, memory bandwidth, and batch size, and creeping up as the cache grows. For the Northwind request, TTFT is queueing plus the 6,000-token prefill, and the answer is 150 TPOT steps. A long prompt with a short answer is TTFT-dominated; a short prompt with a long answer is TPOT-dominated.</p>
+<p>Keep TTFT distinct from the user's <strong>perceived wait</strong>, the time until something useful appears on screen. Without streaming, the user waits TTFT plus every decode step; with streaming (Chapter 3), roughly TTFT plus network time. Streaming shortens the perceived wait and changes neither TTFT nor TPOT. Northwind's "p95 time-to-first-token under 2 s" is a constraint on prompt size and queueing that streaming cannot relax; an answer-length cap is the separate lever on total decode time.</p>
+<h3 id="the-kv-cache-and-why-long-context-plus-concurrency-runs-out-of-memory">The KV cache and why long context plus concurrency runs out of memory<a class="headerlink" href="#the-kv-cache-and-why-long-context-plus-concurrency-runs-out-of-memory" title="Permanent link">&para;</a></h3>
+<p>Without a cache, step k of decode would recompute the keys and values of all k earlier tokens. Because attention only looks backward, those never change, so the KV cache stores them. It is the resource that runs out first when long contexts meet many simultaneous users. Its size for one sequence is</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>KV bytes = 2 × layers × kv_heads × head_dim × tokens × bytes_per_element
+</code></pre></div>
+<p>where the 2 counts keys and values, <code>layers</code> is the block count N, <code>kv_heads × head_dim</code> is the width of the key (and value) vector per layer, <code>tokens</code> is everything in context so far (prompt plus generated), and <code>bytes_per_element</code> is 2 for 16-bit and 1 for 8-bit cache formats. Everything except <code>tokens</code> is a constant of the model, so the cache is linear in context length and, across users, in concurrency.</p>
+<p>One worked number, with an illustrative mid-sized configuration: 32 layers, 8 key/value heads, head dimension 128, 16-bit cache. Every token kept in context costs 2 × 32 × 8 × 128 × 2 = 131,072 bytes, 128 KiB. A 16,000-token context occupies about 1.95 GiB per sequence; sixteen such sequences need 31 GiB on top of the weights. With 40 GiB free, 20 Northwind HR users with 16k tokens of handbook context fit, or two with 128k contexts, and the next one queues. <strong>Context length is a concurrency decision</strong>, and a provider's rate limits and latency spikes under load follow the same arithmetic.</p>
+<p>The configuration assumed 8 key/value heads for a model that might have 32 query heads. That sharing is <strong>grouped-query attention (GQA)</strong>; with one shared key/value head it is <strong>multi-query attention (MQA)</strong>. It cuts the cache by the sharing factor (four times here: 7.8 GiB per 16k sequence without it) at a modest quality cost; 8-bit cache formats halve it again. For self-hosting, the key/value head count says more about concurrency than the parameter count.</p>
+<p>The cache also explains <strong>prefix reuse</strong>, sold by hosted providers as prompt caching. Keys and values at position i depend only on tokens 1 through i, so requests that begin with the same tokens can share that prefix's cache and skip its prefill. One changed token near the start invalidates everything after it. Chapter 5 owns the practice.</p>
+<h3 id="why-decode-is-sequential-and-what-engines-do-about-it">Why decode is sequential, and what engines do about it<a class="headerlink" href="#why-decode-is-sequential-and-what-engines-do-about-it" title="Permanent link">&para;</a></h3>
+<blockquote>
+<p><strong>Deep dive.</strong> Names the engine techniques behind serving throughput; skip on a first reading.</p>
+</blockquote>
+<p>Token k+1 cannot be computed until token k is chosen, so one request cannot use an accelerator efficiently. Engines recover utilization with <strong>continuous batching</strong> (many requests' decode steps run together, joining and leaving at every step), <strong>paging</strong> the KV cache in fixed blocks, and <strong>speculative decoding</strong> (a small model drafts several tokens and the large model verifies them in one pass). All change throughput and tail latency (Chapter 34). Your latency depends on who else is in the batch, which is why percentiles, not averages, are the right metric.</p>
+<h3 id="from-logits-to-a-token-the-sampling-pipeline">From logits to a token: the sampling pipeline<a class="headerlink" href="#from-logits-to-a-token-the-sampling-pipeline" title="Permanent link">&para;</a></h3>
+<p>The last step of every decode iteration is yours to configure.</p>
+<pre class="mermaid"><code>flowchart LR
+    L["logits one per vocab entry"] --&gt; M["grammar mask optional"]
+    M --&gt; T["divide by temperature"]
+    T --&gt; SM["softmax to probabilities"]
+    SM --&gt; K["top-k keep k best"]
+    K --&gt; P["top-p keep nucleus"]
+    P --&gt; D["draw one token"]
+    D --&gt; ST{"stop?"}
+    ST --&gt;|EOS, stop seq, max tokens| END["done"]
+    ST --&gt;|no| L</code></pre>
+<p><strong>Softmax</strong> turns logits into probabilities that sum to one: <code>p_i = exp(z_i) / Σ exp(z_j)</code>. <strong>Temperature</strong> divides the logits first, a contrast knob: below 1 it sharpens the distribution (in the table below, T=0.3 lifts ' the' from 42% to 89%), above 1 it flattens it, and near 0 it approaches greedy selection. It never changes the ranking; it changes how much probability the tail of individually unlikely tokens keeps.</p>
+<p><strong>Top-k</strong> keeps the k most probable tokens and renormalizes. <strong>Top-p</strong> (nucleus sampling) keeps the smallest set of top tokens whose probabilities add up to at least p, so it keeps one or two when the model is confident and many when it is not. Both cut the tail, which summed can derail a continuation every few hundred draws. A toy eight-token distribution for the prefix "The ticket was escalated to":</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>token               greedy (T=0)   T=0.3   T=1.0   T=2.0   T=1, top_k=3   T=1, top_p=0.9   T=2, top_p=0.9
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>' the'                     1.000   0.893   0.424   0.275          0.550            0.441            0.285
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>' a'                       0.000   0.062   0.191   0.185          0.247            0.198            0.191
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>' tier'                    0.000   0.032   0.156   0.167          0.202            0.162            0.173
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>' engineering'             0.000   0.008   0.105   0.137          0.000            0.109            0.142
+<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>' support'                 0.000   0.004   0.086   0.124          0.000            0.089            0.128
+<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a>' management'              0.000   0.000   0.035   0.079          0.000            0.000            0.082
+<a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a>' Paris'                   0.000   0.000   0.003   0.023          0.000            0.000            0.000
+<a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a>' purple'                  0.000   0.000   0.001   0.011          0.000            0.000            0.000
+<a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a>entropy (bits)              0.00    0.65    2.24    2.64           1.44             2.07             2.48
+<a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a>candidates left                1       8       8       8              3                5                6
+</code></pre></div>
+<p>Entropy measures how spread out the choice is: 0 bits is one certain token, 3 bits a uniform pick among eight.</p>
+<p>Read the ' purple' row. At temperature 1 it has about a 0.06% chance per step; if every step had a tail like this, a 500-token answer would contain such a token roughly one time in four. At temperature 2 it is 1.1% per step, near certain over 500 tokens. Top-p at 0.9 removes it at either temperature. Temperature controls diversity among reasonable options; truncation deletes unreasonable ones. A common split is low temperature alone for extraction and classification, moderate temperature with top-p for generation.</p>
+<p><strong>Greedy decoding</strong> (temperature 0) always takes the argmax, the right default for extraction, classification, tool arguments, and code edits. Its pathology is looping: a model that starts repeating a phrase has no randomness to escape. <strong>Repetition penalties</strong> push down logits of tokens already produced; they help with loops but damage legitimately repeated identifiers, so try stop sequences and length caps first.</p>
+<p><strong>Stopping</strong> is a loop rule. Generation ends on the end-of-sequence (EOS) token, on a configured stop sequence, at <code>max_tokens</code>, or when a grammar says the structure is complete. The API reports truncation as a separate finish reason (this book writes <code>length</code>). Treat <code>length</code> as an error in extraction pipelines, because the JSON is almost certainly incomplete, and set <code>max_tokens</code> per task, since it also bounds cost and latency.</p>
+<h3 id="determinism-and-the-myths-around-it">Determinism, and the myths around it<a class="headerlink" href="#determinism-and-the-myths-around-it" title="Permanent link">&para;</a></h3>
+<p>Temperature 0 makes the sampling step deterministic, not the system. Floating-point addition is not associative, and the summation order depends on the kernel and on which other requests share the batch. Two identical requests can see logits that differ in the last bits; when the top two candidates are close, the argmax flips and the outputs diverge from there. A Northwind ticket where P2 and P3 score almost the same can be labeled P2 in one CI run and P3 in the next, with an identical prompt. Mixture-of-experts routing can also depend on the batch, and providers update models behind a stable name, so a <code>seed</code> parameter is best-effort at most.</p>
+<p><strong>Temperature 0 gives you stability, not reproducibility.</strong> Tests that assert exact string equality will be flaky; assert on validated structure, fields, a judge's rubric, or a set of acceptable answers (Chapter 24). Only a response cache (Chapter 3) gives bit-exact repeats, because it skips the model.</p>
+<h3 id="structured-and-constrained-generation">Structured and constrained generation<a class="headerlink" href="#structured-and-constrained-generation" title="Permanent link">&para;</a></h3>
+<p>The grammar-mask box in the sampling diagram is where <strong>constrained decoding</strong> happens: the engine turns a schema or grammar into a token-level mask that zeroes any token that would make the output unparseable, so after <code>{"priority": "</code> only tokens that can begin <code>low</code>, <code>medium</code>, or <code>high</code> survive. The result is syntactically valid by construction (unless <code>max_tokens</code> cuts it off), but <strong>syntactic validity is not semantic validity</strong>: the date may be February 30th and the enum value the wrong one. Chapter 6 owns constrained decoding and the validation that must follow it.</p>
+<h3 id="lost-in-the-middle">Lost in the middle<a class="headerlink" href="#lost-in-the-middle" title="Permanent link">&para;</a></h3>
+<p>Models use context unevenly: move one required fact through a fixed long prompt, and accuracy is typically highest near the start or end and lowest in the middle, more so as the prompt grows. If Northwind's builder pastes 40 HR chunks in reading order, the carry-over clause that answers the question can land at position 21, the least-used place. Chapter 5 owns the remedies and the position-sweep test that measures your model at your lengths.</p>
+<h3 id="model-types-and-what-they-change-for-an-engineer">Model types and what they change for an engineer<a class="headerlink" href="#model-types-and-what-they-change-for-an-engineer" title="Permanent link">&para;</a></h3>
+<blockquote>
+<p><strong>Deep dive.</strong> Maps model classes onto the mechanism; Chapter 7 owns the choice; skip on a first reading.</p>
+</blockquote>
+<p><strong>Small models</strong> trade peak capability for latency, cost, and memory; for a bounded task such as ticket classification, one tuned or prompted for the job often matches a large model. <strong>General models</strong> are the default when the task shape is unknown. <strong>Reasoning models</strong> (see "From base model to assistant") are slower and costlier by large factors and better on multi-step problems. <strong>Decision-style usage</strong> returns a class, score, or choice, often with log-probabilities, which makes output cheap to validate and possible to calibrate (Chapter 6). <strong>Multimodal inputs</strong> enter as extra tokens from a modality-specific encoder: an image costs hundreds to thousands of tokens, so send text when you have it.</p>
+<p>For Northwind, ticket triage is a small-model job, policy questions go to a general model over retrieved context, and reconciling a disputed invoice is a routed reasoning case that still calls a calculator tool (Chapter 7).</p>
+<h3 id="capability-limits-that-the-mechanism-predicts">Capability limits that the mechanism predicts<a class="headerlink" href="#capability-limits-that-the-mechanism-predicts" title="Permanent link">&para;</a></h3>
+<p>Each of these follows from the mechanism above, so a newer model version softens it at best.</p>
+<p><strong>No ground truth.</strong> When the plausible continuation is a fact the model has not seen, it produces a plausible fact, with no internal flag separating recall from invention; confident tone is not a signal. Grounding, validated citations, and abstention paths (Chapter 13) are how the system supplies truth.</p>
+<p><strong>No state between calls.</strong> Each request starts from the weights and the context you send. "Memory" in a product is the application re-sending or summarizing prior content (Chapter 21).</p>
+<p><strong>Knowledge cutoff.</strong> Weights encode the training corpus up to some date. Anything later, and anything private to your organization, must arrive through the context. A question about last week's incident is a retrieval problem.</p>
+<p><strong>Weak arithmetic and counting.</strong> Numbers are fragmented into opaque pieces, and the architecture has no carry register or loop counter. Multi-digit arithmetic and counting a long list fail at rates unacceptable for billing or compliance. Route calculation to a tool (Chapter 16).</p>
+<p><strong>Instruction competition.</strong> Attention does not know which tokens are the system prompt, the user, or a pasted document, so instruction-shaped text in a document influences the output. Treat retrieved and user-provided content as untrusted data (Chapters 4 and 26).</p>
+<p><strong>Sensitivity to formatting.</strong> Rephrasing, reordered examples, or Markdown versus plain text can measurably change quality, because form is part of the condition. Version prompts and regression-test them (Chapter 4).</p>
+<h3 id="how-to-read-a-model-card-or-a-benchmark-claim">How to read a model card or a benchmark claim<a class="headerlink" href="#how-to-read-a-model-card-or-a-benchmark-claim" title="Permanent link">&para;</a></h3>
+<blockquote>
+<p><strong>Deep dive.</strong> Turns vendor numbers into questions to ask; skip on a first reading.</p>
+</blockquote>
+<p>Each vendor claim needs a question before you design on it. A <strong>context size</strong> is an input limit: what evaluation showed usable recall at your lengths and positions? A <strong>parameter count</strong> is about weights: what are total and active parameters, layers, key/value heads, and head dimension, which set the KV cache and your concurrency? A <strong>benchmark score</strong> is a measurement under specific settings: was it tool-assisted, how many samples per question, at what sampling settings, could the benchmark have leaked into training, and does its task distribution resemble yours? A <strong>latency or throughput claim</strong> is meaningless without prompt length, output length, concurrency, and percentile.</p>
+<p>As in Chapter 1, separate "the vendor reports" from "we measured," and record the evidence level next to every number you design on.</p>
+<h2 id="implementation">Implementation<a class="headerlink" href="#implementation" title="Permanent link">&para;</a></h2>
+<p>Three standalone scripts (standard library, NumPy, optional <code>tiktoken</code>) with offline tests; no <code>aie_core</code> dependency yet.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>book/projects/examples/ch02/
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>├── tokenizer_experiment.py   # token cost table, BPE pieces, heuristic fallback
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>├── sampling.py               # softmax, temperature, top-k, top-p, sample, demo
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a>├── kv_cache_calc.py          # kv_cache_bytes() and a CLI
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>└── test_ch02.py              # offline tests
+</code></pre></div>
+<p>Run from the repository root:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="nb">cd</span><span class="w"> </span>book/projects/examples/ch02<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>pytest<span class="w"> </span>-q
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>python<span class="w"> </span>tokenizer_experiment.py<span class="w"> </span>--pieces
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>python<span class="w"> </span>sampling.py<span class="w"> </span>--draws<span class="w"> </span><span class="m">10000</span>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>python<span class="w"> </span>kv_cache_calc.py<span class="w"> </span>--layers<span class="w"> </span><span class="m">32</span><span class="w"> </span>--kv-heads<span class="w"> </span><span class="m">8</span><span class="w"> </span>--head-dim<span class="w"> </span><span class="m">128</span><span class="w"> </span>--tokens<span class="w"> </span><span class="m">16000</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="w">    </span>--concurrency<span class="w"> </span><span class="m">16</span><span class="w"> </span>--memory-gb<span class="w"> </span><span class="m">40</span><span class="w"> </span>--query-heads<span class="w"> </span><span class="m">32</span>
+</code></pre></div>
+<p>Look for the UUID row's characters per token, the ' purple' row, and the calculator's GQA line: each replaces an assumption with a measurement.</p>
+<p><code>tiktoken</code> downloads a merge table on first use. If that fails behind a proxy, the script prints a table labeled <code>heuristic</code> instead of crashing. The counting core:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="c1"># path: book/projects/examples/ch02/tokenizer_experiment.py  (excerpt: counting core)</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">__future__</span><span class="w"> </span><span class="kn">import</span> <span class="n">annotations</span>
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="kn">import</span><span class="w"> </span><span class="nn">argparse</span>
+<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="kn">import</span><span class="w"> </span><span class="nn">json</span>
+<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="kn">import</span><span class="w"> </span><span class="nn">math</span>
+<a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="kn">import</span><span class="w"> </span><span class="nn">re</span>
+<a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a><span class="kn">from</span><span class="w"> </span><span class="nn">dataclasses</span><span class="w"> </span><span class="kn">import</span> <span class="n">dataclass</span>
+<a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a><span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">Callable</span>
+<a id="__codelineno-6-10" name="__codelineno-6-10" href="#__codelineno-6-10"></a>
+<a id="__codelineno-6-11" name="__codelineno-6-11" href="#__codelineno-6-11"></a><span class="n">DEFAULT_ENCODING</span> <span class="o">=</span> <span class="s2">"o200k_base"</span>
+<a id="__codelineno-6-12" name="__codelineno-6-12" href="#__codelineno-6-12"></a>
+<a id="__codelineno-6-13" name="__codelineno-6-13" href="#__codelineno-6-13"></a><span class="c1"># ---------------------------------------------------------------------------</span>
+<a id="__codelineno-6-14" name="__codelineno-6-14" href="#__codelineno-6-14"></a><span class="c1"># Counting</span>
+<a id="__codelineno-6-15" name="__codelineno-6-15" href="#__codelineno-6-15"></a><span class="c1"># ---------------------------------------------------------------------------</span>
+<a id="__codelineno-6-16" name="__codelineno-6-16" href="#__codelineno-6-16"></a>
+<a id="__codelineno-6-17" name="__codelineno-6-17" href="#__codelineno-6-17"></a><span class="n">_Encoder</span> <span class="o">=</span> <span class="n">Callable</span><span class="p">[[</span><span class="nb">str</span><span class="p">],</span> <span class="nb">list</span><span class="p">[</span><span class="nb">int</span><span class="p">]]</span>
+<a id="__codelineno-6-18" name="__codelineno-6-18" href="#__codelineno-6-18"></a><span class="n">_ENCODER_CACHE</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">_Encoder</span> <span class="o">|</span> <span class="kc">None</span><span class="p">]</span> <span class="o">=</span> <span class="p">{}</span>
+<a id="__codelineno-6-19" name="__codelineno-6-19" href="#__codelineno-6-19"></a>
+<a id="__codelineno-6-20" name="__codelineno-6-20" href="#__codelineno-6-20"></a>
+<a id="__codelineno-6-21" name="__codelineno-6-21" href="#__codelineno-6-21"></a><span class="k">def</span><span class="w"> </span><span class="nf">_load_tiktoken</span><span class="p">(</span><span class="n">encoding_name</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">_Encoder</span> <span class="o">|</span> <span class="kc">None</span><span class="p">:</span>
+<a id="__codelineno-6-22" name="__codelineno-6-22" href="#__codelineno-6-22"></a><span class="w">    </span><span class="sd">"""Return a ``str -&gt; token ids`` callable, or None if tiktoken is unavailable.</span>
+<a id="__codelineno-6-23" name="__codelineno-6-23" href="#__codelineno-6-23"></a>
+<a id="__codelineno-6-24" name="__codelineno-6-24" href="#__codelineno-6-24"></a><span class="sd">    Any failure (package missing, no network for the merge table, bad name) means</span>
+<a id="__codelineno-6-25" name="__codelineno-6-25" href="#__codelineno-6-25"></a><span class="sd">    fallback. The caller reports which path was used.</span>
+<a id="__codelineno-6-26" name="__codelineno-6-26" href="#__codelineno-6-26"></a><span class="sd">    """</span>
+<a id="__codelineno-6-27" name="__codelineno-6-27" href="#__codelineno-6-27"></a>    <span class="k">if</span> <span class="n">encoding_name</span> <span class="ow">in</span> <span class="n">_ENCODER_CACHE</span><span class="p">:</span>
+<a id="__codelineno-6-28" name="__codelineno-6-28" href="#__codelineno-6-28"></a>        <span class="k">return</span> <span class="n">_ENCODER_CACHE</span><span class="p">[</span><span class="n">encoding_name</span><span class="p">]</span>
+<a id="__codelineno-6-29" name="__codelineno-6-29" href="#__codelineno-6-29"></a>    <span class="n">encoder</span><span class="p">:</span> <span class="n">_Encoder</span> <span class="o">|</span> <span class="kc">None</span>
+<a id="__codelineno-6-30" name="__codelineno-6-30" href="#__codelineno-6-30"></a>    <span class="k">try</span><span class="p">:</span>
+<a id="__codelineno-6-31" name="__codelineno-6-31" href="#__codelineno-6-31"></a>        <span class="kn">import</span><span class="w"> </span><span class="nn">tiktoken</span>  <span class="c1"># type: ignore[import-not-found]</span>
+<a id="__codelineno-6-32" name="__codelineno-6-32" href="#__codelineno-6-32"></a>
+<a id="__codelineno-6-33" name="__codelineno-6-33" href="#__codelineno-6-33"></a>        <span class="n">encoder</span> <span class="o">=</span> <span class="n">tiktoken</span><span class="o">.</span><span class="n">get_encoding</span><span class="p">(</span><span class="n">encoding_name</span><span class="p">)</span><span class="o">.</span><span class="n">encode</span>
+<a id="__codelineno-6-34" name="__codelineno-6-34" href="#__codelineno-6-34"></a>    <span class="k">except</span> <span class="ne">Exception</span><span class="p">:</span>  <span class="c1"># noqa: BLE001 - deliberately broad</span>
+<a id="__codelineno-6-35" name="__codelineno-6-35" href="#__codelineno-6-35"></a>        <span class="n">encoder</span> <span class="o">=</span> <span class="kc">None</span>
+<a id="__codelineno-6-36" name="__codelineno-6-36" href="#__codelineno-6-36"></a>    <span class="n">_ENCODER_CACHE</span><span class="p">[</span><span class="n">encoding_name</span><span class="p">]</span> <span class="o">=</span> <span class="n">encoder</span>
+<a id="__codelineno-6-37" name="__codelineno-6-37" href="#__codelineno-6-37"></a>    <span class="k">return</span> <span class="n">encoder</span>
+<a id="__codelineno-6-38" name="__codelineno-6-38" href="#__codelineno-6-38"></a>
+<a id="__codelineno-6-39" name="__codelineno-6-39" href="#__codelineno-6-39"></a>
+<a id="__codelineno-6-40" name="__codelineno-6-40" href="#__codelineno-6-40"></a><span class="k">def</span><span class="w"> </span><span class="nf">heuristic_token_count</span><span class="p">(</span><span class="n">text</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
+<a id="__codelineno-6-41" name="__codelineno-6-41" href="#__codelineno-6-41"></a><span class="w">    </span><span class="sd">"""Rough estimate: ~4 ASCII chars, ~4 non-ASCII UTF-8 bytes, or ~2 digits per token.</span>
+<a id="__codelineno-6-42" name="__codelineno-6-42" href="#__codelineno-6-42"></a>
+<a id="__codelineno-6-43" name="__codelineno-6-43" href="#__codelineno-6-43"></a><span class="sd">    Loosely calibrated against public BPE vocabularies. For budgeting, not billing.</span>
+<a id="__codelineno-6-44" name="__codelineno-6-44" href="#__codelineno-6-44"></a><span class="sd">    """</span>
+<a id="__codelineno-6-45" name="__codelineno-6-45" href="#__codelineno-6-45"></a>    <span class="k">if</span> <span class="ow">not</span> <span class="n">text</span><span class="p">:</span>
+<a id="__codelineno-6-46" name="__codelineno-6-46" href="#__codelineno-6-46"></a>        <span class="k">return</span> <span class="mi">0</span>
+<a id="__codelineno-6-47" name="__codelineno-6-47" href="#__codelineno-6-47"></a>    <span class="n">ascii_chars</span> <span class="o">=</span> <span class="nb">sum</span><span class="p">(</span><span class="mi">1</span> <span class="k">for</span> <span class="n">ch</span> <span class="ow">in</span> <span class="n">text</span> <span class="k">if</span> <span class="nb">ord</span><span class="p">(</span><span class="n">ch</span><span class="p">)</span> <span class="o">&lt;</span> <span class="mi">128</span> <span class="ow">and</span> <span class="ow">not</span> <span class="n">ch</span><span class="o">.</span><span class="n">isdigit</span><span class="p">())</span>
+<a id="__codelineno-6-48" name="__codelineno-6-48" href="#__codelineno-6-48"></a>    <span class="n">digit_chars</span> <span class="o">=</span> <span class="nb">sum</span><span class="p">(</span><span class="mi">1</span> <span class="k">for</span> <span class="n">ch</span> <span class="ow">in</span> <span class="n">text</span> <span class="k">if</span> <span class="n">ch</span><span class="o">.</span><span class="n">isdigit</span><span class="p">())</span>
+<a id="__codelineno-6-49" name="__codelineno-6-49" href="#__codelineno-6-49"></a>    <span class="n">other_bytes</span> <span class="o">=</span> <span class="nb">sum</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">ch</span><span class="o">.</span><span class="n">encode</span><span class="p">(</span><span class="s2">"utf-8"</span><span class="p">))</span> <span class="k">for</span> <span class="n">ch</span> <span class="ow">in</span> <span class="n">text</span> <span class="k">if</span> <span class="nb">ord</span><span class="p">(</span><span class="n">ch</span><span class="p">)</span> <span class="o">&gt;=</span> <span class="mi">128</span><span class="p">)</span>
+<a id="__codelineno-6-50" name="__codelineno-6-50" href="#__codelineno-6-50"></a>    <span class="n">estimate</span> <span class="o">=</span> <span class="n">ascii_chars</span> <span class="o">/</span> <span class="mf">4.0</span> <span class="o">+</span> <span class="n">digit_chars</span> <span class="o">/</span> <span class="mf">2.0</span> <span class="o">+</span> <span class="n">other_bytes</span> <span class="o">/</span> <span class="mf">4.0</span>
+<a id="__codelineno-6-51" name="__codelineno-6-51" href="#__codelineno-6-51"></a>    <span class="k">return</span> <span class="nb">max</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">math</span><span class="o">.</span><span class="n">ceil</span><span class="p">(</span><span class="n">estimate</span><span class="p">))</span>
+<a id="__codelineno-6-52" name="__codelineno-6-52" href="#__codelineno-6-52"></a>
+<a id="__codelineno-6-53" name="__codelineno-6-53" href="#__codelineno-6-53"></a>
+<a id="__codelineno-6-54" name="__codelineno-6-54" href="#__codelineno-6-54"></a><span class="nd">@dataclass</span><span class="p">(</span><span class="n">frozen</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<a id="__codelineno-6-55" name="__codelineno-6-55" href="#__codelineno-6-55"></a><span class="k">class</span><span class="w"> </span><span class="nc">TokenCount</span><span class="p">:</span>
+<a id="__codelineno-6-56" name="__codelineno-6-56" href="#__codelineno-6-56"></a>    <span class="n">tokens</span><span class="p">:</span> <span class="nb">int</span>
+<a id="__codelineno-6-57" name="__codelineno-6-57" href="#__codelineno-6-57"></a>    <span class="n">method</span><span class="p">:</span> <span class="nb">str</span>  <span class="c1"># "tiktoken:&lt;encoding&gt;" or "heuristic"</span>
+<a id="__codelineno-6-58" name="__codelineno-6-58" href="#__codelineno-6-58"></a>
+<a id="__codelineno-6-59" name="__codelineno-6-59" href="#__codelineno-6-59"></a>    <span class="nd">@property</span>
+<a id="__codelineno-6-60" name="__codelineno-6-60" href="#__codelineno-6-60"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">exact</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>
+<a id="__codelineno-6-61" name="__codelineno-6-61" href="#__codelineno-6-61"></a>        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">method</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="s2">"tiktoken:"</span><span class="p">)</span>
+<a id="__codelineno-6-62" name="__codelineno-6-62" href="#__codelineno-6-62"></a>
+<a id="__codelineno-6-63" name="__codelineno-6-63" href="#__codelineno-6-63"></a>
+<a id="__codelineno-6-64" name="__codelineno-6-64" href="#__codelineno-6-64"></a><span class="k">def</span><span class="w"> </span><span class="nf">count_tokens</span><span class="p">(</span><span class="n">text</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">encoding_name</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="n">DEFAULT_ENCODING</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">TokenCount</span><span class="p">:</span>
+<a id="__codelineno-6-65" name="__codelineno-6-65" href="#__codelineno-6-65"></a><span class="w">    </span><span class="sd">"""Count tokens with the real tokenizer if possible, else with the heuristic."""</span>
+<a id="__codelineno-6-66" name="__codelineno-6-66" href="#__codelineno-6-66"></a>    <span class="n">encoder</span> <span class="o">=</span> <span class="n">_load_tiktoken</span><span class="p">(</span><span class="n">encoding_name</span><span class="p">)</span>
+<a id="__codelineno-6-67" name="__codelineno-6-67" href="#__codelineno-6-67"></a>    <span class="k">if</span> <span class="n">encoder</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+<a id="__codelineno-6-68" name="__codelineno-6-68" href="#__codelineno-6-68"></a>        <span class="k">return</span> <span class="n">TokenCount</span><span class="p">(</span><span class="n">heuristic_token_count</span><span class="p">(</span><span class="n">text</span><span class="p">),</span> <span class="s2">"heuristic"</span><span class="p">)</span>
+<a id="__codelineno-6-69" name="__codelineno-6-69" href="#__codelineno-6-69"></a>    <span class="k">return</span> <span class="n">TokenCount</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">encoder</span><span class="p">(</span><span class="n">text</span><span class="p">)),</span> <span class="sa">f</span><span class="s2">"tiktoken:</span><span class="si">{</span><span class="n">encoding_name</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+</code></pre></div>
+<p>The sampling module's core is the pipeline itself, ending in the <code>sample</code> step that chains temperature, softmax, top-k, and top-p. The helpers and the <code>main</code> that produced the table above are on disk.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="c1"># path: book/projects/examples/ch02/sampling.py  (excerpt: the sampling pipeline)</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="c1"># A toy next-token distribution for the prefix "The ticket was escalated to".</span>
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="c1"># Logits are unnormalized scores straight out of the model's output projection.</span>
+<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="n">TOY_VOCAB</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="p">[</span><span class="s2">" the"</span><span class="p">,</span> <span class="s2">" a"</span><span class="p">,</span> <span class="s2">" tier"</span><span class="p">,</span> <span class="s2">" engineering"</span><span class="p">,</span> <span class="s2">" support"</span><span class="p">,</span> <span class="s2">" management"</span><span class="p">,</span> <span class="s2">" Paris"</span><span class="p">,</span> <span class="s2">" purple"</span><span class="p">]</span>
+<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="n">TOY_LOGITS</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">([</span><span class="mf">4.0</span><span class="p">,</span> <span class="mf">3.2</span><span class="p">,</span> <span class="mf">3.0</span><span class="p">,</span> <span class="mf">2.6</span><span class="p">,</span> <span class="mf">2.4</span><span class="p">,</span> <span class="mf">1.5</span><span class="p">,</span> <span class="o">-</span><span class="mf">1.0</span><span class="p">,</span> <span class="o">-</span><span class="mf">2.5</span><span class="p">])</span>
+<a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a>
+<a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a>
+<a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a><span class="k">def</span><span class="w"> </span><span class="nf">softmax</span><span class="p">(</span><span class="n">logits</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">:</span>
+<a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a><span class="w">    </span><span class="sd">"""Numerically stable softmax: subtracting the max does not change the result."""</span>
+<a id="__codelineno-7-10" name="__codelineno-7-10" href="#__codelineno-7-10"></a>    <span class="n">z</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">logits</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float64</span><span class="p">)</span>
+<a id="__codelineno-7-11" name="__codelineno-7-11" href="#__codelineno-7-11"></a>    <span class="n">z</span> <span class="o">=</span> <span class="n">z</span> <span class="o">-</span> <span class="n">z</span><span class="o">.</span><span class="n">max</span><span class="p">()</span>
+<a id="__codelineno-7-12" name="__codelineno-7-12" href="#__codelineno-7-12"></a>    <span class="n">e</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">exp</span><span class="p">(</span><span class="n">z</span><span class="p">)</span>
+<a id="__codelineno-7-13" name="__codelineno-7-13" href="#__codelineno-7-13"></a>    <span class="k">return</span> <span class="n">e</span> <span class="o">/</span> <span class="n">e</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span>
+<a id="__codelineno-7-14" name="__codelineno-7-14" href="#__codelineno-7-14"></a>
+<a id="__codelineno-7-15" name="__codelineno-7-15" href="#__codelineno-7-15"></a>
+<a id="__codelineno-7-16" name="__codelineno-7-16" href="#__codelineno-7-16"></a><span class="k">def</span><span class="w"> </span><span class="nf">apply_temperature</span><span class="p">(</span><span class="n">logits</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">temperature</span><span class="p">:</span> <span class="nb">float</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">:</span>
+<a id="__codelineno-7-17" name="__codelineno-7-17" href="#__codelineno-7-17"></a><span class="w">    </span><span class="sd">"""Divide logits by T. T &lt; 1 sharpens, T &gt; 1 flattens, T -&gt; 0 approaches greedy.</span>
+<a id="__codelineno-7-18" name="__codelineno-7-18" href="#__codelineno-7-18"></a>
+<a id="__codelineno-7-19" name="__codelineno-7-19" href="#__codelineno-7-19"></a><span class="sd">    T == 0 is handled by the caller as greedy (argmax) because division by zero is</span>
+<a id="__codelineno-7-20" name="__codelineno-7-20" href="#__codelineno-7-20"></a><span class="sd">    undefined; providers do the same.</span>
+<a id="__codelineno-7-21" name="__codelineno-7-21" href="#__codelineno-7-21"></a><span class="sd">    """</span>
+<a id="__codelineno-7-22" name="__codelineno-7-22" href="#__codelineno-7-22"></a>    <span class="k">if</span> <span class="n">temperature</span> <span class="o">&lt;</span> <span class="mi">0</span><span class="p">:</span>
+<a id="__codelineno-7-23" name="__codelineno-7-23" href="#__codelineno-7-23"></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"temperature must be &gt;= 0"</span><span class="p">)</span>
+<a id="__codelineno-7-24" name="__codelineno-7-24" href="#__codelineno-7-24"></a>    <span class="k">if</span> <span class="n">temperature</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+<a id="__codelineno-7-25" name="__codelineno-7-25" href="#__codelineno-7-25"></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"temperature 0 means greedy; call greedy() instead"</span><span class="p">)</span>
+<a id="__codelineno-7-26" name="__codelineno-7-26" href="#__codelineno-7-26"></a>    <span class="k">return</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">logits</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float64</span><span class="p">)</span> <span class="o">/</span> <span class="n">temperature</span>
+<a id="__codelineno-7-27" name="__codelineno-7-27" href="#__codelineno-7-27"></a>
+<a id="__codelineno-7-28" name="__codelineno-7-28" href="#__codelineno-7-28"></a>
+<a id="__codelineno-7-29" name="__codelineno-7-29" href="#__codelineno-7-29"></a><span class="c1"># ... top_k_filter() is on disk</span>
+<a id="__codelineno-7-30" name="__codelineno-7-30" href="#__codelineno-7-30"></a>
+<a id="__codelineno-7-31" name="__codelineno-7-31" href="#__codelineno-7-31"></a>
+<a id="__codelineno-7-32" name="__codelineno-7-32" href="#__codelineno-7-32"></a><span class="k">def</span><span class="w"> </span><span class="nf">top_p_filter</span><span class="p">(</span><span class="n">probs</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">p_threshold</span><span class="p">:</span> <span class="nb">float</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">:</span>
+<a id="__codelineno-7-33" name="__codelineno-7-33" href="#__codelineno-7-33"></a><span class="w">    </span><span class="sd">"""Nucleus sampling: keep the smallest prefix (by descending prob) whose mass &gt;= p.</span>
+<a id="__codelineno-7-34" name="__codelineno-7-34" href="#__codelineno-7-34"></a>
+<a id="__codelineno-7-35" name="__codelineno-7-35" href="#__codelineno-7-35"></a><span class="sd">    The surviving set adapts to confidence: a peaked distribution keeps one or two</span>
+<a id="__codelineno-7-36" name="__codelineno-7-36" href="#__codelineno-7-36"></a><span class="sd">    tokens, a flat one keeps many. The most probable token is always kept, so the</span>
+<a id="__codelineno-7-37" name="__codelineno-7-37" href="#__codelineno-7-37"></a><span class="sd">    result is never empty even for tiny thresholds.</span>
+<a id="__codelineno-7-38" name="__codelineno-7-38" href="#__codelineno-7-38"></a><span class="sd">    """</span>
+<a id="__codelineno-7-39" name="__codelineno-7-39" href="#__codelineno-7-39"></a>    <span class="k">if</span> <span class="ow">not</span> <span class="mi">0</span> <span class="o">&lt;</span> <span class="n">p_threshold</span> <span class="o">&lt;=</span> <span class="mi">1</span><span class="p">:</span>
+<a id="__codelineno-7-40" name="__codelineno-7-40" href="#__codelineno-7-40"></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"p must be in (0, 1]"</span><span class="p">)</span>
+<a id="__codelineno-7-41" name="__codelineno-7-41" href="#__codelineno-7-41"></a>    <span class="n">p</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">probs</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float64</span><span class="p">)</span>
+<a id="__codelineno-7-42" name="__codelineno-7-42" href="#__codelineno-7-42"></a>    <span class="n">order</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">argsort</span><span class="p">(</span><span class="o">-</span><span class="n">p</span><span class="p">,</span> <span class="n">kind</span><span class="o">=</span><span class="s2">"stable"</span><span class="p">)</span>
+<a id="__codelineno-7-43" name="__codelineno-7-43" href="#__codelineno-7-43"></a>    <span class="n">cumulative</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">cumsum</span><span class="p">(</span><span class="n">p</span><span class="p">[</span><span class="n">order</span><span class="p">])</span>
+<a id="__codelineno-7-44" name="__codelineno-7-44" href="#__codelineno-7-44"></a>    <span class="c1"># index of the first position where cumulative mass reaches the threshold</span>
+<a id="__codelineno-7-45" name="__codelineno-7-45" href="#__codelineno-7-45"></a>    <span class="n">cutoff</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">searchsorted</span><span class="p">(</span><span class="n">cumulative</span><span class="p">,</span> <span class="n">p_threshold</span><span class="p">,</span> <span class="n">side</span><span class="o">=</span><span class="s2">"left"</span><span class="p">))</span>
+<a id="__codelineno-7-46" name="__codelineno-7-46" href="#__codelineno-7-46"></a>    <span class="n">keep</span> <span class="o">=</span> <span class="n">order</span><span class="p">[:</span> <span class="n">cutoff</span> <span class="o">+</span> <span class="mi">1</span><span class="p">]</span>
+<a id="__codelineno-7-47" name="__codelineno-7-47" href="#__codelineno-7-47"></a>    <span class="n">out</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros_like</span><span class="p">(</span><span class="n">p</span><span class="p">)</span>
+<a id="__codelineno-7-48" name="__codelineno-7-48" href="#__codelineno-7-48"></a>    <span class="n">out</span><span class="p">[</span><span class="n">keep</span><span class="p">]</span> <span class="o">=</span> <span class="n">p</span><span class="p">[</span><span class="n">keep</span><span class="p">]</span>
+<a id="__codelineno-7-49" name="__codelineno-7-49" href="#__codelineno-7-49"></a>    <span class="k">return</span> <span class="n">out</span> <span class="o">/</span> <span class="n">out</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span>
+<a id="__codelineno-7-50" name="__codelineno-7-50" href="#__codelineno-7-50"></a>
+<a id="__codelineno-7-51" name="__codelineno-7-51" href="#__codelineno-7-51"></a>
+<a id="__codelineno-7-52" name="__codelineno-7-52" href="#__codelineno-7-52"></a><span class="k">def</span><span class="w"> </span><span class="nf">greedy</span><span class="p">(</span><span class="n">logits</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
+<a id="__codelineno-7-53" name="__codelineno-7-53" href="#__codelineno-7-53"></a><span class="w">    </span><span class="sd">"""Argmax. Deterministic given identical logits; ties resolve to the lowest index."""</span>
+<a id="__codelineno-7-54" name="__codelineno-7-54" href="#__codelineno-7-54"></a>    <span class="k">return</span> <span class="nb">int</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">argmax</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">logits</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float64</span><span class="p">)))</span>
+<a id="__codelineno-7-55" name="__codelineno-7-55" href="#__codelineno-7-55"></a>
+<a id="__codelineno-7-56" name="__codelineno-7-56" href="#__codelineno-7-56"></a>
+<a id="__codelineno-7-57" name="__codelineno-7-57" href="#__codelineno-7-57"></a><span class="k">def</span><span class="w"> </span><span class="nf">sample</span><span class="p">(</span>
+<a id="__codelineno-7-58" name="__codelineno-7-58" href="#__codelineno-7-58"></a>    <span class="n">logits</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span>
+<a id="__codelineno-7-59" name="__codelineno-7-59" href="#__codelineno-7-59"></a>    <span class="o">*</span><span class="p">,</span>
+<a id="__codelineno-7-60" name="__codelineno-7-60" href="#__codelineno-7-60"></a>    <span class="n">temperature</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1.0</span><span class="p">,</span>
+<a id="__codelineno-7-61" name="__codelineno-7-61" href="#__codelineno-7-61"></a>    <span class="n">top_k</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+<a id="__codelineno-7-62" name="__codelineno-7-62" href="#__codelineno-7-62"></a>    <span class="n">top_p</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+<a id="__codelineno-7-63" name="__codelineno-7-63" href="#__codelineno-7-63"></a>    <span class="n">rng</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">Generator</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+<a id="__codelineno-7-64" name="__codelineno-7-64" href="#__codelineno-7-64"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
+<a id="__codelineno-7-65" name="__codelineno-7-65" href="#__codelineno-7-65"></a><span class="w">    </span><span class="sd">"""One decode step: logits -&gt; temperature -&gt; softmax -&gt; top-k -&gt; top-p -&gt; draw.</span>
+<a id="__codelineno-7-66" name="__codelineno-7-66" href="#__codelineno-7-66"></a>
+<a id="__codelineno-7-67" name="__codelineno-7-67" href="#__codelineno-7-67"></a><span class="sd">    Order matters and mirrors common engine implementations: temperature reshapes the</span>
+<a id="__codelineno-7-68" name="__codelineno-7-68" href="#__codelineno-7-68"></a><span class="sd">    logits first, then truncation removes the tail from the resulting probabilities.</span>
+<a id="__codelineno-7-69" name="__codelineno-7-69" href="#__codelineno-7-69"></a><span class="sd">    """</span>
+<a id="__codelineno-7-70" name="__codelineno-7-70" href="#__codelineno-7-70"></a>    <span class="k">if</span> <span class="n">temperature</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+<a id="__codelineno-7-71" name="__codelineno-7-71" href="#__codelineno-7-71"></a>        <span class="k">return</span> <span class="n">greedy</span><span class="p">(</span><span class="n">logits</span><span class="p">)</span>
+<a id="__codelineno-7-72" name="__codelineno-7-72" href="#__codelineno-7-72"></a>    <span class="n">probs</span> <span class="o">=</span> <span class="n">softmax</span><span class="p">(</span><span class="n">apply_temperature</span><span class="p">(</span><span class="n">logits</span><span class="p">,</span> <span class="n">temperature</span><span class="p">))</span>
+<a id="__codelineno-7-73" name="__codelineno-7-73" href="#__codelineno-7-73"></a>    <span class="k">if</span> <span class="n">top_k</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+<a id="__codelineno-7-74" name="__codelineno-7-74" href="#__codelineno-7-74"></a>        <span class="n">probs</span> <span class="o">=</span> <span class="n">top_k_filter</span><span class="p">(</span><span class="n">probs</span><span class="p">,</span> <span class="n">top_k</span><span class="p">)</span>
+<a id="__codelineno-7-75" name="__codelineno-7-75" href="#__codelineno-7-75"></a>    <span class="k">if</span> <span class="n">top_p</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+<a id="__codelineno-7-76" name="__codelineno-7-76" href="#__codelineno-7-76"></a>        <span class="n">probs</span> <span class="o">=</span> <span class="n">top_p_filter</span><span class="p">(</span><span class="n">probs</span><span class="p">,</span> <span class="n">top_p</span><span class="p">)</span>
+<a id="__codelineno-7-77" name="__codelineno-7-77" href="#__codelineno-7-77"></a>    <span class="n">rng</span> <span class="o">=</span> <span class="n">rng</span> <span class="ow">or</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">default_rng</span><span class="p">()</span>
+<a id="__codelineno-7-78" name="__codelineno-7-78" href="#__codelineno-7-78"></a>    <span class="k">return</span> <span class="nb">int</span><span class="p">(</span><span class="n">rng</span><span class="o">.</span><span class="n">choice</span><span class="p">(</span><span class="n">probs</span><span class="o">.</span><span class="n">size</span><span class="p">,</span> <span class="n">p</span><span class="o">=</span><span class="n">probs</span><span class="p">))</span>
+</code></pre></div>
+<p>The KV-cache calculator's core is three functions; the CLI that wraps them is on disk.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="c1"># path: book/projects/examples/ch02/kv_cache_calc.py  (excerpt: core functions)</span>
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="n">GIB</span> <span class="o">=</span> <span class="mi">1024</span><span class="o">**</span><span class="mi">3</span>
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>
+<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a>
+<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a><span class="k">def</span><span class="w"> </span><span class="nf">kv_cache_bytes</span><span class="p">(</span><span class="n">layers</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">kv_heads</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">head_dim</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">tokens</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">bytes_per_elem</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
+<a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a><span class="w">    </span><span class="sd">"""Bytes of KV cache for ONE sequence of ``tokens`` tokens."""</span>
+<a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a>    <span class="k">for</span> <span class="n">name</span><span class="p">,</span> <span class="n">value</span> <span class="ow">in</span> <span class="p">(</span>
+<a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a>        <span class="p">(</span><span class="s2">"layers"</span><span class="p">,</span> <span class="n">layers</span><span class="p">),</span>
+<a id="__codelineno-8-9" name="__codelineno-8-9" href="#__codelineno-8-9"></a>        <span class="p">(</span><span class="s2">"kv_heads"</span><span class="p">,</span> <span class="n">kv_heads</span><span class="p">),</span>
+<a id="__codelineno-8-10" name="__codelineno-8-10" href="#__codelineno-8-10"></a>        <span class="p">(</span><span class="s2">"head_dim"</span><span class="p">,</span> <span class="n">head_dim</span><span class="p">),</span>
+<a id="__codelineno-8-11" name="__codelineno-8-11" href="#__codelineno-8-11"></a>        <span class="p">(</span><span class="s2">"bytes_per_elem"</span><span class="p">,</span> <span class="n">bytes_per_elem</span><span class="p">),</span>
+<a id="__codelineno-8-12" name="__codelineno-8-12" href="#__codelineno-8-12"></a>    <span class="p">):</span>
+<a id="__codelineno-8-13" name="__codelineno-8-13" href="#__codelineno-8-13"></a>        <span class="k">if</span> <span class="n">value</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">:</span>
+<a id="__codelineno-8-14" name="__codelineno-8-14" href="#__codelineno-8-14"></a>            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2"> must be positive, got </span><span class="si">{</span><span class="n">value</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+<a id="__codelineno-8-15" name="__codelineno-8-15" href="#__codelineno-8-15"></a>    <span class="k">if</span> <span class="n">tokens</span> <span class="o">&lt;</span> <span class="mi">0</span><span class="p">:</span>
+<a id="__codelineno-8-16" name="__codelineno-8-16" href="#__codelineno-8-16"></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"tokens must be &gt;= 0, got </span><span class="si">{</span><span class="n">tokens</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+<a id="__codelineno-8-17" name="__codelineno-8-17" href="#__codelineno-8-17"></a>    <span class="k">return</span> <span class="mi">2</span> <span class="o">*</span> <span class="n">layers</span> <span class="o">*</span> <span class="n">kv_heads</span> <span class="o">*</span> <span class="n">head_dim</span> <span class="o">*</span> <span class="n">tokens</span> <span class="o">*</span> <span class="n">bytes_per_elem</span>
+<a id="__codelineno-8-18" name="__codelineno-8-18" href="#__codelineno-8-18"></a>
+<a id="__codelineno-8-19" name="__codelineno-8-19" href="#__codelineno-8-19"></a>
+<a id="__codelineno-8-20" name="__codelineno-8-20" href="#__codelineno-8-20"></a><span class="k">def</span><span class="w"> </span><span class="nf">bytes_per_token</span><span class="p">(</span><span class="n">layers</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">kv_heads</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">head_dim</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">bytes_per_elem</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
+<a id="__codelineno-8-21" name="__codelineno-8-21" href="#__codelineno-8-21"></a><span class="w">    </span><span class="sd">"""KV bytes added for every token kept in context. Handy for cost-per-token intuition."""</span>
+<a id="__codelineno-8-22" name="__codelineno-8-22" href="#__codelineno-8-22"></a>    <span class="k">return</span> <span class="n">kv_cache_bytes</span><span class="p">(</span><span class="n">layers</span><span class="p">,</span> <span class="n">kv_heads</span><span class="p">,</span> <span class="n">head_dim</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="n">bytes_per_elem</span><span class="p">)</span>
+<a id="__codelineno-8-23" name="__codelineno-8-23" href="#__codelineno-8-23"></a>
+<a id="__codelineno-8-24" name="__codelineno-8-24" href="#__codelineno-8-24"></a>
+<a id="__codelineno-8-25" name="__codelineno-8-25" href="#__codelineno-8-25"></a><span class="k">def</span><span class="w"> </span><span class="nf">max_concurrent_sequences</span><span class="p">(</span><span class="n">memory_budget_bytes</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">per_sequence_bytes</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
+<a id="__codelineno-8-26" name="__codelineno-8-26" href="#__codelineno-8-26"></a><span class="w">    </span><span class="sd">"""How many sequences of that size fit in the memory left for KV cache (floor)."""</span>
+<a id="__codelineno-8-27" name="__codelineno-8-27" href="#__codelineno-8-27"></a>    <span class="k">if</span> <span class="n">per_sequence_bytes</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">:</span>
+<a id="__codelineno-8-28" name="__codelineno-8-28" href="#__codelineno-8-28"></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"per_sequence_bytes must be positive"</span><span class="p">)</span>
+<a id="__codelineno-8-29" name="__codelineno-8-29" href="#__codelineno-8-29"></a>    <span class="k">if</span> <span class="n">memory_budget_bytes</span> <span class="o">&lt;</span> <span class="mi">0</span><span class="p">:</span>
+<a id="__codelineno-8-30" name="__codelineno-8-30" href="#__codelineno-8-30"></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"memory budget must be &gt;= 0"</span><span class="p">)</span>
+<a id="__codelineno-8-31" name="__codelineno-8-31" href="#__codelineno-8-31"></a>    <span class="k">return</span> <span class="n">memory_budget_bytes</span> <span class="o">//</span> <span class="n">per_sequence_bytes</span>
+</code></pre></div>
+<p>For the worked example it prints the numbers quoted in the KV-cache section, plus <code>without GQA (32 K/V heads) the same sequence would need 7.81 GiB, 4.0x more</code>.</p>
+<p>The tests (<code>test_ch02.py</code>, on disk) pin the softmax, ranking under temperature, a never-empty top-p, KV linearity, and the heuristic fallback. None calls a model, and tests that need the real vocabulary are skipped, not failed, when it is unavailable.</p>
+<h2 id="code-walkthrough">Code walkthrough<a class="headerlink" href="#code-walkthrough" title="Permanent link">&para;</a></h2>
+<p><strong>Fallback that announces itself.</strong> <code>count_tokens</code> returns a <code>TokenCount</code> whose <code>method</code> field says whether the number is exact. A bare <code>int</code> would let a production budget check silently switch to approximate when a download fails, unnoticed until a context overflow.</p>
+<p><strong>Order of operations in <code>sample</code>.</strong> Top-p after a high temperature keeps a larger nucleus (six candidates at T=2 versus five at T=1 in the demo). Do not assume one provider's order matches another's.</p>
+<p><strong>Top-p always keeps one token.</strong> The slice <code>[: cutoff + 1]</code> includes the first position where cumulative mass reaches the threshold, so for <code>p = 0.01</code> on a flat distribution one token survives. A naive <code>cumulative &lt;= p</code> mask would return an empty set and divide by zero.</p>
+<p><strong>Why the KV function validates.</strong> Zero layers or negative tokens would produce a silent zero or negative byte count, and a capacity plan built on that is worse than a crash. <code>max_concurrent_sequences</code> floors deliberately: nineteen and a half users is nineteen users and a queue.</p>
+<h2 id="production-considerations">Production considerations<a class="headerlink" href="#production-considerations" title="Permanent link">&para;</a></h2>
+<p><strong>Cost accounting is token accounting.</strong> Record input, output, cached-input, and thinking tokens per request from the provider's usage field, not your estimate, and reconcile against the invoice.</p>
+<p><strong>Latency budgets split by phase.</strong> Measure TTFT and TPOT separately, at percentiles. A TTFT regression points at prompt growth or queueing; a TPOT regression at load, batch composition, or a model change. Turn Northwind's p95 TTFT target into a context-size ceiling the context builder enforces (Chapter 5).</p>
+<p><strong>Version what shapes the distribution.</strong> Model identifier, sampling settings, stop sequences, <code>max_tokens</code>, and schema are deployed behavior. Keep them in one versioned configuration, log the version per request, and rerun the regression suite on a schedule, because providers update models behind stable names. Never let model output alone authorize a side effect (Chapters 16, 26, 27).</p>
+<p><strong>Two more signals.</strong> Alert when the cached-input ratio drops after a deploy: a change broke prefix reuse. On a self-hosted engine, watch queue depth next to KV-cache utilization; together they predict the concurrency cliff (Chapters 31 and 34).</p>
+<h2 id="common-mistakes">Common mistakes<a class="headerlink" href="#common-mistakes" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>Estimating tokens from characters</strong> for non-English text, numbers, IDs, or structured content.</li>
+<li><strong>Stacking temperature, top-k, top-p, and penalties by folklore.</strong> The knobs interact; tune with an evaluation or keep defaults.</li>
+<li><strong>Using a repetition penalty to fix looping in code generation.</strong> It breaks identifiers that must repeat.</li>
+<li><strong>Pretty-printing JSON and schemas sent to the model.</strong></li>
+<li><strong>Sizing hardware by parameter count.</strong> The KV cache, not the weights, caps concurrent long-context sessions.</li>
+<li><strong>Serving an instruction-tuned model without its chat template.</strong> Nothing errors; quality just drops.</li>
+<li><strong>Reading a confident or agreeable answer as a correct one.</strong></li>
+<li><strong>Dumping everything into a large context window.</strong></li>
+<li><strong>Asking the model to count or compute</strong> instead of having it call a tool.</li>
+</ul>
+<h2 id="failure-modes">Failure modes<a class="headerlink" href="#failure-modes" title="Permanent link">&para;</a></h2>
+<p><strong>Context overflow at the margin.</strong> Symptom: intermittent 4xx errors or silently truncated history on long conversations, mostly for non-English users. Telemetry: token count near the limit with <code>method = heuristic</code>, or a jump in the exact count after a model switch. Test: assert the exact count of the worst-case multilingual conversation from your logs stays under budget; alert when production takes the heuristic path.</p>
+<p><strong>Truncated structured output.</strong> Symptom: JSON parse errors on a few percent of extractions. Telemetry: <code>finish_reason = length</code> on those requests. Test: a long synthetic ticket that must still end in a natural stop; count <code>length</code> as a failure on every structured request.</p>
+<p><strong>Tail-token derailment.</strong> Symptom: a rare absurd word or language switch mid-answer. Telemetry: high-entropy positions; vanishes with top-p or lower temperature. Test: generate the same answer many times at deployed settings and run a judge or language-id check.</p>
+<p><strong>Greedy loop.</strong> Symptom: the answer repeats a sentence until <code>max_tokens</code>. Telemetry: high n-gram repetition plus <code>finish_reason = length</code>. Mitigate with stop sequences, a tighter cap, or mild sampling.</p>
+<p><strong>Lost-in-the-middle miss.</strong> Symptom: the assistant says a policy does not cover a case the retrieved document clearly covers. Telemetry: the correct chunk is in the evidence list but sat in the middle of a long block. Test: the position sweep from Chapter 5, on each model change.</p>
+<p><strong>Nondeterministic regression.</strong> Symptom: a golden test passes locally and fails in CI with a semantically identical answer. Telemetry: both outputs validate structurally; only the string differs. Replace the string assertion with structural checks (Chapter 24).</p>
+<p><strong>Concurrency cliff on a self-hosted model.</strong> Symptom: p99 latency jumps and requests queue past some number of active sessions. Telemetry: KV-cache utilization near 100%, GPU compute moderate. Test: load test at p95 context length and confirm the threshold matches the formula.</p>
+<h2 id="tradeoffs">Tradeoffs<a class="headerlink" href="#tradeoffs" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Decision</th>
+<th>Favors</th>
+<th>Costs</th>
+<th>Choose when</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Greedy decoding</td>
+<td>Stability, extraction accuracy</td>
+<td>Loops on long open text, no diversity</td>
+<td>Extraction, classification, tool arguments, code edits</td>
+</tr>
+<tr>
+<td>Sampling with top-p</td>
+<td>Natural prose, fewer loops</td>
+<td>Variance, harder tests</td>
+<td>Drafting, summaries, brainstorming</td>
+</tr>
+<tr>
+<td>Long context</td>
+<td>Simplicity, fewer retrieval decisions</td>
+<td>Cost, TTFT, dilution, KV memory</td>
+<td>Small corpora, one-off analysis, when retrieval evaluation is poor</td>
+</tr>
+<tr>
+<td>Retrieval into a small context</td>
+<td>Cost, latency, recall at the edges</td>
+<td>Pipeline complexity, retrieval errors</td>
+<td>Large or changing corpora, many users</td>
+</tr>
+<tr>
+<td>Small specialized model</td>
+<td>Latency, cost, privacy</td>
+<td>Narrow capability, more models to operate</td>
+<td>Bounded, high-volume, measurable tasks</td>
+</tr>
+<tr>
+<td>Reasoning effort on</td>
+<td>Hard multi-step accuracy</td>
+<td>Latency and cost by large factors</td>
+<td>Routed hard cases where the value justifies it</td>
+</tr>
+<tr>
+<td>Fewer KV heads or 8-bit cache</td>
+<td>Concurrency, context length</td>
+<td>Small quality loss, needs evaluation</td>
+<td>Self-hosting under memory pressure</td>
+</tr>
+</tbody>
+</table>
+<h2 id="evaluation-and-testing">Evaluation and testing<a class="headerlink" href="#evaluation-and-testing" title="Permanent link">&para;</a></h2>
+<p><strong>Test the system's contract with the model, never the model's exact words.</strong> The failure-mode tests above cover token budgets, stopping, and position sensitivity. Add:</p>
+<ul>
+<li><strong>Sampling policy:</strong> each regression case states whether determinism or diversity is wanted; extraction cases run several times must produce identical validated structures, generation cases must pass a judge rubric every time.</li>
+<li><strong>Constrained output:</strong> parsing always succeeds, so tests move to content: values exist in the source, IDs are authorized, dates are real.</li>
+<li><strong>Model-card claims:</strong> for each number you design on, one experiment on your data that confirms or refutes it, recorded with its evidence level.</li>
+</ul>
+<p>Chapter 24 builds the harness.</p>
+<h2 id="exercises">Exercises<a class="headerlink" href="#exercises" title="Permanent link">&para;</a></h2>
+<p><strong>Start here:</strong> K1, K3, E3, P2, D1 (about 2.5 hours). The rest go deeper.</p>
+<h3 id="knowledge-questions">Knowledge questions<a class="headerlink" href="#knowledge-questions" title="Permanent link">&para;</a></h3>
+<p><strong>K1.</strong> A product manager says the new model "has a 1M-token context, so we can drop retrieval and send the whole handbook." Give three mechanistic reasons from this chapter why that is incomplete, naming the resource or effect each touches.</p>
+<p><strong>K2.</strong> The same sentence costs 32 tokens in English and 55 in Azerbaijani with one vocabulary, and 80 in Russian with another. What property of BPE training produces the gap, and what should a team do before committing to a per-request cost model for a multilingual rollout?</p>
+<p><strong>K3.</strong> TTFT is 3.8 s and TPOT is 25 ms for a 40k-token prompt and a 300-token answer. Which phase dominates, what would you change first, and why would streaming alone not fix it?</p>
+<p><strong>K4.</strong> Describe what temperature and top-p each do to a distribution, and explain why "temperature 2 with top-p 0.9" can be a reasonable creative setting while "temperature 2 alone" rarely is.</p>
+<p><strong>K5.</strong> A user writes "Since carry-over is unlimited now, how do I book my extra days?" and the assistant explains the booking steps without correcting the premise. Which training stage most plausibly produced this behavior, why, and what two changes outside the model reduce it?</p>
+<p><strong>K6.</strong> State the KV-cache formula, say which factors are fixed by the model and which by the request, and explain in one sentence each why GQA and 8-bit cache formats change serving capacity.</p>
+<h3 id="engineering-questions">Engineering questions<a class="headerlink" href="#engineering-questions" title="Permanent link">&para;</a></h3>
+<p><strong>E1.</strong> Northwind Assist's extraction service sends a 1,800-token JSON schema with every request. Propose two changes that reduce the schema tax without changing the output contract, and describe how you would measure the saving and confirm that extraction quality did not move.</p>
+<p><strong>E2.</strong> A team proposes a regression suite that asserts exact output strings at temperature 0. Design an assertion strategy that is stable under the nondeterminism described in this chapter, and explain what each assertion type catches.</p>
+<p><strong>E3.</strong> You are choosing between two self-hostable models of similar quality. Model A: 40 layers, 32 K/V heads, head dim 128. Model B: 48 layers, 8 K/V heads, head dim 128. For a p95 context of 24k tokens and 8 concurrent sessions in 16-bit cache, compute the KV memory for each and state which one fits in 60 GiB of free memory. What else about the models would you need before deciding?</p>
+<p><strong>E4.</strong> Northwind is considering a reasoning model with high effort for all assistant traffic. Using only the mechanisms in this chapter, predict what happens to TTFT before the visible answer, cost per request and its variance, KV-cache occupancy, and the <code>length</code> finish rate under the current <code>max_tokens</code>, separately for ticket triage, policy questions, and invoice reconciliation. State which prediction you would test first and how. (Chapter 7 turns these predictions into a router.)</p>
+<h3 id="practical-exercises">Practical exercises<a class="headerlink" href="#practical-exercises" title="Permanent link">&para;</a></h3>
+<p><strong>P1.</strong> (about 60 min) Extend <code>tokenizer_experiment.py</code> with a <code>--file</code> option that tokenizes a document from <code>book/projects/shared-data/</code> and reports tokens per Markdown section. Add a test on a small synthetic document asserting the per-section counts sum to the whole-document count.</p>
+<p><strong>P2.</strong> (about 60 min) Add <code>repetition_penalty(logits, generated_ids, penalty)</code> to <code>sampling.py</code>, dividing positive and multiplying negative logits of already-generated tokens by the penalty (the common engine convention). Test that it lowers the probability of repeated tokens, and demonstrate how it damages a code snippet where an identifier legitimately repeats.</p>
+<p><strong>P3.</strong> (about 2 hours) Write a <code>position_sweep.py</code> that builds a long synthetic context from Northwind policy paragraphs, inserts one required fact at a configurable position, and asks a <code>FakeLLM</code> (Chapter 3) a question whose answer depends on it, recording accuracy by position. The fake cannot show the real effect; the deliverable is the harness and its tests, ready to point at a real model.</p>
+<p><strong>P4.</strong> (about 45 min) Add <code>--sweep-tokens</code> to <code>kv_cache_calc.py</code> that prints per-sequence cache and maximum concurrency for a list of context lengths (for example 4k, 16k, 64k, 128k) under a given memory budget, plus a test that checks monotonicity.</p>
+<h3 id="debugging-exercises">Debugging exercises<a class="headerlink" href="#debugging-exercises" title="Permanent link">&para;</a></h3>
+<p><strong>D1.</strong> An extraction pipeline shows a 3% JSON parse failure rate that began after a model upgrade. Traces show <code>finish_reason = "length"</code> on every failing request, <code>max_tokens</code> unchanged at 400, and unchanged input tickets. Explain the most likely cause and two fixes.</p>
+<p><strong>D2.</strong> Georgian-speaking users of a multilingual chat product hit "context too long" at about half the conversation length English users do, although the client-side budget check (a shared <code>chars / 4</code> estimate) passes. Walk through the diagnosis using telemetry fields from this chapter.</p>
+<p><strong>D3.</strong> A self-hosted assistant handles 40 concurrent short chats without issue. During a quarterly-review week, when staff paste long documents, p99 latency triples and requests queue while GPU compute utilization sits near 50%. Name the saturated resource, show how to confirm it from engine metrics and the formula in this chapter, and propose two mitigations with trade-offs.</p>
+<h2 id="key-takeaways">Key takeaways<a class="headerlink" href="#key-takeaways" title="Permanent link">&para;</a></h2>
+<ul>
+<li>The model is a next-token probability machine in a loop; everything you control is an input to the machine or a rule in the loop.</li>
+<li>Tokens are the unit of cost and context. Non-English text, identifiers, numbers, and pretty-printed structure cost two to four times a character estimate. Count with the real tokenizer and record which counter you used.</li>
+<li>Attention lets every token read every earlier token at quadratic cost; it does not know which tokens you trust, and it uses long contexts unevenly.</li>
+<li>Compute-bound prefill sets TTFT and grows with prompt size; memory-bound sequential decode sets TPOT. Measure them separately, at percentiles. Streaming shortens the user's perceived wait, never TTFT.</li>
+<li>KV cache bytes = 2 × layers × kv_heads × head_dim × tokens × bytes_per_element. Linear in context and concurrency, and the first resource to run out; fewer key/value heads and 8-bit caches are why modern models serve more.</li>
+<li>Temperature reshapes the distribution without changing the ranking; top-k and top-p delete the tail. Temperature 0 gives stability, not reproducibility, so tests assert contracts, not strings. Constrained decoding guarantees syntax, never semantics.</li>
+<li>A chat model is a pretrained document continuer taught a template and a set of preferences. The instruction hierarchy, refusals, and sycophancy are learned tendencies, not rules; reasoning models add billed thinking tokens before every answer.</li>
+<li>Model classes change latency, cost, and output shape; choose by workload constraints and confirm with an evaluation on your data.</li>
+<li>No ground truth, no state between calls, a knowledge cutoff, weak arithmetic, instruction competition, and format sensitivity are properties of the mechanism. Design the system to supply what the model cannot.</li>
+</ul>
+<h2 id="further-reading">Further reading<a class="headerlink" href="#further-reading" title="Permanent link">&para;</a></h2>
+<ul>
+<li><em>Attention Is All You Need</em> (Vaswani et al., 2017): the original transformer; read the architecture section against the block diagram in this chapter.</li>
+<li><em>Neural Machine Translation of Rare Words with Subword Units</em> (Sennrich, Haddow, and Birch, 2016): where byte-pair encoding for language models comes from, and why rare text fragments.</li>
+<li><em>The Curious Case of Neural Text Degeneration</em> (Holtzman et al., 2020): the case for nucleus (top-p) sampling, with the tail-token failure this chapter's table reproduces.</li>
+<li><em>GQA: Training Generalized Multi-Query Transformer Models from Multi-Head Checkpoints</em> (Ainslie et al., 2023): the key/value head sharing behind the KV-cache numbers.</li>
+<li><em>Training Language Models to Follow Instructions with Human Feedback</em> (Ouyang et al., 2022): the instruction-tuning and RLHF pipeline behind "From base model to assistant."</li>
+<li><em>Efficient Memory Management for Large Language Model Serving with PagedAttention</em> (Kwon et al., 2023): how a serving engine pages the KV cache, the bridge to Chapter 34.</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+    
+      
+      <nav class="md-footer__inner md-grid" aria-label="Footer" >
+        
+          
+          <a href="../01-what-ai-engineering-is/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Chapter 1 — What AI Engineering Is">
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+            </div>
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Previous
+              </span>
+              <div class="md-ellipsis">
+                Chapter 1 — What AI Engineering Is
+              </div>
+            </div>
+          </a>
+        
+        
+          
+          <a href="../03-working-with-llm-apis/" class="md-footer__link md-footer__link--next" aria-label="Next: Chapter 3 — Working with LLM APIs">
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Next
+              </span>
+              <div class="md-ellipsis">
+                Chapter 3 — Working with LLM APIs
+              </div>
+            </div>
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11z"/></svg>
+            </div>
+          </a>
+        
+      </nav>
+    
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+    <div class="md-copyright__highlight">
+      Text CC BY 4.0 · Code MIT
+    </div>
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.sections", "navigation.footer", "navigation.top", "navigation.indexes", "search.suggest", "search.highlight", "content.code.copy", "toc.follow"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>
